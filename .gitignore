@@ -1,0 +1,11 @@
+prompt.md
+.gradle/
+.idea/
+local.properties
+**/build/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+.tooling/
+app/release/

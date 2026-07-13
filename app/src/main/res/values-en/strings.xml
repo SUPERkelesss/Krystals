@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">Krystals</string>
+    <string name="open_file">Open existing file…</string>
+    <string name="new_file">Create new file</string>
+    <string name="materials_project">Import from Materials Project</string>
+    <string name="coming_soon">Coming soon</string>
+    <string name="save">Save</string>
+    <string name="appearance">Appearance</string>
+    <string name="export_image">Export image</string>
+    <string name="exit">Exit</string>
+    <string name="align">Align</string>
+    <string name="measure">Measure</string>
+    <string name="display">Display</string>
+    <string name="information">Information</string>
+    <string name="modify">Edit</string>
+    <string name="lock">Lock</string>
+    <string name="unlock">Unlock</string>
+    <string name="basic_info">Basic</string>
+    <string name="atoms">Atoms</string>
+    <string name="bonds">Bonds</string>
+    <string name="expand_cell">Supercell</string>
+    <string name="cancel">Cancel</string>
+    <string name="confirm">OK</string>
+    <string name="discard">Discard</string>
+</resources>

@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">Krystals</string>
+    <string name="open_file">打开已有文件…</string>
+    <string name="new_file">创建新文件</string>
+    <string name="materials_project">从 Materials Project 中导入</string>
+    <string name="coming_soon">即将推出</string>
+    <string name="save">保存</string>
+    <string name="appearance">调整外观</string>
+    <string name="export_image">导出图片</string>
+    <string name="exit">退出</string>
+    <string name="align">对齐</string>
+    <string name="measure">测量</string>
+    <string name="display">显示</string>
+    <string name="information">信息</string>
+    <string name="modify">修改</string>
+    <string name="lock">锁定</string>
+    <string name="unlock">解锁</string>
+    <string name="basic_info">基本信息</string>
+    <string name="atoms">原子</string>
+    <string name="bonds">化学键</string>
+    <string name="expand_cell">扩展晶胞</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">确定</string>
+    <string name="discard">不保存</string>
+</resources>

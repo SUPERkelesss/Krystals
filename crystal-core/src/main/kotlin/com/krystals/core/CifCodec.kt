@@ -1,0 +1,370 @@
+package com.krystals.core
+
+import kotlin.math.abs
+
+data class CifToken(val value: String, val start: Int, val end: Int, val line: Int)
+
+sealed interface CifItem {
+    val start: Int
+    val end: Int
+    val tags: List<String>
+}
+
+data class CifPair(
+    val tag: String,
+    val value: String,
+    override val start: Int,
+    override val end: Int,
+) : CifItem {
+    override val tags = listOf(tag.lowercase())
+}
+
+data class CifLoop(
+    override val tags: List<String>,
+    val values: List<String>,
+    override val start: Int,
+    override val end: Int,
+) : CifItem {
+    val rowCount: Int get() = if (tags.isEmpty()) 0 else values.size / tags.size
+    fun value(row: Int, tag: String): String? {
+        val column = tags.indexOfFirst { it.equals(tag, ignoreCase = true) }
+        if (column < 0 || row !in 0 until rowCount) return null
+        return values[row * tags.size + column]
+    }
+}
+
+data class CifBlock(
+    val name: String,
+    val start: Int,
+    val end: Int,
+    val items: List<CifItem>,
+) {
+    fun scalar(vararg names: String): String? {
+        names.forEach { wanted ->
+            items.forEach { item ->
+                when (item) {
+                    is CifPair -> if (item.tag.equals(wanted, true)) return unquote(item.value)
+                    is CifLoop -> item.value(0, wanted)?.let { return unquote(it) }
+                }
+            }
+        }
+        return null
+    }
+
+    fun loopContaining(vararg names: String): CifLoop? = items.filterIsInstance<CifLoop>().firstOrNull { loop ->
+        names.any { name -> loop.tags.any { it.equals(name, true) } }
+    }
+}
+
+data class CifDocument(val source: String, val blocks: List<CifBlock>)
+
+data class ParsedStructure(val document: CifDocument, val blockIndex: Int, val structure: CrystalStructure)
+
+object CifCodec {
+    private val replacementPrefixes = listOf(
+        "_cell_", "_atom_site_", "_symmetry_equiv_pos_", "_space_group_symop_", "_krystals_bond_rule_",
+    )
+    private val replacementTags = setOf(
+        "_symmetry_space_group_name_h-m", "_space_group_name_h-m_alt", "_symmetry_int_tables_number",
+        "_space_group_it_number",
+    )
+
+    fun parse(source: String): CifDocument {
+        val tokens = tokenize(source)
+        val blockStarts = tokens.withIndex().filter { (_, token) -> token.value.lowercase().startsWith("data_") }
+        require(blockStarts.isNotEmpty()) { "No CIF data block found" }
+        val blocks = blockStarts.mapIndexed { blockOrdinal, indexed ->
+            val tokenIndex = indexed.index
+            val header = indexed.value
+            val nextTokenIndex = blockStarts.getOrNull(blockOrdinal + 1)?.index ?: tokens.size
+            val blockEnd = blockStarts.getOrNull(blockOrdinal + 1)?.value?.start ?: source.length
+            CifBlock(
+                name = header.value.drop(5),
+                start = header.start,
+                end = blockEnd,
+                items = parseItems(tokens, tokenIndex + 1, nextTokenIndex),
+            )
+        }
+        return CifDocument(source, blocks)
+    }
+
+    fun structuralBlockIndices(document: CifDocument): List<Int> = document.blocks.indices.filter { index ->
+        val block = document.blocks[index]
+        block.scalar("_cell_length_a") != null &&
+            block.loopContaining("_atom_site_fract_x", "_atom_site_cartn_x") != null
+    }
+
+    fun parseStructure(source: String, blockIndex: Int? = null): ParsedStructure {
+        val document = parse(source)
+        val candidates = structuralBlockIndices(document)
+        require(candidates.isNotEmpty()) { "CIF contains no structure with a unit cell and atom sites" }
+        val selected = blockIndex ?: candidates.first()
+        require(selected in candidates) { "Selected data block is not a crystal structure" }
+        return ParsedStructure(document, selected, toStructure(document.blocks[selected]))
+    }
+
+    fun newDocument(structure: CrystalStructure = CrystalStructure(
+        blockName = "untitled",
+        cell = UnitCell.DEFAULT,
+        spaceGroupName = "P1",
+        spaceGroupNumber = 1,
+        symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+        sites = emptyList(),
+    )): ParsedStructure {
+        val source = canonicalStructure(structure, structure.bondRules, includeHeader = true)
+        return parseStructureAllowEmpty(source)
+    }
+
+    private fun parseStructureAllowEmpty(source: String): ParsedStructure {
+        val document = parse(source)
+        return ParsedStructure(document, 0, toStructure(document.blocks[0]))
+    }
+
+    fun write(parsed: ParsedStructure, structure: CrystalStructure, bondRules: List<BondRule> = structure.bondRules): String {
+        val document = parsed.document
+        val block = document.blocks[parsed.blockIndex]
+        val source = document.source
+        val replacement = canonicalStructure(structure, bondRules, includeHeader = false)
+        val out = StringBuilder(source.length + replacement.length)
+        out.append(source, 0, block.start)
+        var cursor = block.start
+        var inserted = false
+        block.items.forEach { item ->
+            val replace = item.tags.any(::isReplacedTag)
+            if (replace) {
+                out.append(source, cursor, item.start)
+                if (!inserted) {
+                    if (out.isNotEmpty() && out.last() != '\n') out.append('\n')
+                    out.append(replacement)
+                    inserted = true
+                }
+                cursor = item.end
+            } else {
+                out.append(source, cursor, item.end)
+                cursor = item.end
+            }
+        }
+        out.append(source, cursor, block.end)
+        if (!inserted) {
+            val insertion = out.length - (source.length - block.end)
+            out.insert(insertion, "\n$replacement")
+        }
+        out.append(source, block.end, source.length)
+        return out.toString()
+    }
+
+    private fun toStructure(block: CifBlock): CrystalStructure {
+        val cell = UnitCell(
+            numeric(block.scalar("_cell_length_a")) ?: 1.0,
+            numeric(block.scalar("_cell_length_b")) ?: 1.0,
+            numeric(block.scalar("_cell_length_c")) ?: 1.0,
+            numeric(block.scalar("_cell_angle_alpha")) ?: 90.0,
+            numeric(block.scalar("_cell_angle_beta")) ?: 90.0,
+            numeric(block.scalar("_cell_angle_gamma")) ?: 90.0,
+        )
+        val groupName = block.scalar("_space_group_name_h-m_alt", "_symmetry_space_group_name_h-m") ?: "P1"
+        val groupNumber = numeric(block.scalar("_space_group_it_number", "_symmetry_int_tables_number"))?.toInt()
+            ?: SpaceGroupCatalog.find(groupName)?.number
+
+        val symmetryLoop = block.loopContaining("_space_group_symop_operation_xyz", "_symmetry_equiv_pos_as_xyz")
+        val symmetryTag = symmetryLoop?.tags?.firstOrNull {
+            it.equals("_space_group_symop_operation_xyz", true) || it.equals("_symmetry_equiv_pos_as_xyz", true)
+        }
+        val operations = if (symmetryLoop != null && symmetryTag != null) {
+            (0 until symmetryLoop.rowCount).mapNotNull { row ->
+                symmetryLoop.value(row, symmetryTag)?.let { runCatching { SymmetryOperation.parse(unquote(it)) }.getOrNull() }
+            }
+        } else emptyList()
+
+        val atomLoop = block.loopContaining("_atom_site_fract_x", "_atom_site_cartn_x")
+        val sites = if (atomLoop == null) emptyList() else (0 until atomLoop.rowCount).mapNotNull { row ->
+            val label = atomLoop.firstValue(row, "_atom_site_label") ?: "Site${row + 1}"
+            val rawElement = atomLoop.firstValue(row, "_atom_site_type_symbol") ?: label
+            val element = PeriodicTable.normalizeElement(rawElement)
+            val fractional = if (atomLoop.hasTag("_atom_site_fract_x")) {
+                Vec3(
+                    numeric(atomLoop.firstValue(row, "_atom_site_fract_x")) ?: return@mapNotNull null,
+                    numeric(atomLoop.firstValue(row, "_atom_site_fract_y")) ?: return@mapNotNull null,
+                    numeric(atomLoop.firstValue(row, "_atom_site_fract_z")) ?: return@mapNotNull null,
+                ).wrapped()
+            } else {
+                val cartesian = Vec3(
+                    numeric(atomLoop.firstValue(row, "_atom_site_cartn_x")) ?: return@mapNotNull null,
+                    numeric(atomLoop.firstValue(row, "_atom_site_cartn_y")) ?: return@mapNotNull null,
+                    numeric(atomLoop.firstValue(row, "_atom_site_cartn_z")) ?: return@mapNotNull null,
+                )
+                cell.toFractional(cartesian).wrapped()
+            }
+            AtomSite(
+                id = uniqueSiteId(label, row),
+                label = label,
+                element = element,
+                fractional = fractional,
+                occupancy = (numeric(atomLoop.firstValue(row, "_atom_site_occupancy")) ?: 1.0).coerceIn(0.0, 1.0),
+            )
+        }
+
+        val ruleLoop = block.loopContaining("_krystals_bond_rule_site_a")
+        val rules = if (ruleLoop == null) emptyList() else (0 until ruleLoop.rowCount).mapNotNull { row ->
+            val labelA = ruleLoop.firstValue(row, "_krystals_bond_rule_site_a") ?: return@mapNotNull null
+            val labelB = ruleLoop.firstValue(row, "_krystals_bond_rule_site_b") ?: return@mapNotNull null
+            val siteA = sites.firstOrNull { it.label == labelA }?.id ?: labelA
+            val siteB = sites.firstOrNull { it.label == labelB }?.id ?: labelB
+            val min = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_min_distance")) ?: return@mapNotNull null
+            val max = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_max_distance")) ?: return@mapNotNull null
+            runCatching { BondRule(siteA, siteB, min, max) }.getOrNull()
+        }
+
+        return CrystalStructure(block.name, cell, groupName, groupNumber, operations, sites, rules)
+    }
+
+    private fun canonicalStructure(structure: CrystalStructure, rules: List<BondRule>, includeHeader: Boolean): String = buildString {
+        if (includeHeader) append("data_${sanitizeBlockName(structure.blockName)}\n")
+        append("_space_group_name_H-M_alt   '${structure.spaceGroupName}'\n")
+        structure.spaceGroupNumber?.let { append("_space_group_IT_number   $it\n") }
+        append("_cell_length_a   ${format(structure.cell.a)}\n")
+        append("_cell_length_b   ${format(structure.cell.b)}\n")
+        append("_cell_length_c   ${format(structure.cell.c)}\n")
+        append("_cell_angle_alpha   ${format(structure.cell.alpha)}\n")
+        append("_cell_angle_beta   ${format(structure.cell.beta)}\n")
+        append("_cell_angle_gamma   ${format(structure.cell.gamma)}\n")
+        append("loop_\n _space_group_symop_id\n _space_group_symop_operation_xyz\n")
+        structure.effectiveSymmetryOperations.forEachIndexed { index, operation ->
+            append(" ${index + 1} '${operation.source}'\n")
+        }
+        append("loop_\n _atom_site_label\n _atom_site_type_symbol\n _atom_site_fract_x\n _atom_site_fract_y\n _atom_site_fract_z\n _atom_site_occupancy\n")
+        structure.sites.forEach { site ->
+            append(" ${quoteIfNeeded(site.label)} ${quoteIfNeeded(site.element)} ${format(site.fractional.x)} ${format(site.fractional.y)} ${format(site.fractional.z)} ${format(site.occupancy)}\n")
+        }
+        if (rules.isNotEmpty()) {
+            append("loop_\n _krystals_bond_rule_site_a\n _krystals_bond_rule_site_b\n _krystals_bond_rule_min_distance\n _krystals_bond_rule_max_distance\n")
+            rules.sortedBy { it.key }.forEach { rule ->
+                val labelA = structure.sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
+                val labelB = structure.sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
+                append(" ${quoteIfNeeded(labelA)} ${quoteIfNeeded(labelB)} ${format(rule.minAngstrom)} ${format(rule.maxAngstrom)}\n")
+            }
+        }
+    }
+
+    private fun parseItems(tokens: List<CifToken>, start: Int, endExclusive: Int): List<CifItem> {
+        val items = mutableListOf<CifItem>()
+        var index = start
+        while (index < endExclusive) {
+            val token = tokens[index]
+            val lower = token.value.lowercase()
+            when {
+                lower == "loop_" -> {
+                    val loopStart = token.start
+                    index++
+                    val tags = mutableListOf<String>()
+                    while (index < endExclusive && tokens[index].value.startsWith('_')) {
+                        tags += tokens[index].value.lowercase()
+                        index++
+                    }
+                    if (tags.isEmpty()) continue
+                    val values = mutableListOf<String>()
+                    while (index < endExclusive) {
+                        val next = tokens[index].value
+                        val control = next.equals("loop_", true) || next.lowercase().startsWith("data_") ||
+                            next.lowercase().startsWith("save_") || next.startsWith('_')
+                        if (control && values.size % tags.size == 0) break
+                        values += next
+                        index++
+                    }
+                    val completeValues = values.take(values.size - values.size % tags.size)
+                    val itemEnd = if (completeValues.isEmpty()) tokens[index - 1].end else tokens[index - 1].end
+                    items += CifLoop(tags, completeValues, loopStart, itemEnd)
+                }
+                token.value.startsWith('_') && index + 1 < endExclusive -> {
+                    val value = tokens[index + 1]
+                    items += CifPair(token.value, value.value, token.start, value.end)
+                    index += 2
+                }
+                else -> index++
+            }
+        }
+        return items
+    }
+
+    private fun tokenize(source: String): List<CifToken> {
+        val tokens = mutableListOf<CifToken>()
+        var index = 0
+        var line = 1
+        fun atLineStart(i: Int) = i == 0 || source[i - 1] == '\n' || source[i - 1] == '\r'
+        while (index < source.length) {
+            val ch = source[index]
+            when {
+                ch == '\n' -> { line++; index++ }
+                ch.isWhitespace() -> index++
+                ch == '#' -> {
+                    while (index < source.length && source[index] != '\n') index++
+                }
+                ch == ';' && atLineStart(index) -> {
+                    val start = index
+                    val startLine = line
+                    index++
+                    while (index < source.length) {
+                        if (source[index] == '\n') line++
+                        if (source[index] == ';' && atLineStart(index)) {
+                            index++
+                            break
+                        }
+                        index++
+                    }
+                    tokens += CifToken(source.substring(start, index), start, index, startLine)
+                }
+                ch == '\'' || ch == '"' -> {
+                    val quote = ch
+                    val start = index
+                    val startLine = line
+                    index++
+                    while (index < source.length) {
+                        if (source[index] == '\n') line++
+                        if (source[index] == quote && (index + 1 == source.length || source[index + 1].isWhitespace())) {
+                            index++
+                            break
+                        }
+                        index++
+                    }
+                    tokens += CifToken(source.substring(start, index), start, index, startLine)
+                }
+                else -> {
+                    val start = index
+                    val startLine = line
+                    while (index < source.length && !source[index].isWhitespace()) {
+                        if (source[index] == '#' && index == start) break
+                        index++
+                    }
+                    if (index > start) tokens += CifToken(source.substring(start, index), start, index, startLine)
+                    else index++
+                }
+            }
+        }
+        return tokens
+    }
+
+    private fun CifLoop.hasTag(tag: String) = tags.any { it.equals(tag, true) }
+    private fun CifLoop.firstValue(row: Int, tag: String) = value(row, tag)?.let(::unquote)?.takeUnless { it == "." || it == "?" }
+    private fun isReplacedTag(tag: String): Boolean {
+        val normalized = tag.lowercase()
+        return normalized in replacementTags || replacementPrefixes.any(normalized::startsWith)
+    }
+    private fun numeric(value: String?): Double? {
+        if (value == null || value == "." || value == "?") return null
+        val central = unquote(value).replace(Regex("\\([0-9]+\\)$"), "")
+        return runCatching { parseFraction(central) }.getOrNull()
+    }
+    private fun uniqueSiteId(label: String, row: Int) = "${label.trim()}#${row + 1}"
+    private fun sanitizeBlockName(name: String) = name.ifBlank { "untitled" }.replace(Regex("\\s+"), "_")
+    private fun format(value: Double): String = "%.8f".format(java.util.Locale.US, value).trimEnd('0').trimEnd('.').ifBlank { "0" }
+    private fun quoteIfNeeded(value: String) = if (value.any { it.isWhitespace() } || value.isEmpty()) "'${value.replace("'", "")}'" else value
+}
+
+private fun unquote(value: String): String {
+    val trimmed = value.trim()
+    return when {
+        trimmed.length >= 2 && ((trimmed.first() == '\'' && trimmed.last() == '\'') || (trimmed.first() == '"' && trimmed.last() == '"')) -> trimmed.substring(1, trimmed.length - 1)
+        trimmed.startsWith(';') -> trimmed.removePrefix(";").removeSuffix(";").trim('\r', '\n')
+        else -> trimmed
+    }
+}
