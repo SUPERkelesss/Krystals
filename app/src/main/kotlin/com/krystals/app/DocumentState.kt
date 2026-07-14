@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import com.krystals.core.CifCodec
+import com.krystals.core.CrystalEditor
 import com.krystals.core.CrystalStructure
 import com.krystals.core.Expansion
 import com.krystals.core.ParsedStructure
@@ -38,8 +39,11 @@ class DocumentTab(
     var visibility by mutableStateOf(ViewerVisibility())
     var selectedAtomIds by mutableStateOf(emptyList<Long>())
     var measurementMode by mutableStateOf(MeasurementMode.NONE)
+    var measurementLocked by mutableStateOf(false)
     var atomEditMode by mutableStateOf(AtomEditMode.NONE)
     var editingSiteId by mutableStateOf<String?>(null)
+    var inspectedAtomId by mutableStateOf<Long?>(null)
+    var inspectionLocked by mutableStateOf(false)
 }
 
 class KrystalsViewModel : ViewModel() {
@@ -55,6 +59,7 @@ class KrystalsViewModel : ViewModel() {
         if (existing >= 0) { selectedIndex = existing; return }
         tabs += DocumentTab(parsed = parsed, structure = parsed.structure, name = name, uri = uri, isNew = isNew).also {
             it.appearance = defaultAppearance
+            it.structure = CrystalEditor.ensureAutoBondRules(it.structure).structure
         }
         selectedIndex = tabs.lastIndex
     }

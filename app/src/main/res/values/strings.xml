@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">Krystals</string>
     <string name="open_file">打开已有文件…</string>
+    <string name="import_local">导入本地文件…</string>
     <string name="new_file">创建新文件</string>
     <string name="materials_project">从 Materials Project 中导入</string>
     <string name="coming_soon">即将推出</string>
@@ -22,4 +23,23 @@
     <string name="cancel">取消</string>
     <string name="confirm">确定</string>
     <string name="discard">不保存</string>
+    <string name="language">语言</string>
+    <string name="help">帮助</string>
+    <string name="help_title">视频教程</string>
+    <string name="help_message">将在浏览器中打开视频教程。</string>
+    <string name="about">关于</string>
+    <string name="sponsor">赞助</string>
+    <string name="sponsor_title">赞助 Krystals</string>
+    <string name="open_preset_library">从预设晶体库打开…</string>
+    <string name="save_to_presets">保存到预设</string>
+    <string name="preset_library">预设晶体库</string>
+    <string name="delete_preset_title">确认删除？</string>
+    <string name="bond_rule_hint">选择两个原子并设置最小/最大距离</string>
+    <string name="edit_bond_rule">修改化学键规则</string>
+    <string name="select_all">全选</string>
+    <string name="no_bond_rules">无化学键规则</string>
+    <string name="version">版本</string>
+    <string name="about_description">一款轻量级的 Android CIF 晶体结构查看与编辑工具。</string>
+    <string name="bundled">内置</string>
+    <string name="user_saved">用户保存</string>
 </resources>

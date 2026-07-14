@@ -104,6 +104,7 @@ data class CrystalStructure(
     val symmetryOperations: List<SymmetryOperation>,
     val sites: List<AtomSite>,
     val bondRules: List<BondRule> = emptyList(),
+    val elementArgbOverrides: Map<String, Long> = emptyMap(),
 ) {
     val effectiveSymmetryOperations: List<SymmetryOperation>
         get() = symmetryOperations.ifEmpty { SpaceGroupCatalog.operations(spaceGroupName) }
@@ -125,11 +126,17 @@ data class ViewerAppearance(
     val lightElevation: Float = 45f,
     val lightIntensity: Float = 0.8f,
     val diffusion: Float = 0.35f,
+    val atomOpacity: Float = 1.0f,
     val frameMode: FrameMode = FrameMode.SINGLE_CELL,
     val lineStyle: LineStyle = LineStyle.SOLID,
-    val bondRadius: Float = 0.10f,
+    val bondRadius: Float = 0.20f,
+    val bondOpacity: Float = 1.0f,
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val uniformBondArgb: Long = 0xFF9A90A0,
+    val bondReflectionEnabled: Boolean = true,
+    val polyhedronEnabled: Boolean = true,
+    val polyhedronOpacity: Float = 0.5f,
+    val polyhedronReflectionEnabled: Boolean = true,
 )
 
 data class SceneSnapshot(
@@ -137,6 +144,7 @@ data class SceneSnapshot(
     val bonds: List<Bond>,
     val structure: CrystalStructure,
     val expansion: Expansion,
+    val elementArgbOverrides: Map<String, Long> = structure.elementArgbOverrides,
 )
 
 data class CrystalInfo(
@@ -145,6 +153,7 @@ data class CrystalInfo(
     val cell: UnitCell,
     val volume: Double,
     val density: Double?,
+    val composition: String,
 )
 
 object PeriodicTable {
@@ -187,6 +196,7 @@ object PeriodicTable {
         return match.value.takeIf { it in symbols } ?: "X"
     }
     fun defaultRadius(symbol: String) = (covalentRadius(symbol) * 0.42).coerceIn(0.22, 0.85)
+    fun resolveArgb(symbol: String, overrides: Map<String, Long> = emptyMap()) = overrides[symbol] ?: vestaArgb(symbol)
     fun vestaArgb(symbol: String): Long = when (symbol) {
         "H" -> 0xFFF4F4F4; "C" -> 0xFF505050; "N" -> 0xFF3050F8; "O" -> 0xFFFF0D0D
         "F", "Cl" -> 0xFF90E050; "Br" -> 0xFFA62929; "I" -> 0xFF940094; "S" -> 0xFFFFFF30

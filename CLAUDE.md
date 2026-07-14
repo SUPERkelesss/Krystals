@@ -1,0 +1,73 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project overview
+
+Krystals is an Android CIF crystal viewer and editor. It is a Kotlin/Gradle project with three modules:
+
+- `crystal-core`: pure JVM module for loss-aware CIF parsing/writing, crystallographic math, symmetry expansion, bond inference, and structure editing commands.
+- `renderer`: Android library that renders the crystal with Compose Canvas and exports PNG images.
+- `app`: Android application that wires the UI, file I/O, tab state, and editors together.
+
+Build requirements: JDK 17, Android SDK 36, Gradle 8.11.1. The repository includes a wrapper and a bootstrap script that can download a portable JDK and SDK on Windows.
+
+## Common commands
+
+Use `gradlew`/`gradlew.bat` from the repository root. The bootstrap script sets `JAVA_HOME` and writes `local.properties` with the SDK path automatically.
+
+| Task | Command |
+|------|---------|
+| Bootstrap environment and build debug APK (Windows) | `\.\scripts\bootstrap-build.ps1` |
+| Build debug APK | `.\gradlew.bat :app:assembleDebug` |
+| Run JVM unit tests for `crystal-core` | `.\gradlew.bat :crystal-core:test` |
+| Run a single test class | `.\gradlew.bat :crystal-core:test --tests "com.krystals.core.CoreTest"` |
+| Run a single test method | `.\gradlew.bat :crystal-core:test --tests "com.krystals.core.CoreTest.parsesAndExpandsSymmetry"` |
+| Run Android instrumented tests | `.\gradlew.bat :app:connectedAndroidTest` |
+| Lint | `.\gradlew.bat lint` |
+| Clean | `.\gradlew.bat clean` |
+
+The debug APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
+
+## High-level architecture
+
+### `crystal-core`
+
+The core module contains no Android dependencies.
+
+- **Geometry** (`Geometry.kt`): `Vec3`, `Int3`, `Mat3` (stored by columns to match lattice-vector notation), and `UnitCell` with conversions between fractional and Cartesian coordinates.
+- **CIF codec** (`CifCodec.kt`): parses multi-block CIF 1.1 files into `CifDocument`/`CifBlock`/`CifLoop`/`CifPair`, preserves comments and non-structural items, and writes back by surgically replacing only the structural tags (`_cell_*`, `_atom_site_*`, `_space_group_*`, `_symmetry_equiv_pos_*`, `_krystals_bond_rule_*`). Use `CifCodec.parseStructure` to get a `ParsedStructure`, which carries both the original document and the derived `CrystalStructure`.
+- **Model** (`Model.kt`): `CrystalStructure`, `AtomSite`, `ExpandedAtom`, `BondRule`, `Bond`, `Expansion`, `ViewerAppearance`, and `SceneSnapshot`.
+- **Engine** (`CrystalEngine.kt`): expands the asymmetric unit via symmetry operations, builds supercells, infers bonds (custom rules first, then covalent-radius fallback with a spatial hash), and computes crystal info such as density and Hill-ordered composition. `MAX_RENDERED_ATOMS` is 100,000.
+- **Editor** (`CrystalEditor.kt`): applies immutable `EditCommand` values to a `CrystalStructure`. Commands cover cell/space-group changes, atom add/update/delete, bond rules, and 3x3 integer transformation matrices.
+- **Space groups** (`SpaceGroupCatalog.kt`): catalogs all 230 space-group symbols and derives crystal system/point group. Only `P1` and `P-1` symmetry operations are actually implemented in `operations()`; adding a new space group requires both the catalog entry and its operation strings.
+- **Expression parser** (`ExpressionParser.kt`): small arithmetic evaluator used for fractional coordinates and cell parameters in the UI.
+
+### `renderer`
+
+- `CrystalViewport.kt`: a `@Composable` that draws the scene to a Compose `Canvas`. It owns a `ViewerController` for yaw/pitch/zoom/pan and supports atom picking, measurements (length/angle/dihedral), cell frames, polyhedra, and per-site visibility. Rendering is painter-order based on projected depth.
+- `CrystalImageExporter.kt`: produces a high-resolution `Bitmap` using the same projection logic as the viewport, useful for PNG export.
+- `FilamentRuntime.kt`: a minimal availability check for Filament 1.71.5; the actual rendering is currently Canvas-based.
+
+### `app`
+
+- `MainActivity.kt`: entry point, handles incoming CIF URIs and applies the saved language locale in `attachBaseContext`.
+- `KrystalsApp.kt`: root Compose UI (`KrystalsRoot`). Manages the app-level menu, file open/save via the Storage Access Framework, recents, theme/language settings, and PNG export permission flow.
+- `DocumentState.kt`: `KrystalsViewModel` holds a list of `DocumentTab`s. Each tab keeps its own `parsed` CIF document, working `structure`, `expansion`, `visibility`, `appearance`, `selectedAtomIds`, and `measurementMode`.
+- `EditorPanels.kt`: the structure editor with tabs for basic info, atoms, bonds, and supercell expansion. Edits flow through `CrystalEditor.apply` and update the tab's working structure.
+- `FileRepository.kt`: reads/writes text via `ContentResolver` and exports PNGs to `Pictures/Krystals` using `MediaStore`.
+- `Localization.kt`: simple bilingual helper (`localized(zh, en)`) resolved from the current configuration locale.
+
+### Data flow
+
+1. A CIF file is opened and parsed into a `ParsedStructure`.
+2. The UI mutates a working `CrystalStructure` through `EditCommand`s.
+3. `CrystalEngine.buildScene(structure, expansion)` produces a `SceneSnapshot` of atoms and bonds.
+4. `CrystalViewport` renders the snapshot and returns tap events; `CrystalImageExporter` renders the same view to a bitmap.
+5. Saving writes the working structure back into the original document via `CifCodec.write`, preserving unrelated content.
+
+## Notes for contributors
+
+- `crystal-core` tests use JUnit 5 (`useJUnitPlatform`). The sample CIF corpus lives under `res/cifs_example` and is exercised by `SampleCifTest`.
+- The app module packages the `res/` directory as assets (`sourceSets["main"].assets.srcDir(rootProject.file("res"))`), so bundled images and CIF samples are available at runtime without copying them into `app/src/main/assets`.
+- Filament is declared as a dependency but the rendering path is currently Compose Canvas; changes to 3D rendering should verify whether Filament integration is being activated.

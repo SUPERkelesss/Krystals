@@ -15,18 +15,30 @@ object CrystalEngine {
         val base = expandAsymmetricUnit(structure)
         val predicted = base.size.toLong() * expansion.multiplier
         require(predicted <= MAX_RENDERED_ATOMS) {
-            "Expansion would create $predicted atoms; limit is $MAX_RENDERED_ATOMS"
+            "Expansion would create at least $predicted atoms; limit is $MAX_RENDERED_ATOMS"
         }
         val atoms = ArrayList<ExpandedAtom>(predicted.toInt())
         var id = 1L
         for (ix in 0 until expansion.x) for (iy in 0 until expansion.y) for (iz in 0 until expansion.z) {
             val offset = Int3(ix, iy, iz)
             base.forEach { atom ->
-                val fractional = atom.fractional + Vec3(ix.toDouble(), iy.toDouble(), iz.toDouble())
-                atoms += atom.copy(
-                    id = id++, fractional = fractional,
-                    cartesian = structure.cell.toCartesian(fractional), cellOffset = offset,
-                )
+                val boundaryX = atom.fractional.x < 1e-6 && ix == expansion.x - 1
+                val boundaryY = atom.fractional.y < 1e-6 && iy == expansion.y - 1
+                val boundaryZ = atom.fractional.z < 1e-6 && iz == expansion.z - 1
+                val xImages = if (boundaryX) intArrayOf(0, 1) else intArrayOf(0)
+                val yImages = if (boundaryY) intArrayOf(0, 1) else intArrayOf(0)
+                val zImages = if (boundaryZ) intArrayOf(0, 1) else intArrayOf(0)
+                for (bx in xImages) for (by in yImages) for (bz in zImages) {
+                    val imageOffset = Int3(ix + bx, iy + by, iz + bz)
+                    val fractional = atom.fractional + Vec3(imageOffset.x.toDouble(), imageOffset.y.toDouble(), imageOffset.z.toDouble())
+                    atoms += atom.copy(
+                        id = id++, fractional = fractional,
+                        cartesian = structure.cell.toCartesian(fractional), cellOffset = imageOffset,
+                    )
+                    require(atoms.size <= MAX_RENDERED_ATOMS) {
+                        "Expansion including boundary atoms exceeds limit $MAX_RENDERED_ATOMS"
+                    }
+                }
             }
         }
         return SceneSnapshot(atoms, inferBonds(atoms, bondRules), structure, expansion)
@@ -85,6 +97,21 @@ object CrystalEngine {
         val density = if (gramsPerMole > 0.0 && structure.cell.volume > 0.0) {
             gramsPerMole / AVOGADRO / (structure.cell.volume * 1e-24)
         } else null
-        return CrystalInfo(atoms.size, structure.spaceGroupName, structure.cell, structure.cell.volume, density)
+        val counts = atoms.groupBy { it.element }.mapValues { (_, values) -> values.sumOf { it.occupancy } }
+        val orderedElements = if ("C" in counts) {
+            buildList {
+                add("C")
+                if ("H" in counts) add("H")
+                addAll(counts.keys.filterNot { it == "C" || it == "H" }.sorted())
+            }
+        } else counts.keys.sorted()
+        val composition = orderedElements.joinToString(" ") { element -> "$element ${formatCount(counts.getValue(element))}" }
+        return CrystalInfo(atoms.size, structure.spaceGroupName, structure.cell, structure.cell.volume, density, composition)
+    }
+
+    private fun formatCount(value: Double): String {
+        val rounded = kotlin.math.round(value)
+        if (kotlin.math.abs(value - rounded) < 1e-8) return rounded.toLong().toString()
+        return "%.4f".format(java.util.Locale.US, value).trimEnd('0').trimEnd('.')
     }
 }

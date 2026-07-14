@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">Krystals</string>
     <string name="open_file">Open existing file…</string>
+    <string name="import_local">Import local file…</string>
     <string name="new_file">Create new file</string>
     <string name="materials_project">Import from Materials Project</string>
     <string name="coming_soon">Coming soon</string>
@@ -22,4 +23,23 @@
     <string name="cancel">Cancel</string>
     <string name="confirm">OK</string>
     <string name="discard">Discard</string>
+    <string name="language">Language</string>
+    <string name="help">Help</string>
+    <string name="help_title">Video tutorial</string>
+    <string name="help_message">This will open the video tutorial in your browser.</string>
+    <string name="about">About</string>
+    <string name="sponsor">Sponsor</string>
+    <string name="sponsor_title">Sponsor Krystals</string>
+    <string name="open_preset_library">Open from preset library…</string>
+    <string name="save_to_presets">Save to presets</string>
+    <string name="preset_library">Preset library</string>
+    <string name="delete_preset_title">Delete preset?</string>
+    <string name="bond_rule_hint">Select two atoms and set the min/max distance</string>
+    <string name="edit_bond_rule">Edit bond rule</string>
+    <string name="select_all">Select all</string>
+    <string name="no_bond_rules">No bond rules</string>
+    <string name="version">Version</string>
+    <string name="about_description">A lightweight Android CIF crystal viewer and editor.</string>
+    <string name="bundled">Bundled</string>
+    <string name="user_saved">User saved</string>
 </resources>

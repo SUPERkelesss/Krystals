@@ -62,7 +62,7 @@ data class ParsedStructure(val document: CifDocument, val blockIndex: Int, val s
 
 object CifCodec {
     private val replacementPrefixes = listOf(
-        "_cell_", "_atom_site_", "_symmetry_equiv_pos_", "_space_group_symop_", "_krystals_bond_rule_",
+        "_cell_", "_atom_site_", "_symmetry_equiv_pos_", "_space_group_symop_", "_krystals_bond_rule_", "_krystals_element_color_",
     )
     private val replacementTags = setOf(
         "_symmetry_space_group_name_h-m", "_space_group_name_h-m_alt", "_symmetry_int_tables_number",
@@ -108,8 +108,9 @@ object CifCodec {
         cell = UnitCell.DEFAULT,
         spaceGroupName = "P1",
         spaceGroupNumber = 1,
-        symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+        symmetryOperations = emptyList(),
         sites = emptyList(),
+        elementArgbOverrides = emptyMap(),
     )): ParsedStructure {
         val source = canonicalStructure(structure, structure.bondRules, includeHeader = true)
         return parseStructureAllowEmpty(source)
@@ -205,17 +206,46 @@ object CifCodec {
         }
 
         val ruleLoop = block.loopContaining("_krystals_bond_rule_site_a")
-        val rules = if (ruleLoop == null) emptyList() else (0 until ruleLoop.rowCount).mapNotNull { row ->
+        val vestaLoop = block.loopContaining("_vesta_bond_site_a")
+        val geomLoop = block.loopContaining("_geom_bond_atom_site_label_1")
+        val krystalsRules = if (ruleLoop == null) emptyList() else (0 until ruleLoop.rowCount).mapNotNull { row ->
             val labelA = ruleLoop.firstValue(row, "_krystals_bond_rule_site_a") ?: return@mapNotNull null
             val labelB = ruleLoop.firstValue(row, "_krystals_bond_rule_site_b") ?: return@mapNotNull null
             val siteA = sites.firstOrNull { it.label == labelA }?.id ?: labelA
             val siteB = sites.firstOrNull { it.label == labelB }?.id ?: labelB
             val min = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_min_distance")) ?: return@mapNotNull null
             val max = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_max_distance")) ?: return@mapNotNull null
-            runCatching { BondRule(siteA, siteB, min, max) }.getOrNull()
+            runCatching { BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM) }.getOrNull()
+        }
+        val vestaRules = if (vestaLoop == null) emptyList() else (0 until vestaLoop.rowCount).mapNotNull { row ->
+            val labelA = vestaLoop.firstValue(row, "_vesta_bond_site_a") ?: return@mapNotNull null
+            val labelB = vestaLoop.firstValue(row, "_vesta_bond_site_b") ?: return@mapNotNull null
+            val siteA = sites.firstOrNull { it.label == labelA }?.id ?: labelA
+            val siteB = sites.firstOrNull { it.label == labelB }?.id ?: labelB
+            val min = numeric(vestaLoop.firstValue(row, "_vesta_bond_min_distance")) ?: 0.1
+            val max = numeric(vestaLoop.firstValue(row, "_vesta_bond_max_distance"))
+                ?: (numeric(vestaLoop.firstValue(row, "_vesta_bond_distance"))?.plus(0.2) ?: return@mapNotNull null)
+            runCatching { BondRule(siteA, siteB, min, max, BondRuleSource.EXPLICIT) }.getOrNull()
+        }
+        val geomRules = if (geomLoop == null) emptyList() else (0 until geomLoop.rowCount).mapNotNull { row ->
+            val labelA = geomLoop.firstValue(row, "_geom_bond_atom_site_label_1") ?: return@mapNotNull null
+            val labelB = geomLoop.firstValue(row, "_geom_bond_atom_site_label_2") ?: return@mapNotNull null
+            val siteA = sites.firstOrNull { it.label == labelA }?.id ?: labelA
+            val siteB = sites.firstOrNull { it.label == labelB }?.id ?: labelB
+            val distance = numeric(geomLoop.firstValue(row, "_geom_bond_distance")) ?: return@mapNotNull null
+            runCatching { BondRule(siteA, siteB, 0.1, distance, BondRuleSource.EXPLICIT) }.getOrNull()
         }
 
-        return CrystalStructure(block.name, cell, groupName, groupNumber, operations, sites, rules)
+        val colorLoop = block.loopContaining("_krystals_element_color_symbol")
+        val colorOverrides = if (colorLoop == null) emptyMap() else (0 until colorLoop.rowCount).mapNotNull { row ->
+            val symbol = colorLoop.firstValue(row, "_krystals_element_color_symbol") ?: return@mapNotNull null
+            val argb = colorLoop.firstValue(row, "_krystals_element_color_argb")?.toLongOrNull()
+                ?: numeric(colorLoop.firstValue(row, "_krystals_element_color_argb"))?.toLong()
+                ?: return@mapNotNull null
+            PeriodicTable.normalizeElement(symbol) to argb
+        }.toMap()
+
+        return CrystalStructure(block.name, cell, groupName, groupNumber, operations, sites, krystalsRules + vestaRules + geomRules, colorOverrides)
     }
 
     private fun canonicalStructure(structure: CrystalStructure, rules: List<BondRule>, includeHeader: Boolean): String = buildString {
@@ -242,6 +272,12 @@ object CifCodec {
                 val labelA = structure.sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
                 val labelB = structure.sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
                 append(" ${quoteIfNeeded(labelA)} ${quoteIfNeeded(labelB)} ${format(rule.minAngstrom)} ${format(rule.maxAngstrom)}\n")
+            }
+        }
+        if (structure.elementArgbOverrides.isNotEmpty()) {
+            append("loop_\n _krystals_element_color_symbol\n _krystals_element_color_argb\n")
+            structure.elementArgbOverrides.entries.sortedBy { it.key }.forEach { (symbol, argb) ->
+                append(" ${quoteIfNeeded(symbol)} $argb\n")
             }
         }
     }
