@@ -425,13 +425,13 @@ private fun DrawScope.drawPolyhedron(center: ProjectedAtom, vertices: List<Proje
     val drawn = mutableSetOf<List<Long>>()
     val faces = mutableListOf<Triple<ProjectedAtom, ProjectedAtom, ProjectedAtom>>()
     vertices.forEachIndexed { i, vi ->
-        val neighbors = vertexIds.mapNotNull { id ->
+        val neighborIndices = vertexIds.mapNotNull { id ->
             if (adjacency[vi.atom.id]?.contains(id) == true) vertexIndex[id] else null
         }.filter { it > i }
-        for (aIndex in 0 until neighbors.size) {
-            for (bIndex in aIndex + 1 until neighbors.size) {
-                val j = neighbors[aIndex]
-                val k = neighbors[bIndex]
+        for (aIndex in 0 until neighborIndices.size) {
+            for (bIndex in aIndex + 1 until neighborIndices.size) {
+                val j = neighborIndices[aIndex]
+                val k = neighborIndices[bIndex]
                 if (adjacency[vertexIds[j]]?.contains(vertexIds[k]) == true) {
                     val key = listOf(vertexIds[i], vertexIds[j], vertexIds[k]).sorted()
                     if (drawn.add(key)) {

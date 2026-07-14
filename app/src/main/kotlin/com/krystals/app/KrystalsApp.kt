@@ -659,7 +659,7 @@ private fun ViewerScreen(
                     onClick = { toolOpen = !toolOpen },
                     shape = CircleShape,
                     modifier = Modifier.size(54.dp),
-                ) { AssetImage("icon.png", Modifier.size(44.dp), ContentScale.Crop) }
+                ) { AssetImage("icon_svg.png", Modifier.size(44.dp), ContentScale.Crop) }
             }
             if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateStructure(tab, it) }, onMessage = onMessage)
         }
@@ -1071,11 +1071,12 @@ private fun MpSearchScreen(
                 if (query.isBlank()) return@Button
                 searching = true
                 results = null
-                scope.launch {
-                    MaterialsProject.search(context, query)
-                        .onSuccess { results = it }
-                        .onFailure { onMessage(it.message ?: "Search failed") }
-                    searching = false
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val result = MaterialsProject.search(context, query)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        searching = false
+                        result.onSuccess { results = it }.onFailure { onMessage(it.message ?: "Search failed") }
+                    }
                 }
             }) { Text(localized("搜索", "Search")) }
         }
@@ -1088,14 +1089,15 @@ private fun MpSearchScreen(
                 items(results!!) { item ->
                     Card(
                         onClick = {
-                            scope.launch {
+                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                 val target = File(context.cacheDir, "${item.materialId}.cif")
-                                MaterialsProject.downloadCif(context, item.materialId, target)
-                                    .onSuccess { parsed ->
+                                val result = MaterialsProject.downloadCif(context, item.materialId, target)
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    result.onSuccess { parsed ->
                                         viewModel.add(parsed, "${item.materialId}.cif", Uri.fromFile(target), isNew = true)
                                         onBack()
-                                    }
-                                    .onFailure { onMessage(it.message ?: "Download failed") }
+                                    }.onFailure { onMessage(it.message ?: "Download failed") }
+                                }
                             }
                         },
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -1142,7 +1144,7 @@ private fun AboutScreen(onBack: () -> Unit) {
         )
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(24.dp))
-            AssetImage("icon.png", Modifier.size(96.dp), ContentScale.Fit)
+            AssetImage("icon_svg.png", Modifier.size(96.dp), ContentScale.Fit)
             Spacer(Modifier.height(16.dp))
             Text("Krystals", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))

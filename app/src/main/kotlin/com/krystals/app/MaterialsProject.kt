@@ -61,8 +61,6 @@ object MaterialsProject {
 
     private fun summaryUrl(vararg queryPairs: String): HttpUrl = apiUrl("materials/summary", *queryPairs)
 
-    private fun materialsUrl(vararg queryPairs: String): HttpUrl = apiUrl("materials", *queryPairs)
-
     private fun apiRequest(key: String, url: HttpUrl): Request = Request.Builder()
         .url(url)
         .header("X-API-Key", key)

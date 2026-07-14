@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 160 160">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #c2c2c2;
+      }
+
+      .cls-2 {
+        fill: none;
+      }
+
+      .cls-3 {
+        fill: url(#_未命名的渐变_390);
+      }
+
+      .cls-4 {
+        fill: url(#_未命名的渐变_413-2);
+      }
+
+      .cls-5 {
+        fill: url(#_未命名的渐变_413);
+      }
+
+      .cls-6 {
+        fill: #fafafa;
+      }
+
+      .cls-7 {
+        clip-path: url(#clippath);
+      }
+    </style>
+    <clipPath id="clippath">
+      <polygon class="cls-2" points="79.93 156.57 22.83 99.46 22.69 61.08 80.34 3.43 137.31 60.4 137.04 99.46 79.93 156.57"/>
+    </clipPath>
+    <linearGradient id="_未命名的渐变_413" data-name="未命名的渐变 413" x1="108.65" y1="60.4" x2="108.65" y2="99.46" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e6e6e6"/>
+      <stop offset="1" stop-color="#1a1a1a"/>
+    </linearGradient>
+    <linearGradient id="_未命名的渐变_413-2" data-name="未命名的渐变 413" x1="35.55" y1="119.06" x2="52.99" y2="107.73" xlink:href="#_未命名的渐变_413"/>
+    <linearGradient id="_未命名的渐变_390" data-name="未命名的渐变 390" x1="60.55" y1="80" x2="80.34" y2="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e6e6e6"/>
+      <stop offset="1" stop-color="#1a1a1a"/>
+    </linearGradient>
+  </defs>
+  <g id="_图层_1" data-name="图层 1">
+    <polygon class="cls-6" points="79.93 156.57 22.83 99.46 22.69 61.08 80.34 3.43 137.31 60.4 137.04 99.46 79.93 156.57"/>
+    <g class="cls-7">
+      <g>
+        <rect class="cls-1" x="2.41" y="40.88" width="86.08" height=".87" transform="translate(-15.9 44.24) rotate(-45)"/>
+        <rect class="cls-1" x="2.41" y="43.89" width="86.08" height=".87" transform="translate(-18.03 45.12) rotate(-45)"/>
+        <rect class="cls-1" x="2.41" y="46.9" width="86.08" height=".87" transform="translate(-20.16 46) rotate(-45)"/>
+        <rect class="cls-1" x="2.41" y="49.92" width="86.08" height=".87" transform="translate(-22.29 46.88) rotate(-45)"/>
+        <rect class="cls-1" x="2.41" y="52.93" width="86.08" height=".87" transform="translate(-24.42 47.77) rotate(-45)"/>
+        <rect class="cls-1" x="2.41" y="55.94" width="86.08" height=".87" transform="translate(-26.55 48.65) rotate(-45)"/>
+        <rect class="cls-1" x="2.41" y="58.96" width="86.08" height=".87" transform="translate(-28.68 49.53) rotate(-45)"/>
+        <rect class="cls-1" x="2.41" y="61.97" width="86.08" height=".87" transform="translate(-30.81 50.42) rotate(-45)"/>
+        <rect class="cls-1" x="66.85" y="124.32" width="86.08" height=".87" transform="translate(-56.02 114.25) rotate(-45)"/>
+        <rect class="cls-1" x="66.85" y="121.47" width="86.08" height=".87" transform="translate(-54.01 113.41) rotate(-45)"/>
+        <rect class="cls-1" x="66.85" y="118.62" width="86.08" height=".87" transform="translate(-52 112.58) rotate(-45)"/>
+        <rect class="cls-1" x="66.85" y="115.77" width="86.08" height=".87" transform="translate(-49.98 111.74) rotate(-45)"/>
+        <rect class="cls-1" x="66.85" y="112.92" width="86.08" height=".87" transform="translate(-47.97 110.91) rotate(-45)"/>
+        <rect class="cls-1" x="66.85" y="110.07" width="86.08" height=".87" transform="translate(-45.95 110.07) rotate(-45)"/>
+        <rect class="cls-1" x="33.21" y="50.19" width="96.94" height=".98" transform="translate(31 132.36) rotate(-90)"/>
+        <rect class="cls-1" x="35.04" y="50.19" width="96.94" height=".98" transform="translate(32.83 134.2) rotate(-90)"/>
+        <rect class="cls-1" x="36.88" y="50.19" width="96.94" height=".98" transform="translate(34.67 136.03) rotate(-90)"/>
+      </g>
+    </g>
+  </g>
+  <g id="_图层_2" data-name="图层 2">
+    <polygon class="cls-5" points="137.31 60.4 137.04 99.46 80 99.46 137.31 60.4"/>
+    <path class="cls-4" d="M79.93,156.57c-19.08-31.83-38.16-63.66-57.24-95.49l.13,38.39c19.04,19.04,38.07,38.07,57.11,57.11Z"/>
+    <path class="cls-3" d="M79.93,156.57l.4-153.14c-6.6,6.6-13.19,13.19-19.79,19.79,6.46,44.45,12.92,88.9,19.38,133.35Z"/>
+  </g>
+</svg>
