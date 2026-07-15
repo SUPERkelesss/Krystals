@@ -41,7 +41,7 @@ object CrystalEngine {
                 }
             }
         }
-        return SceneSnapshot(atoms, inferBonds(atoms, bondRules), structure, expansion)
+        return SceneSnapshot(atoms, inferBonds(atoms, bondRules, structure.disabledBondPairs), structure, expansion)
     }
 
     fun expandAsymmetricUnit(structure: CrystalStructure): List<ExpandedAtom> {
@@ -63,7 +63,7 @@ object CrystalEngine {
         return result
     }
 
-    fun inferBonds(atoms: List<ExpandedAtom>, rules: List<BondRule>): List<Bond> {
+    fun inferBonds(atoms: List<ExpandedAtom>, rules: List<BondRule>, disabledPairs: Set<String> = emptySet()): List<Bond> {
         if (atoms.size < 2) return emptyList()
         val custom = rules.associateBy { it.key }
         val maxCustom = rules.maxOfOrNull { it.maxAngstrom } ?: 0.0
@@ -78,13 +78,15 @@ object CrystalEngine {
                 buckets[Int3(origin.x + dx, origin.y + dy, origin.z + dz)].orEmpty().forEach { other ->
                     if (other.id <= atom.id) return@forEach
                     val key = listOf(atom.siteId, other.siteId).sorted().joinToString("\u0000")
+                    // Per v0.2.3: a pair the user explicitly deleted is not redrawn via the fallback.
+                    if (key in disabledPairs) return@forEach
                     val rule = custom[key] ?: BondRule(
                         atom.siteId, other.siteId, 0.1,
                         PeriodicTable.covalentRadius(atom.element) + PeriodicTable.covalentRadius(other.element) + 0.45,
                         BondRuleSource.AUTO,
                     )
                     val d = distance(atom.cartesian, other.cartesian)
-                    if (d >= rule.minAngstrom && d <= rule.maxAngstrom) result += Bond(atom.id, other.id, d, rule)
+                    if (d > 0.0 && d >= rule.minAngstrom && d <= rule.maxAngstrom) result += Bond(atom.id, other.id, d, rule)
                 }
             }
         }

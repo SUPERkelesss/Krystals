@@ -52,7 +52,7 @@ The core module contains no Android dependencies.
 ### `app`
 
 - `MainActivity.kt`: entry point, handles incoming CIF URIs and applies the saved language locale in `attachBaseContext`.
-- `KrystalsApp.kt`: root Compose UI (`KrystalsRoot`). Manages the app-level menu, file open/save via the Storage Access Framework, recents, theme/language settings, and PNG export permission flow.
+- `KrystalsApp.kt`: root Compose UI (`KrystalsRoot`). Manages the app-level menu, file open/save via the Storage Access Framework, theme/language settings, and PNG export permission flow.
 - `DocumentState.kt`: `KrystalsViewModel` holds a list of `DocumentTab`s. Each tab keeps its own `parsed` CIF document, working `structure`, `expansion`, `visibility`, `appearance`, `selectedAtomIds`, and `measurementMode`.
 - `EditorPanels.kt`: the structure editor with tabs for basic info, atoms, bonds, and supercell expansion. Edits flow through `CrystalEditor.apply` and update the tab's working structure.
 - `FileRepository.kt`: reads/writes text via `ContentResolver` and exports PNGs to `Pictures/Krystals` using `MediaStore`.

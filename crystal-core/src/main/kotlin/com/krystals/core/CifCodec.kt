@@ -245,7 +245,7 @@ object CifCodec {
             PeriodicTable.normalizeElement(symbol) to argb
         }.toMap()
 
-        return CrystalStructure(block.name, cell, groupName, groupNumber, operations, sites, krystalsRules + vestaRules + geomRules, colorOverrides)
+        return CrystalStructure(block.name, cell, groupName, groupNumber, operations, sites, krystalsRules + vestaRules + geomRules, colorOverrides, disabledBondPairs = emptySet(), siteArgbOverrides = emptyMap())
     }
 
     private fun canonicalStructure(structure: CrystalStructure, rules: List<BondRule>, includeHeader: Boolean): String = buildString {

@@ -40,10 +40,15 @@ class DocumentTab(
     var selectedAtomIds by mutableStateOf(emptyList<Long>())
     var measurementMode by mutableStateOf(MeasurementMode.NONE)
     var measurementLocked by mutableStateOf(false)
+    // Per v0.2.3: a locked measurement survives switching modes / starting a new measurement.
+    var lockedMeasurementIds by mutableStateOf(emptyList<Long>())
+    var lockedMeasurementMode by mutableStateOf(MeasurementMode.NONE)
     var atomEditMode by mutableStateOf(AtomEditMode.NONE)
     var editingSiteId by mutableStateOf<String?>(null)
     var inspectedAtomId by mutableStateOf<Long?>(null)
-    var inspectionLocked by mutableStateOf(false)
+    // Per v0.2.4: multiple atom-info windows can be locked at once. Each locked window survives
+    // starting a new inspection or moving the view. See CrystalViewport.onInspectionLockToggle.
+    var lockedInspectedAtomIds by mutableStateOf(emptyList<Long>())
 }
 
 class KrystalsViewModel : ViewModel() {
@@ -59,7 +64,9 @@ class KrystalsViewModel : ViewModel() {
         if (existing >= 0) { selectedIndex = existing; return }
         tabs += DocumentTab(parsed = parsed, structure = parsed.structure, name = name, uri = uri, isNew = isNew).also {
             it.appearance = defaultAppearance
-            it.structure = CrystalEditor.ensureAutoBondRules(it.structure).structure
+            // Per v0.2: when opening a CIF that already carries bond rules (e.g. other software's settings),
+            // import them verbatim and do not synthesize additional rules.
+            if (it.structure.bondRules.isEmpty()) it.structure = CrystalEditor.ensureAutoBondRules(it.structure).structure
         }
         selectedIndex = tabs.lastIndex
     }

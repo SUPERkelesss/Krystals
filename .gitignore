@@ -2,6 +2,10 @@
 .gradle/
 .idea/
 local.properties
+# Release signing secrets — never commit.
+keystore.properties
+keystores.properties
+*.keystore
 **/build/
 *.iml
 captures/

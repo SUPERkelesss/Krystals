@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -34,6 +35,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.atan2
 import kotlin.math.sqrt
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -73,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import com.krystals.core.AtomSite
 import com.krystals.core.BondColorMode
 import com.krystals.core.BondRule
+import com.krystals.core.BondRuleMatching
 import com.krystals.core.CrystalEditor
 import com.krystals.core.CrystalStructure
 import com.krystals.core.EditCommand
@@ -84,7 +87,6 @@ import com.krystals.core.PeriodicTable
 import com.krystals.core.SpaceGroupCatalog
 import com.krystals.core.UnitCell
 import com.krystals.core.Vec3
-import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.PI
 import kotlin.math.cos
@@ -100,19 +102,47 @@ fun EditorPanel(
     onMessage: (String) -> Unit,
 ) {
     var selectedTab by remember { mutableStateOf(if (tab.editingSiteId != null) EditorTab.ATOMS else EditorTab.BASIC) }
+    // Per v0.2.3: resizable panel (mirrors DisplayPanel).
+    var panelRatio by remember { mutableStateOf(0.62f) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
+        val widthPx = with(androidx.compose.ui.platform.LocalDensity.current) { maxWidth.toPx() }
+        val heightPx = with(androidx.compose.ui.platform.LocalDensity.current) { maxHeight.toPx() }
         Box(
             Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f)).clickable(
                 interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss,
             ),
         )
+        val panelModifier = if (landscape) {
+            Modifier.fillMaxHeight().fillMaxWidth(panelRatio).align(Alignment.CenterEnd)
+        } else {
+            Modifier.fillMaxWidth().fillMaxHeight(panelRatio).align(Alignment.BottomCenter)
+        }
         Surface(
             tonalElevation = 8.dp,
-            modifier = if (landscape) Modifier.fillMaxHeight().width(430.dp).align(Alignment.CenterEnd)
-            else Modifier.fillMaxWidth().fillMaxHeight(0.62f).align(Alignment.BottomCenter),
+            modifier = panelModifier,
         ) {
             Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
+                val handleModifier = if (landscape) {
+                    Modifier.fillMaxHeight().width(12.dp)
+                } else {
+                    Modifier.fillMaxWidth().height(12.dp)
+                }
+                Box(
+                    Modifier
+                        .pointerInput(landscape) {
+                            detectDragGestures { change, amount ->
+                                change.consume()
+                                if (landscape) {
+                                    panelRatio = (panelRatio - amount.x / widthPx).coerceIn(0.2f, 0.95f)
+                                } else {
+                                    panelRatio = (panelRatio - amount.y / heightPx).coerceIn(0.2f, 0.95f)
+                                }
+                            }
+                        }
+                        .then(handleModifier)
+                        .background(MaterialTheme.colorScheme.outlineVariant),
+                )
                 Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     listOf(
                         EditorTab.BASIC to stringResource(R.string.basic_info), EditorTab.ATOMS to stringResource(R.string.atoms),
@@ -182,6 +212,16 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Uni
             }.mapCatching { CrystalEditor.apply(tab.structure, EditCommand.SetCell(it)).structure }
                 .onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid cell parameters") }
         }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("应用晶胞", "Apply cell")) }
+        if (SpaceGroupCatalog.isRhombohedral(tab.structure.spaceGroupName)) {
+            // γ ≈ 120 indicates the hexagonal setting; otherwise treat as already rhombohedral.
+            val toRhom = tab.structure.cell.gamma > 100.0
+            OutlinedButton(onClick = {
+                runCatching { CrystalEditor.convertHexRhom(tab.structure, toRhom).structure }
+                    .onSuccess(onStructure).onFailure { onMessage(it.message ?: "Conversion failed") }
+            }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                Text(localized("六方/菱方晶胞转换", "Hex/Rhombohedral conversion"))
+            }
+        }
         OutlinedButton(onClick = { transformOpen = true }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("3×3 变换矩阵", "3×3 Transform")) }
     }
     if (transformOpen) TransformDialog(onDismiss = { transformOpen = false }) { rows ->
@@ -212,7 +252,7 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Cr
         LazyColumn(Modifier.fillMaxSize()) {
             items(tab.structure.sites, key = { it.id }) { site ->
                 Row(Modifier.fillMaxWidth().clickable { atomDialog = site }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(20.dp).background(colorFromArgb(PeriodicTable.resolveArgb(site.element, tab.structure.elementArgbOverrides)), androidx.compose.foundation.shape.CircleShape))
+                    Box(Modifier.size(20.dp).background(colorFromArgb(PeriodicTable.resolveArgb(site.element, tab.structure.elementArgbOverrides)), CircleShape))
                     Text("${site.label}  ${site.element}   (${fmt(site.fractional.x)}, ${fmt(site.fractional.y)}, ${fmt(site.fractional.z)})", modifier = Modifier.weight(1f).padding(start = 10.dp))
                     IconButton(onClick = { onStructure(CrystalEditor.apply(tab.structure, EditCommand.DeleteAtom(site.id)).structure) }) { Icon(Icons.Default.Delete, null) }
                 }
@@ -333,11 +373,14 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     var addOpen by remember { mutableStateOf(false) }
     var editingRule by remember { mutableStateOf<BondRule?>(null) }
     val rules = tab.structure.bondRules
+    // Per v0.2.3: hide rules that produce no bond in the current structure (no atom pair within
+    // the distance window), not just rules whose sites are gone.
+    val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Button(onClick = { addOpen = true }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Add, null); Text(localized("新建规则", "New rule")) }
         Text(localized("选择两个原子并设置最小/最大距离", "Select two atoms and set the min/max distance"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
         LazyColumn(Modifier.fillMaxSize()) {
-            items(rules, key = { it.key }) { rule ->
+            items(visibleRules, key = { it.key }) { rule ->
                 val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
                 val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
                 Row(
@@ -412,18 +455,50 @@ private fun DistanceControl(label: String, value: Float, range: ClosedFloatingPo
 
 @Composable
 private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit) {
-    var x by remember(tab.expansion) { mutableStateOf(tab.expansion.x.toString()) }; var y by remember(tab.expansion) { mutableStateOf(tab.expansion.y.toString()) }; var z by remember(tab.expansion) { mutableStateOf(tab.expansion.z.toString()) }
+    var x by remember(tab.expansion) { mutableStateOf(tab.expansion.x) }
+    var y by remember(tab.expansion) { mutableStateOf(tab.expansion.y) }
+    var z by remember(tab.expansion) { mutableStateOf(tab.expansion.z) }
     Column(Modifier.fillMaxSize().padding(18.dp)) {
         Text(localized("显示扩胞", "Display supercell"), fontWeight = FontWeight.Bold)
-        Row { CellField("x", x, { x = it }, true, Modifier.weight(1f)); CellField("y", y, { y = it }, true, Modifier.weight(1f)); CellField("z", z, { z = it }, true, Modifier.weight(1f)) }
+        Spacer(Modifier.height(12.dp))
+        listOf(
+            Triple("x", x) { v: Int -> x = v },
+            Triple("y", y) { v: Int -> y = v },
+            Triple("z", z) { v: Int -> z = v },
+        ).forEach { (label, value, setter) ->
+            ExpansionCluster(label, value, setter)
+            Spacer(Modifier.height(10.dp))
+        }
         Button(onClick = {
             runCatching {
-                val expansion = Expansion(eval(x).toInt(), eval(y).toInt(), eval(z).toInt())
+                val expansion = Expansion(x, y, z)
                 val base = com.krystals.core.CrystalEngine.expandAsymmetricUnit(tab.structure).size
                 require(base.toLong() * expansion.multiplier <= com.krystals.core.CrystalEngine.MAX_RENDERED_ATOMS) { "100,000 atom limit exceeded" }
                 tab.expansion = expansion
             }.onFailure { onMessage(it.message ?: "Invalid expansion") }
-        }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) { Text(localized("应用", "Apply")) }
+        }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("应用", "Apply")) }
+    }
+}
+
+@Composable
+private fun ExpansionCluster(label: String, value: Int, onValue: (Int) -> Unit) {
+    var text by remember(value) { mutableStateOf(value.toString()) }
+    // Range 1..10.
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontWeight = FontWeight.Medium, modifier = Modifier.padding(end = 8.dp))
+        OutlinedTextField(
+            text,
+            { input -> text = input; input.toIntOrNull()?.let { n -> if (n in 1..10) onValue(n) } },
+            singleLine = true,
+            modifier = Modifier.width(64.dp),
+        )
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { v -> val n = v.toInt().coerceIn(1, 10); onValue(n); text = n.toString() },
+            valueRange = 1f..10f,
+            steps = 9,
+            modifier = Modifier.weight(1f).padding(start = 8.dp),
+        )
     }
 }
 
@@ -471,6 +546,14 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
             Text(localized("框线", "Frame"), fontWeight = FontWeight.Bold)
             DropdownField(localized("模式", "Mode"), frameLabels[appearance.frameMode.ordinal], frameLabels) { appearance = appearance.copy(frameMode = FrameMode.entries[frameLabels.indexOf(it)]) }
             DropdownField(localized("线型", "Line"), lineLabels[appearance.lineStyle.ordinal], lineLabels) { appearance = appearance.copy(lineStyle = LineStyle.entries[lineLabels.indexOf(it)]) }
+            Spacer(Modifier.height(8.dp))
+            val axisLabels = listOf("abc", "XYZ")
+            ToggleRow(localized("显示坐标轴", "Show axes"), appearance.showAxes) { appearance = appearance.copy(showAxes = it) }
+            if (appearance.showAxes) {
+                DropdownField(localized("坐标轴", "Axes"), axisLabels[appearance.axisMode.ordinal], axisLabels) {
+                    appearance = appearance.copy(axisMode = com.krystals.core.AxisMode.entries[axisLabels.indexOf(it)])
+                }
+            }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("原子", "Atoms"), fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -492,7 +575,7 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
             LabeledSlider(localized("键半径", "Bond radius"), appearance.bondRadius, 0.02f..0.4f) { appearance = appearance.copy(bondRadius = it) }
             LabeledSlider(localized("化学键不透明度", "Bond opacity"), appearance.bondOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(bondOpacity = it) }
             DropdownField(localized("键颜色", "Bond color"), bondColorLabels[appearance.bondColorMode.ordinal], bondColorLabels) { appearance = appearance.copy(bondColorMode = BondColorMode.entries[bondColorLabels.indexOf(it)]) }
-            if (appearance.bondColorMode == BondColorMode.UNICOLOR) FlowRow { listOf(0xFF9A90A0, 0xFF9966CC, 0xFFFFFFFF, 0xFF333333).forEach { argb -> Box(Modifier.padding(5.dp).size(38.dp).background(colorFromArgb(argb), androidx.compose.foundation.shape.CircleShape).clickable { appearance = appearance.copy(uniformBondArgb = argb) }) } }
+            if (appearance.bondColorMode == BondColorMode.UNICOLOR) FlowRow { listOf(0xFF9A90A0, 0xFF9966CC, 0xFFFFFFFF, 0xFF333333).forEach { argb -> Box(Modifier.padding(5.dp).size(38.dp).background(colorFromArgb(argb), CircleShape).clickable { appearance = appearance.copy(uniformBondArgb = argb) }) } }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("多面体", "Polyhedra"), fontWeight = FontWeight.Bold)
             ToggleRow(localized("显示多面体", "Show polyhedra"), appearance.polyhedronEnabled) { appearance = appearance.copy(polyhedronEnabled = it) }
@@ -555,7 +638,7 @@ private fun AtomAppearancePreview(appearance: com.krystals.core.ViewerAppearance
 }
 
 @Composable
-private fun ColorPickerDialog(initialArgb: Long, onDismiss: () -> Unit, onColorSelected: (Long) -> Unit) {
+fun ColorPickerDialog(initialArgb: Long, onDismiss: () -> Unit, onColorSelected: (Long) -> Unit) {
     val initialHsv = remember(initialArgb) { argbToHsv(initialArgb) }
     var hue by remember { mutableFloatStateOf(initialHsv[0]) }
     var saturation by remember { mutableFloatStateOf(initialHsv[1]) }

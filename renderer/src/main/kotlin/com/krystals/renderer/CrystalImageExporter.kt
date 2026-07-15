@@ -5,9 +5,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.graphics.PointF
 import android.graphics.RadialGradient
 import android.graphics.LinearGradient
 import android.graphics.Shader
+import com.krystals.core.AxisMode
 import com.krystals.core.BondColorMode
 import com.krystals.core.FrameMode
 import com.krystals.core.LineStyle
@@ -27,7 +29,7 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 object CrystalImageExporter {
-    private data class Point(val atomId: Long, val element: String, val siteId: String, val x: Float, val y: Float, val z: Double, val radius: Float, val occupancy: Double, val fractional: Vec3, val cartesian: Vec3)
+    private data class Point(val atomId: Long, val element: String, val siteId: String, val siteLabel: String, val x: Float, val y: Float, val z: Double, val radius: Float, val occupancy: Double, val fractional: Vec3, val cartesian: Vec3)
 
     private sealed interface RenderPrimitive {
         val depth: Double
@@ -54,7 +56,9 @@ object CrystalImageExporter {
         measurementMode: MeasurementMode,
         measurementLocked: Boolean = false,
         inspectedAtomId: Long? = null,
-        inspectionLocked: Boolean = false,
+        lockedMeasurementIds: List<Long> = emptyList(),
+        lockedMeasurementMode: MeasurementMode = MeasurementMode.NONE,
+        lockedInspectedAtomIds: List<Long> = emptyList(),
     ): Bitmap {
         val width = controller.viewportWidth.coerceIn(512, 4096)
         val height = controller.viewportHeight.coerceIn(512, 4096)
@@ -75,10 +79,11 @@ object CrystalImageExporter {
         fun screen(v: Vec3) = Pair(width / 2f + controller.panX + v.x.toFloat() * scale, height / 2f + controller.panY - v.y.toFloat() * scale)
 
         drawFrames(canvas, snapshot, appearance, center, controller, scale, width, height)
+        if (appearance.showAxes) drawAxes(canvas, snapshot, appearance, controller, width, height)
         val points = visible.map { atom ->
             val rotated = rotate(atom.cartesian - center, controller.yaw, controller.pitch)
             val (x, y) = screen(rotated)
-            Point(atom.id, atom.element, atom.siteId, x, y, rotated.z, (PeriodicTable.defaultRadius(atom.element).toFloat() * scale).coerceIn(4.5f, 42f), atom.occupancy, atom.fractional, atom.cartesian)
+            Point(atom.id, atom.element, atom.siteId, atom.siteLabel, x, y, rotated.z, (PeriodicTable.defaultRadius(atom.element).toFloat() * scale).coerceIn(4.5f, 42f), atom.occupancy, atom.fractional, atom.cartesian)
         }
         val byId = points.associateBy { it.atomId }
         val neighbors = mutableMapOf<Long, MutableList<Point>>()
@@ -108,18 +113,23 @@ object CrystalImageExporter {
 
         renderables.forEach { primitive ->
             when (primitive) {
-                is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, selectedAtomIds, snapshot.elementArgbOverrides)
-                is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, snapshot.elementArgbOverrides)
-                is PolyhedronPrimitive -> drawPolyhedron(canvas, primitive.center, primitive.vertices, primitive.adjacency, appearance, snapshot.elementArgbOverrides)
+                is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, selectedAtomIds, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides)
+                is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides)
+                is PolyhedronPrimitive -> drawPolyhedron(canvas, primitive.center, primitive.vertices, primitive.adjacency, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides)
             }
         }
+        // Per v0.2.3: draw locked (persistent) + active measurement/info windows.
+        if (lockedMeasurementIds.isNotEmpty() && lockedMeasurementMode != MeasurementMode.NONE) {
+            drawMeasurement(canvas, snapshot, points, lockedMeasurementIds, lockedMeasurementMode, true)
+        }
         drawMeasurement(canvas, snapshot, points, selectedAtomIds, measurementMode, measurementLocked)
-        drawAtomInfo(canvas, points, inspectedAtomId, inspectionLocked)
+        lockedInspectedAtomIds.forEach { id -> drawAtomInfo(canvas, points, id, true) }
+        if (inspectedAtomId != null && inspectedAtomId !in lockedInspectedAtomIds) drawAtomInfo(canvas, points, inspectedAtomId, false)
         return bitmap
     }
 
-    private fun drawAtom(canvas: Canvas, point: Point, appearance: ViewerAppearance, selectedAtomIds: List<Long>, elementArgbOverrides: Map<String, Long>) {
-        val base = PeriodicTable.resolveArgb(point.element, elementArgbOverrides).toInt()
+    private fun drawAtom(canvas: Canvas, point: Point, appearance: ViewerAppearance, selectedAtomIds: List<Long>, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap()) {
+        val base = PeriodicTable.resolveSiteArgb(point.siteId, point.element, siteArgbOverrides, elementArgbOverrides).toInt()
         val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             alpha = (opacity * 255).toInt()
@@ -152,7 +162,7 @@ object CrystalImageExporter {
         canvas.drawCircle(point.x, point.y, point.radius + if (point.atomId in selectedAtomIds) 3f else 0f, paint)
     }
 
-    private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>) {
+    private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap()) {
         val opacity = appearance.bondOpacity.coerceIn(0f, 1f)
         if (opacity < 0.01f) return
         val dx = b.x - a.x
@@ -177,18 +187,18 @@ object CrystalImageExporter {
         val lightY = sin(azimuth) * cos(elevation)
         val lightOnPerp = (lightX * perpX + lightY * perpY).toDouble()
 
-        val start = Point(0L, a.element, a.siteId, startX, startY, a.z, a.radius, a.occupancy, a.fractional, a.cartesian)
-        val end = Point(0L, b.element, b.siteId, endX, endY, b.z, b.radius, b.occupancy, b.fractional, b.cartesian)
+        val start = Point(0L, a.element, a.siteId, a.siteLabel, startX, startY, a.z, a.radius, a.occupancy, a.fractional, a.cartesian)
+        val end = Point(0L, b.element, b.siteId, b.siteLabel, endX, endY, b.z, b.radius, b.occupancy, b.fractional, b.cartesian)
         if (appearance.bondColorMode == BondColorMode.UNICOLOR) {
             val base = appearance.uniformBondArgb.toInt()
             drawBondCylinder(canvas, start, end, width, perpX, perpY, lightOnPerp, base, opacity, appearance.bondReflectionEnabled)
         } else {
             val mx = (startX + endX) / 2f
             val my = (startY + endY) / 2f
-            val midA = Point(0L, a.element, a.siteId, mx, my, (a.z + b.z) / 2.0, 0f, a.occupancy, a.fractional, a.cartesian)
-            val midB = Point(0L, b.element, b.siteId, mx, my, (a.z + b.z) / 2.0, 0f, b.occupancy, b.fractional, b.cartesian)
-            drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, PeriodicTable.resolveArgb(a.element, elementArgbOverrides).toInt(), opacity, appearance.bondReflectionEnabled)
-            drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, PeriodicTable.resolveArgb(b.element, elementArgbOverrides).toInt(), opacity, appearance.bondReflectionEnabled)
+            val midA = Point(0L, a.element, a.siteId, a.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, a.occupancy, a.fractional, a.cartesian)
+            val midB = Point(0L, b.element, b.siteId, b.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, b.occupancy, b.fractional, b.cartesian)
+            drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, PeriodicTable.resolveSiteArgb(a.siteId, a.element, siteArgbOverrides, elementArgbOverrides).toInt(), opacity, appearance.bondReflectionEnabled)
+            drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, PeriodicTable.resolveSiteArgb(b.siteId, b.element, siteArgbOverrides, elementArgbOverrides).toInt(), opacity, appearance.bondReflectionEnabled)
         }
     }
 
@@ -228,47 +238,82 @@ object CrystalImageExporter {
         canvas.drawLine(a.x, a.y, b.x, b.y, paint)
     }
 
-    private fun drawPolyhedron(canvas: Canvas, center: Point, vertices: List<Point>, adjacency: Map<Long, Set<Long>>, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>) {
+    private fun drawPolyhedron(canvas: Canvas, center: Point, vertices: List<Point>, adjacency: Map<Long, Set<Long>>, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap()) {
         if (vertices.size < 3) return
-        val baseArgb = PeriodicTable.resolveArgb(center.element, elementArgbOverrides).toInt()
+        val baseArgb = PeriodicTable.resolveSiteArgb(center.siteId, center.element, siteArgbOverrides, elementArgbOverrides).toInt()
         val baseColor = Color.argb((appearance.polyhedronOpacity.coerceIn(0f, 1f) * 255).toInt(), Color.red(baseArgb), Color.green(baseArgb), Color.blue(baseArgb))
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         val vertexIds = vertices.map { it.atomId }
-        val vertexIndex = vertexIds.withIndex().associate { it.value to it.index }
 
-        val drawn = mutableSetOf<List<Long>>()
-        val faces = mutableListOf<Triple<Point, Point, Point>>()
-        vertices.forEachIndexed { i, vi ->
-            val neighborIndices = vertexIds.mapNotNull { id ->
-                if (adjacency[vi.atomId]?.contains(id) == true) vertexIndex[id] else null
-            }.filter { it > i }
-            for (aIndex in 0 until neighborIndices.size) {
-                for (bIndex in aIndex + 1 until neighborIndices.size) {
-                    val j = neighborIndices[aIndex]
-                    val k = neighborIndices[bIndex]
-                    if (adjacency[vertexIds[j]]?.contains(vertexIds[k]) == true) {
-                        val key = listOf(vertexIds[i], vertexIds[j], vertexIds[k]).sorted()
-                        if (drawn.add(key)) {
-                            faces += Triple(vertices[i], vertices[j], vertices[k])
-                        }
-                    }
-                }
-            }
+        // Special case: when every ligand is mutually bonded (e.g. a square-planar AB4 unit),
+        // the polyhedron is flat — draw a single n-gon rather than decomposing into triangles.
+        val allMutuallyAdjacent = vertices.size in 3..6 && vertices.indices.all { i ->
+            (vertices.indices - i).all { j -> adjacency[vertexIds[i]]?.contains(vertexIds[j]) == true }
         }
-
-        paint.style = Paint.Style.FILL
-        faces.forEach { (va, vb, vc) ->
-            val normal = (vb.cartesian - va.cartesian).cross(vc.cartesian - va.cartesian)
-            val toCenter = center.cartesian - va.cartesian
-            val (orderedA, orderedB, orderedC) = if (normal.dot(toCenter) > 0) Triple(vc, vb, va) else Triple(va, vb, vc)
+        if (allMutuallyAdjacent) {
+            val screenCenterX = vertices.map { it.x }.average().toFloat()
+            val screenCenterY = vertices.map { it.y }.average().toFloat()
+            val ordered = vertices.sortedBy { v -> atan2((v.y - screenCenterY).toDouble(), (v.x - screenCenterX).toDouble()) }
+            val normal = (ordered[1].cartesian - ordered[0].cartesian).cross(ordered[2].cartesian - ordered[0].cartesian)
+            val toCenter = center.cartesian - ordered[0].cartesian
+            val directed = if (normal.dot(toCenter) > 0) ordered.reversed() else ordered
             val path = android.graphics.Path().apply {
-                moveTo(orderedA.x, orderedA.y)
-                lineTo(orderedB.x, orderedB.y)
-                lineTo(orderedC.x, orderedC.y)
+                moveTo(directed[0].x, directed[0].y)
+                for (i in 1 until directed.size) lineTo(directed[i].x, directed[i].y)
                 close()
             }
             val fill = if (appearance.polyhedronReflectionEnabled) {
-                val faceCenter = (orderedA.cartesian + orderedB.cartesian + orderedC.cartesian) / 3.0
+                val faceCenter = directed.map { it.cartesian }.reduce { a, b -> a + b } / directed.size.toDouble()
+                val outward = (faceCenter - center.cartesian).let { diff ->
+                    val len = diff.length()
+                    if (len < 1e-12) Vec3.ZERO else diff / len
+                }
+                val azimuth = appearance.lightAzimuth / 180.0 * PI
+                val elevation = appearance.lightElevation / 180.0 * PI
+                val light = Vec3(cos(azimuth) * cos(elevation), sin(azimuth) * cos(elevation), sin(elevation))
+                val factor = 0.55 + 0.45 * outward.dot(light).coerceIn(-1.0, 1.0)
+                Color.argb(
+                    Color.alpha(baseColor),
+                    (Color.red(baseColor) * factor).toInt().coerceIn(0, 255),
+                    (Color.green(baseColor) * factor).toInt().coerceIn(0, 255),
+                    (Color.blue(baseColor) * factor).toInt().coerceIn(0, 255),
+                )
+            } else baseColor
+            paint.style = Paint.Style.FILL
+            paint.color = fill
+            canvas.drawPath(path, paint)
+            paint.color = Color.argb((0.35f * 255).toInt(), 255, 255, 255)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 1.2f
+            for (i in directed.indices) {
+                val a = directed[i]
+                val b = directed[(i + 1) % directed.size]
+                canvas.drawLine(a.x, a.y, b.x, b.y, paint)
+            }
+            return
+        }
+
+        val drawn = mutableSetOf<List<Long>>()
+        // Per v0.2.3: hull faces are polygonal (coplanar triangles merged).
+        val hullFaces = convexHullFaces(center.cartesian, vertices.map { it.cartesian })
+        val faces = hullFaces.map { poly -> poly.map { p -> vertices.first { it.cartesian == p } } }
+
+        paint.style = Paint.Style.FILL
+        faces.forEach { faceVerts ->
+            if (faceVerts.isEmpty()) return@forEach
+            val va = faceVerts.first()
+            val vb = faceVerts[1]
+            val vc = faceVerts[(2).coerceAtMost(faceVerts.lastIndex)]
+            val normal = (vb.cartesian - va.cartesian).cross(vc.cartesian - va.cartesian)
+            val toCenter = center.cartesian - va.cartesian
+            val ordered = if (normal.dot(toCenter) > 0) faceVerts.reversed() else faceVerts
+            val path = android.graphics.Path().apply {
+                moveTo(ordered[0].x, ordered[0].y)
+                for (i in 1 until ordered.size) lineTo(ordered[i].x, ordered[i].y)
+                close()
+            }
+            val fill = if (appearance.polyhedronReflectionEnabled) {
+                val faceCenter = ordered.map { it.cartesian }.reduce { a, b -> a + b } / ordered.size.toDouble()
                 val outward = (faceCenter - center.cartesian).let { diff ->
                     val len = diff.length()
                     if (len < 1e-12) Vec3.ZERO else diff / len
@@ -286,20 +331,17 @@ object CrystalImageExporter {
             } else baseColor
             paint.color = fill
             canvas.drawPath(path, paint)
-        }
-
-        paint.color = Color.argb((0.35f * 255).toInt(), 255, 255, 255)
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 1.2f
-        val drawnEdges = mutableSetOf<List<Long>>()
-        vertices.forEach { v ->
-            adjacency[v.atomId]?.forEach { neighborId ->
-                val neighbor = vertices.firstOrNull { it.atomId == neighborId } ?: return@forEach
-                val key = listOf(v.atomId, neighbor.atomId).sorted()
-                if (drawnEdges.add(key)) {
-                    canvas.drawLine(v.x, v.y, neighbor.x, neighbor.y, paint)
-                }
+            // Outline polygon edges, deduplicated.
+            paint.color = Color.argb((0.35f * 255).toInt(), 255, 255, 255)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 1.2f
+            for (i in ordered.indices) {
+                val a = ordered[i]
+                val b = ordered[(i + 1) % ordered.size]
+                val key = listOf(a.atomId, b.atomId).sorted()
+                if (drawn.add(key)) canvas.drawLine(a.x, a.y, b.x, b.y, paint)
             }
+            paint.style = Paint.Style.FILL
         }
     }
 
@@ -324,6 +366,74 @@ object CrystalImageExporter {
             (Color.green(a) * inv + Color.green(b) * ratio).toInt(),
             (Color.blue(a) * inv + Color.blue(b) * ratio).toInt(),
         )
+    }
+
+    private fun drawAxes(canvas: Canvas, snapshot: SceneSnapshot, appearance: ViewerAppearance, controller: ViewerController, width: Int, height: Int) {
+        val directions: List<Vec3> = when (appearance.axisMode) {
+            AxisMode.ABC -> listOf(snapshot.structure.cell.matrix.a, snapshot.structure.cell.matrix.b, snapshot.structure.cell.matrix.c)
+            AxisMode.XYZ -> listOf(Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0))
+        }
+        val labels = when (appearance.axisMode) {
+            AxisMode.ABC -> listOf("a", "b", "c")
+            AxisMode.XYZ -> listOf("X", "Y", "Z")
+        }
+        val colors = listOf(0xFFE57373.toInt(), 0xFF81C784.toInt(), 0xFF64B5F6.toInt())
+        val origin = PointF(width * 0.08f + 28f, height * 0.08f + 40f)
+        val arrowLen = 56f
+        val halfWidth = 3f
+        val headLen = 16f
+        val azimuth = appearance.lightAzimuth / 180f * PI.toFloat()
+        val elevation = appearance.lightElevation / 180f * PI.toFloat()
+        val lightX = cos(azimuth) * cos(elevation)
+        val lightY = sin(azimuth) * cos(elevation)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            strokeWidth = 4f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(4f, 1f, 1f, Color.BLACK)
+        }
+        directions.forEachIndexed { index, dir ->
+            val rotated = rotate(dir, controller.yaw, controller.pitch)
+            val projected = PointF(rotated.x.toFloat(), -rotated.y.toFloat())
+            val len = sqrt(projected.x * projected.x + projected.y * projected.y)
+            val unitX = if (len > 0.0001f) projected.x / len else 0f
+            val unitY = if (len > 0.0001f) projected.y / len else 0f
+            val tipX = origin.x + unitX * arrowLen
+            val tipY = origin.y + unitY * arrowLen
+            val color = colors[index]
+            val perpX = -unitY
+            val perpY = unitX
+            val lightOnPerp = (lightX * perpX + lightY * perpY).toDouble()
+            // 3D cylinder shaft, lit the same way bonds are.
+            val shaftEndX = tipX - unitX * headLen
+            val shaftEndY = tipY - unitY * headLen
+            val shaftA = Point(0L, "", "", "", origin.x, origin.y, 0.0, 0f, 0.0, Vec3.ZERO, Vec3.ZERO)
+            val shaftB = Point(0L, "", "", "", shaftEndX, shaftEndY, 0.0, 0f, 0.0, Vec3.ZERO, Vec3.ZERO)
+            drawBondCylinder(canvas, shaftA, shaftB, halfWidth * 2f, perpX, perpY, lightOnPerp, color, 1f, appearance.bondReflectionEnabled)
+            // Conical arrowhead with the same lit gradient.
+            val baseX = shaftEndX
+            val baseY = shaftEndY
+            val headHalf = headLen * 0.6f
+            val path = android.graphics.Path().apply {
+                moveTo(tipX, tipY)
+                lineTo(baseX + perpX * headHalf, baseY + perpY * headHalf)
+                lineTo(baseX - perpX * headHalf, baseY - perpY * headHalf)
+                close()
+            }
+            val highlightPos = (0.5 - lightOnPerp * 0.35).toFloat().coerceIn(0.1f, 0.9f)
+            val shadowA = darken(color, 0.55f)
+            val shadowB = darken(color, 0.45f)
+            val highlight = if (appearance.bondReflectionEnabled) lighten(color, 0.55f) else color
+            paint.style = Paint.Style.FILL
+            paint.shader = LinearGradient(
+                baseX + perpX * headHalf, baseY + perpY * headHalf,
+                baseX - perpX * headHalf, baseY - perpY * headHalf,
+                intArrayOf(shadowA, blend(color, shadowA, 0.5f), color, highlight, color, blend(color, shadowB, 0.5f), shadowB),
+                floatArrayOf(0f, (highlightPos - 0.18f).coerceIn(0.02f, 0.98f), (highlightPos - 0.08f).coerceIn(0.03f, 0.97f), highlightPos, (highlightPos + 0.08f).coerceIn(0.03f, 0.97f), (highlightPos + 0.18f).coerceIn(0.02f, 0.98f), 1f),
+                Shader.TileMode.CLAMP,
+            )
+            canvas.drawPath(path, paint)
+            paint.shader = null
+            paint.color = Color.WHITE
+            canvas.drawText(labels[index], tipX + unitX * 8f - 6f, tipY + unitY * 8f + 10f, paint)
+        }
     }
 
     private fun drawFrames(canvas: Canvas, snapshot: SceneSnapshot, appearance: ViewerAppearance, center: Vec3, controller: ViewerController, scale: Float, width: Int, height: Int) {
@@ -378,7 +488,7 @@ object CrystalImageExporter {
 
     private fun drawAtomInfo(canvas: Canvas, points: List<Point>, inspectedAtomId: Long?, locked: Boolean) {
         val atom = inspectedAtomId?.let { id -> points.firstOrNull { it.atomId == id } } ?: return
-        val label = "${atom.element}  occ ${atom.occupancy}\n(${atom.fractional.x.formatFract()}, ${atom.fractional.y.formatFract()}, ${atom.fractional.z.formatFract()})"
+        val label = "${atom.element}  ${atom.siteLabel}  occ ${atom.occupancy}\n(${atom.fractional.x.formatFract()}, ${atom.fractional.y.formatFract()}, ${atom.fractional.z.formatFract()})"
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 40f; setShadowLayer(4f, 1f, 1f, Color.BLACK) }
         val lines = label.split('\n')
         val widths = lines.map { line -> paint.measureText(line) }
@@ -402,7 +512,8 @@ object CrystalImageExporter {
     private fun Double.formatFract() = "%.4f".format(this)
 
     private fun rotate(v: Vec3, yawDegrees: Float, pitchDegrees: Float): Vec3 {
-        val yaw = yawDegrees / 180.0 * PI; val pitch = pitchDegrees / 180.0 * PI
+        val yaw = yawDegrees / 180.0 * PI
+        val pitch = pitchDegrees / 180.0 * PI
         val y = v.y * cos(pitch) - v.z * sin(pitch)
         val zPitch = v.y * sin(pitch) + v.z * cos(pitch)
         val x = v.x * cos(yaw) + zPitch * sin(yaw)

@@ -14,7 +14,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -27,6 +26,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import com.krystals.core.AxisMode
 import com.krystals.core.BondColorMode
 import com.krystals.core.ExpandedAtom
 import com.krystals.core.FrameMode
@@ -39,8 +39,6 @@ import com.krystals.core.ViewerAppearance
 import com.krystals.core.angleDegrees
 import com.krystals.core.dihedralDegrees
 import com.krystals.core.distance
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -48,7 +46,6 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 enum class MeasurementMode { NONE, LENGTH, ANGLE, DIHEDRAL }
 
@@ -142,51 +139,36 @@ fun CrystalViewport(
     selectedAtomIds: List<Long> = emptyList(),
     measurementMode: MeasurementMode = MeasurementMode.NONE,
     measurementLocked: Boolean = false,
+    lockedMeasurementIds: List<Long> = emptyList(),
+    lockedMeasurementMode: MeasurementMode = MeasurementMode.NONE,
     onMeasurementLockToggle: () -> Unit = {},
     inspectedAtomId: Long? = null,
-    inspectionLocked: Boolean = false,
+    lockedInspectedAtomIds: List<Long> = emptyList(),
     onInspectAtom: (ExpandedAtom) -> Unit = {},
-    onInspectionLockToggle: () -> Unit = {},
+    onInspectionLockToggle: (atomId: Long, isLocked: Boolean) -> Unit = { _, _ -> },
     onAtomTap: (ExpandedAtom) -> Unit = {},
     onViewMoved: () -> Unit = {},
 ) {
     val background = colorFromArgb(appearance.backgroundArgb)
-    val scope = rememberCoroutineScope()
-    var longPressOffset by remember { mutableStateOf<Offset?>(null) }
     var lastTap by remember { mutableStateOf<TapEvent?>(null) }
-    var measurementBounds by remember { mutableStateOf<Rect?>(null) }
-    var atomInfoBounds by remember { mutableStateOf<Rect?>(null) }
+    var measurementBoundsList by remember { mutableStateOf<List<Pair<Rect, Boolean>>>(emptyList()) }
+    var atomInfoBoundsList by remember { mutableStateOf<List<Triple<Rect, Boolean, Long>>>(emptyList()) }
     Canvas(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(snapshot, controller.locked, measurementLocked, inspectionLocked) {
+            .pointerInput(snapshot, controller.locked, measurementLocked, lockedMeasurementIds, lockedInspectedAtomIds) {
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false)
                     val down = first.position
-                    val downTime = SystemClock.uptimeMillis()
                     var moved = false
-                    var longPressed = false
-                    val longPressJob = scope.launch {
-                        delay(400)
-                        longPressed = true
-                        longPressOffset = down
-                    }
                     while (true) {
                         val event = awaitPointerEvent()
                         val pressed = event.changes.filter { it.pressed }
                         val movement = event.changes.sumOf { it.position.minus(it.previousPosition).getDistance().toDouble() }
                         if (movement > 2.0) {
                             moved = true
-                            if (!longPressed) longPressJob.cancel()
                         }
-                        if (longPressed) {
-                            if (pressed.size == 1) {
-                                val delta = pressed.first().position - pressed.first().previousPosition
-                                controller.yaw += delta.x * 0.08f
-                                controller.pitch += delta.y * 0.08f
-                                onViewMoved()
-                            }
-                        } else if (!controller.locked) {
+                        if (!controller.locked) {
                             if (pressed.size == 1) {
                                 val delta = pressed.first().position - pressed.first().previousPosition
                                 if (delta.getDistance() > 0f) {
@@ -205,14 +187,15 @@ fun CrystalViewport(
                         }
                         event.changes.forEach { it.consume() }
                         if (pressed.isEmpty()) {
-                            longPressJob.cancel()
-                            longPressOffset = null
-                            if (!moved && !longPressed) {
-                                val tapInMeasurementBox = measurementBounds?.contains(down) == true
-                                val tapInAtomInfoBox = atomInfoBounds?.contains(down) == true
+                            if (!moved) {
+                                // Per v0.2.4: a tap on any measurement or info box triggers the
+                                // toggle; the info box hit carries its atomId + locked state so the
+                                // host knows which window was tapped.
+                                val tapInMeasurementBox = measurementBoundsList.firstOrNull { it.first.contains(down) } != null
+                                val tapInAtomInfoBox = atomInfoBoundsList.firstOrNull { it.first.contains(down) }
                                 when {
                                     tapInMeasurementBox -> onMeasurementLockToggle()
-                                    tapInAtomInfoBox -> onInspectionLockToggle()
+                                    tapInAtomInfoBox != null -> onInspectionLockToggle(tapInAtomInfoBox.third, tapInAtomInfoBox.second)
                                     else -> controller.pick(down)?.let { atom ->
                                         val prev = lastTap
                                         val now = SystemClock.uptimeMillis()
@@ -234,8 +217,8 @@ fun CrystalViewport(
         drawRect(background)
         controller.viewportWidth = size.width.toInt().coerceAtLeast(1)
         controller.viewportHeight = size.height.toInt().coerceAtLeast(1)
-        measurementBounds = null
-        atomInfoBounds = null
+        measurementBoundsList = emptyList()
+        atomInfoBoundsList = emptyList()
         if (snapshot.atoms.isEmpty()) {
             drawEmptyMessage()
             controller.projectedAtoms = emptyList()
@@ -261,6 +244,7 @@ fun CrystalViewport(
         )
 
         drawCellFrames(snapshot, appearance, center, controller, scale, ::project)
+        if (appearance.showAxes) drawAxes(snapshot, appearance, controller)
 
         val projected = visibleAtoms.map { atom ->
             val v = rotated.getValue(atom)
@@ -295,21 +279,34 @@ fun CrystalViewport(
 
         renderables.forEach { renderable ->
             when (renderable) {
-                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, appearance, snapshot.elementArgbOverrides)
-                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, snapshot.elementArgbOverrides)
-                is PolyhedronRenderable -> drawPolyhedron(renderable.center, renderable.vertices, renderable.adjacency, appearance, snapshot.elementArgbOverrides)
+                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides)
+                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides)
+                is PolyhedronRenderable -> drawPolyhedron(renderable.center, renderable.vertices, renderable.adjacency, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides)
             }
         }
-        measurementBounds = drawMeasurement(projected, selectedAtomIds, measurementMode, measurementLocked)
-        atomInfoBounds = drawAtomInfo(projected, inspectedAtomId, inspectionLocked, appearance)
-        longPressOffset?.let { drawLongPressHandle(it) }
+        // Per v0.2.3: draw the locked (persistent) measurement/info windows first, then the active
+        // (unlocked) ones, so both can coexist. Each returns its Rect + a "locked" flag for hit-testing.
+        val bounds = mutableListOf<Pair<Rect, Boolean>>()
+        if (lockedMeasurementIds.isNotEmpty() && lockedMeasurementMode != MeasurementMode.NONE) {
+            drawMeasurement(projected, lockedMeasurementIds, lockedMeasurementMode, true)?.let { bounds += it to true }
+        }
+        drawMeasurement(projected, selectedAtomIds, measurementMode, measurementLocked)?.let { bounds += it to false }
+        measurementBoundsList = bounds
+        val infoBounds = mutableListOf<Triple<Rect, Boolean, Long>>()
+        lockedInspectedAtomIds.forEach { id ->
+            drawAtomInfo(projected, id, true, appearance)?.let { infoBounds += Triple(it, true, id) }
+        }
+        if (inspectedAtomId != null && inspectedAtomId !in lockedInspectedAtomIds) {
+            drawAtomInfo(projected, inspectedAtomId, false, appearance)?.let { infoBounds += Triple(it, false, inspectedAtomId) }
+        }
+        atomInfoBoundsList = infoBounds
         controller.projectedAtoms = projected
     }
 }
 
-private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>) {
+private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap()) {
     val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
-    val base = colorFromArgb(PeriodicTable.resolveArgb(atom.atom.element, elementArgbOverrides)).copy(alpha = opacity)
+    val base = colorFromArgb(PeriodicTable.resolveSiteArgb(atom.atom.siteId, atom.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacity)
     val sphere = Brush.radialGradient(
         listOf(base, base.darken(0.65f)),
         center = atom.point,
@@ -335,7 +332,7 @@ private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearanc
     if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))
 }
 
-private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>) {
+private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap()) {
     val opacity = appearance.bondOpacity.coerceIn(0f, 1f)
     if (opacity < 0.01f) return
     val delta = b.point - a.point
@@ -359,8 +356,8 @@ private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float,
         drawBondCylinder(start, end, width / 2f, perp, lightOnPerp, base, appearance.bondReflectionEnabled)
     } else {
         val midpoint = Offset((start.x + end.x) / 2f, (start.y + end.y) / 2f)
-        val baseA = colorFromArgb(PeriodicTable.resolveArgb(a.atom.element, elementArgbOverrides)).copy(alpha = opacity)
-        val baseB = colorFromArgb(PeriodicTable.resolveArgb(b.atom.element, elementArgbOverrides)).copy(alpha = opacity)
+        val baseA = colorFromArgb(PeriodicTable.resolveSiteArgb(a.atom.siteId, a.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacity)
+        val baseB = colorFromArgb(PeriodicTable.resolveSiteArgb(b.atom.siteId, b.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacity)
         drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled)
         drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled)
     }
@@ -415,45 +412,30 @@ private fun Color.lighten(factor: Float) = Color(
     alpha,
 )
 
-private fun DrawScope.drawPolyhedron(center: ProjectedAtom, vertices: List<ProjectedAtom>, adjacency: Map<Long, Set<Long>>, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>) {
+private fun DrawScope.drawPolyhedron(center: ProjectedAtom, vertices: List<ProjectedAtom>, adjacency: Map<Long, Set<Long>>, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap()) {
     if (vertices.size < 3) return
-    val baseArgb = PeriodicTable.resolveArgb(center.atom.element, elementArgbOverrides)
+    val baseArgb = PeriodicTable.resolveSiteArgb(center.atom.siteId, center.atom.element, siteArgbOverrides, elementArgbOverrides)
     val baseColor = colorFromArgb(baseArgb).copy(alpha = appearance.polyhedronOpacity.coerceIn(0f, 1f))
     val vertexIds = vertices.map { it.atom.id }
-    val vertexIndex = vertexIds.withIndex().associate { it.value to it.index }
 
-    val drawn = mutableSetOf<List<Long>>()
-    val faces = mutableListOf<Triple<ProjectedAtom, ProjectedAtom, ProjectedAtom>>()
-    vertices.forEachIndexed { i, vi ->
-        val neighborIndices = vertexIds.mapNotNull { id ->
-            if (adjacency[vi.atom.id]?.contains(id) == true) vertexIndex[id] else null
-        }.filter { it > i }
-        for (aIndex in 0 until neighborIndices.size) {
-            for (bIndex in aIndex + 1 until neighborIndices.size) {
-                val j = neighborIndices[aIndex]
-                val k = neighborIndices[bIndex]
-                if (adjacency[vertexIds[j]]?.contains(vertexIds[k]) == true) {
-                    val key = listOf(vertexIds[i], vertexIds[j], vertexIds[k]).sorted()
-                    if (drawn.add(key)) {
-                        faces += Triple(vertices[i], vertices[j], vertices[k])
-                    }
-                }
-            }
-        }
+    // Special case: when every ligand is mutually bonded (e.g. a square-planar AB4 unit),
+    // the polyhedron is flat — draw a single n-gon rather than decomposing into triangles.
+    val allMutuallyAdjacent = vertices.size in 3..6 && vertices.indices.all { i ->
+        (vertices.indices - i).all { j -> adjacency[vertexIds[i]]?.contains(vertexIds[j]) == true }
     }
-
-    faces.forEach { (va, vb, vc) ->
-        val normal = (vb.atom.cartesian - va.atom.cartesian).cross(vc.atom.cartesian - va.atom.cartesian)
-        val toCenter = center.atom.cartesian - va.atom.cartesian
-        val (orderedA, orderedB, orderedC) = if (normal.dot(toCenter) > 0) Triple(vc, vb, va) else Triple(va, vb, vc)
+    if (allMutuallyAdjacent) {
+        val screenCenter = vertices.map { it.point }.reduce { a, b -> a + b } / vertices.size.toFloat()
+        val ordered = vertices.sortedBy { v -> atan2((v.point.y - screenCenter.y).toDouble(), (v.point.x - screenCenter.x).toDouble()) }
+        val normal = (ordered[1].atom.cartesian - ordered[0].atom.cartesian).cross(ordered[2].atom.cartesian - ordered[0].atom.cartesian)
+        val toCenter = center.atom.cartesian - ordered[0].atom.cartesian
+        val directed = if (normal.dot(toCenter) > 0) ordered.reversed() else ordered
         val path = Path().apply {
-            moveTo(orderedA.point.x, orderedA.point.y)
-            lineTo(orderedB.point.x, orderedB.point.y)
-            lineTo(orderedC.point.x, orderedC.point.y)
+            moveTo(directed[0].point.x, directed[0].point.y)
+            for (i in 1 until directed.size) lineTo(directed[i].point.x, directed[i].point.y)
             close()
         }
         val fill = if (appearance.polyhedronReflectionEnabled) {
-            val faceCenter = (orderedA.atom.cartesian + orderedB.atom.cartesian + orderedC.atom.cartesian) / 3.0
+            val faceCenter = directed.map { it.atom.cartesian }.reduce { a, b -> a + b } / directed.size.toDouble()
             val outward = (faceCenter - center.atom.cartesian).let { diff ->
                 val len = diff.length()
                 if (len < 1e-12) Vec3.ZERO else diff / len
@@ -469,16 +451,57 @@ private fun DrawScope.drawPolyhedron(center: ProjectedAtom, vertices: List<Proje
             )
         } else baseColor
         drawPath(path, fill)
+        // Outline the polygon edges.
+        for (i in directed.indices) {
+            val a = directed[i]
+            val b = directed[(i + 1) % directed.size]
+            drawLine(Color.White.copy(alpha = 0.35f), a.point, b.point, 1.2f)
+        }
+        return
     }
 
-    val drawnEdges = mutableSetOf<List<Long>>()
-    vertices.forEach { v ->
-        adjacency[v.atom.id]?.forEach { neighborId ->
-            val neighbor = vertices.firstOrNull { it.atom.id == neighborId } ?: return@forEach
-            val key = listOf(v.atom.id, neighbor.atom.id).sorted()
-            if (drawnEdges.add(key)) {
-                drawLine(Color.White.copy(alpha = 0.35f), v.point, neighbor.point, 1.2f)
+    val drawn = mutableSetOf<List<Long>>()
+    // Per v0.2.3: hull faces are now polygonal (coplanar triangles merged), so a square face is
+    // drawn as one quad. Each face is a list of vertices ordered around the face.
+    val hullFaces = convexHullFaces(center.atom.cartesian, vertices.map { it.atom.cartesian })
+    val faces = hullFaces.map { poly -> poly.map { p -> vertices.first { it.atom.cartesian == p } } }
+
+    faces.forEach { faceVerts ->
+        if (faceVerts.isEmpty()) return@forEach
+        val va = faceVerts.first()
+        val vb = faceVerts[1]
+        val vc = faceVerts[(2).coerceAtMost(faceVerts.lastIndex)]
+        val normal = (vb.atom.cartesian - va.atom.cartesian).cross(vc.atom.cartesian - va.atom.cartesian)
+        val toCenter = center.atom.cartesian - va.atom.cartesian
+        val ordered = if (normal.dot(toCenter) > 0) faceVerts.reversed() else faceVerts
+        val path = Path().apply {
+            moveTo(ordered[0].point.x, ordered[0].point.y)
+            for (i in 1 until ordered.size) lineTo(ordered[i].point.x, ordered[i].point.y)
+            close()
+        }
+        val fill = if (appearance.polyhedronReflectionEnabled) {
+            val faceCenter = ordered.map { it.atom.cartesian }.reduce { a, b -> a + b } / ordered.size.toDouble()
+            val outward = (faceCenter - center.atom.cartesian).let { diff ->
+                val len = diff.length()
+                if (len < 1e-12) Vec3.ZERO else diff / len
             }
+            val azimuth = appearance.lightAzimuth / 180.0 * PI
+            val elevation = appearance.lightElevation / 180.0 * PI
+            val light = Vec3(cos(azimuth) * cos(elevation), sin(azimuth) * cos(elevation), sin(elevation))
+            val factor = 0.55 + 0.45 * outward.dot(light).coerceIn(-1.0, 1.0)
+            baseColor.copy(
+                red = (baseColor.red * factor).toFloat().coerceIn(0f, 1f),
+                green = (baseColor.green * factor).toFloat().coerceIn(0f, 1f),
+                blue = (baseColor.blue * factor).toFloat().coerceIn(0f, 1f),
+            )
+        } else baseColor
+        drawPath(path, fill)
+        // Outline polygon edges, deduplicated.
+        for (i in ordered.indices) {
+            val a = ordered[i]
+            val b = ordered[(i + 1) % ordered.size]
+            val key = listOf(a.atom.id, b.atom.id).sorted()
+            if (drawn.add(key)) drawLine(Color.White.copy(alpha = 0.35f), a.point, b.point, 1.2f)
         }
     }
 }
@@ -526,7 +549,7 @@ private fun DrawScope.drawAtomInfo(
     appearance: ViewerAppearance,
 ): Rect? {
     val atom = inspectedAtomId?.let { id -> projected.firstOrNull { it.atom.id == id } } ?: return null
-    val label = "${atom.atom.element}  occ ${atom.atom.occupancy}\n(${atom.atom.fractional.x.formatFract()}, ${atom.atom.fractional.y.formatFract()}, ${atom.atom.fractional.z.formatFract()})"
+    val label = "${atom.atom.element}  ${atom.atom.siteLabel}  occ ${atom.atom.occupancy}\n(${atom.atom.fractional.x.formatFract()}, ${atom.atom.fractional.y.formatFract()}, ${atom.atom.fractional.z.formatFract()})"
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.WHITE
         textSize = 40f
@@ -551,10 +574,73 @@ private fun DrawScope.drawAtomInfo(
 
 private fun Double.formatFract() = "%.4f".format(this)
 
-private fun DrawScope.drawLongPressHandle(center: Offset) {
-    drawCircle(Color.White.copy(alpha = 0.25f), 56f, center)
-    drawCircle(Color(0xFF9966CC).copy(alpha = 0.9f), 12f, center)
-    drawCircle(Color.White.copy(alpha = 0.6f), 46f, center, style = Stroke(2f))
+private fun DrawScope.drawAxes(
+    snapshot: SceneSnapshot,
+    appearance: ViewerAppearance,
+    controller: ViewerController,
+) {
+    // Three unit direction vectors, in the same world space the atoms live in.
+    val directions: List<Vec3> = when (appearance.axisMode) {
+        AxisMode.ABC -> listOf(snapshot.structure.cell.matrix.a, snapshot.structure.cell.matrix.b, snapshot.structure.cell.matrix.c)
+        AxisMode.XYZ -> listOf(Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0))
+    }
+    val labels = when (appearance.axisMode) {
+        AxisMode.ABC -> listOf("a", "b", "c")
+        AxisMode.XYZ -> listOf("X", "Y", "Z")
+    }
+    val colors = listOf(Color(0xFFE57373), Color(0xFF81C784), Color(0xFF64B5F6))
+    val origin = Offset(size.width * 0.08f + 28f, size.height * 0.08f + 40f)
+    val arrowLen = 56f
+    val halfWidth = 3f
+    val headLen = 16f
+    val azimuth = appearance.lightAzimuth / 180f * PI.toFloat()
+    val elevation = appearance.lightElevation / 180f * PI.toFloat()
+    val lightX = cos(azimuth) * cos(elevation)
+    val lightY = sin(azimuth) * cos(elevation)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        strokeWidth = 4f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
+    }
+    directions.forEachIndexed { index, dir ->
+        val rotated = rotate(dir, controller.yaw, controller.pitch)
+        // Normalize the projected direction so each arrow is the same screen length.
+        val projected = Offset(rotated.x.toFloat(), -rotated.y.toFloat())
+        val len = projected.getDistance()
+        val unit = if (len > 0.0001f) projected / len else Offset(0f, 0f)
+        val tip = origin + unit * arrowLen
+        val color = colors[index]
+        val perp = Offset(-unit.y, unit.x)
+        val lightOnPerp = (lightX * perp.x + lightY * perp.y).toDouble()
+        // 3D cylinder shaft (lit the same way bonds are) instead of a flat line.
+        drawBondCylinder(origin, tip - unit * headLen, halfWidth, perp, lightOnPerp, color, appearance.bondReflectionEnabled)
+        // Conical arrowhead, filled with the same lit gradient as the shaft.
+        val headBase = tip - unit * headLen
+        val headHalf = headLen * 0.6f
+        val arrowPath = Path().apply {
+            moveTo(tip.x, tip.y)
+            lineTo(headBase.x + perp.x * headHalf, headBase.y + perp.y * headHalf)
+            lineTo(headBase.x - perp.x * headHalf, headBase.y - perp.y * headHalf)
+            close()
+        }
+        val center = headBase
+        val highlightPos = (0.5 - lightOnPerp * 0.35).toFloat().coerceIn(0.1f, 0.9f)
+        val shadowA = color.darken(0.55f)
+        val shadowB = color.darken(0.45f)
+        val highlight = if (appearance.bondReflectionEnabled) color.lighten(0.55f) else color
+        val brush = Brush.linearGradient(
+            colorStops = arrayOf(
+                0.0f to shadowA,
+                (highlightPos - 0.15f).coerceIn(0.02f, 0.98f) to color,
+                highlightPos to highlight,
+                (highlightPos + 0.15f).coerceIn(0.02f, 0.98f) to color,
+                1.0f to shadowB,
+            ),
+            start = center - perp * headHalf,
+            end = center + perp * headHalf,
+        )
+        drawPath(arrowPath, brush)
+        paint.color = android.graphics.Color.WHITE
+        drawContext.canvas.nativeCanvas.drawText(labels[index], tip.x + unit.x * 8f - 6f, tip.y + unit.y * 8f + 10f, paint)
+    }
 }
 
 private fun DrawScope.drawCellFrames(
@@ -602,7 +688,6 @@ private fun boundingCenter(points: List<Vec3>): Vec3 = Vec3(
 private fun rotate(v: Vec3, yawDegrees: Float, pitchDegrees: Float): Vec3 {
     val yaw = yawDegrees / 180.0 * PI
     val pitch = pitchDegrees / 180.0 * PI
-    // pitch first so the pitch axis follows the current yaw, giving a more natural orbit feel
     val y = v.y * cos(pitch) - v.z * sin(pitch)
     val zPitch = v.y * sin(pitch) + v.z * cos(pitch)
     val x = v.x * cos(yaw) + zPitch * sin(yaw)

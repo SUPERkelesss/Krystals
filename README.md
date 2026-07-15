@@ -22,4 +22,4 @@ The debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
 - `renderer`: Filament 1.71.5 integration boundary and the orthographic mobile viewport.
 - `app`: Compose UI, Storage Access Framework, tabs, editors, settings, and MediaStore export.
 
-The supplied `res/main.png`, `res/icon.png`, and CIF corpus are packaged as application assets without modifying the originals.
+The supplied `res/main.png`, `res/icon_trans.png`, `res/icon_foreground.png`, and CIF corpus are packaged as application assets without modifying the originals. The editable icon source lives in `design/icon.svg`.

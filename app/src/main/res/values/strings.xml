@@ -4,18 +4,9 @@
     <string name="import_local">导入本地文件…</string>
     <string name="new_file">创建新文件</string>
     <string name="materials_project">从 Materials Project 中导入</string>
-    <string name="coming_soon">即将推出</string>
     <string name="save">保存</string>
-    <string name="appearance">调整外观</string>
     <string name="export_image">导出图片</string>
     <string name="exit">退出</string>
-    <string name="align">对齐</string>
-    <string name="measure">测量</string>
-    <string name="display">显示</string>
-    <string name="information">信息</string>
-    <string name="modify">修改</string>
-    <string name="lock">锁定</string>
-    <string name="unlock">解锁</string>
     <string name="basic_info">基本信息</string>
     <string name="atoms">原子</string>
     <string name="bonds">化学键</string>
@@ -34,12 +25,8 @@
     <string name="save_to_presets">保存到预设</string>
     <string name="preset_library">预设晶体库</string>
     <string name="delete_preset_title">确认删除？</string>
-    <string name="bond_rule_hint">选择两个原子并设置最小/最大距离</string>
-    <string name="edit_bond_rule">修改化学键规则</string>
     <string name="select_all">全选</string>
-    <string name="no_bond_rules">无化学键规则</string>
     <string name="version">版本</string>
-    <string name="about_description">一款轻量级的 Android CIF 晶体结构查看与编辑工具。</string>
     <string name="bundled">内置</string>
     <string name="user_saved">用户保存</string>
 </resources>

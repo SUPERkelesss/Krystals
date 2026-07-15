@@ -2,9 +2,11 @@ package com.krystals.app
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import com.krystals.core.CifCodec
 import com.krystals.core.CrystalEditor
 import com.krystals.core.ParsedStructure
+import com.krystals.core.SpaceGroupCatalog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
@@ -65,6 +67,9 @@ object MaterialsProject {
         .url(url)
         .header("X-API-Key", key)
         .header("Accept", "application/json")
+        // The MP gateway rejects requests with OkHttp's default User-Agent (HTTP 403 Forbidden).
+        // Send an explicit UA so the request is accepted.
+        .header("User-Agent", "Krystals/${com.krystals.app.BuildConfig.VERSION_NAME} (Android; materialsproject.org)")
         .build()
 
     suspend fun validateKey(key: String): Boolean = withContext(Dispatchers.IO) {
@@ -72,15 +77,26 @@ object MaterialsProject {
         val request = apiRequest(key, url)
         runCatching {
             client.newCall(request).execute().use { response ->
-                response.isSuccessful && response.body?.string()?.isNotBlank() == true
+                val body = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    Log.d("MP", "validateKey ok: HTTP ${response.code} bodyLen=${body.length}")
+                    body.isNotBlank()
+                } else {
+                    Log.w("MP", "validateKey failed: HTTP ${response.code} body=${body.take(300)}")
+                    false
+                }
             }
-        }.onFailure { it.printStackTrace() }.getOrDefault(false)
+        }.onFailure { Log.w("MP", "validateKey exception", it) }.getOrDefault(false)
     }
 
-    suspend fun search(context: Context, query: String): Result<List<MpSearchResult>> = withContext(Dispatchers.IO) {
+    suspend fun search(context: Context, query: String, fuzzy: Boolean = false): Result<List<MpSearchResult>> = withContext(Dispatchers.IO) {
         val key = getKey(context) ?: return@withContext Result.failure(IllegalStateException("API key not set"))
+        // MP's `formula` parameter: a bare formula matches the exact reduced form (e.g. "SiO2").
+        // Wrapping with `*` wildcards enables partial matches (e.g. "*O2", "Si*", "*SiO*"). The MP
+        // gateway does not always accept `*`-wrapped queries, so fuzzy search is opt-in via a checkbox.
+        val formula = if (fuzzy) "*${query.trim()}*" else query.trim()
         val url = summaryUrl(
-            "formula", query,
+            "formula", formula,
             "_limit", "50",
             "_fields", "material_id,formula_pretty,nsites,symmetry",
         )
@@ -88,10 +104,13 @@ object MaterialsProject {
         runCatching {
             client.newCall(request).execute().use { response ->
                 val body = response.body?.string() ?: ""
-                if (!response.isSuccessful) error("HTTP ${response.code}: ${body.take(200)}")
+                if (!response.isSuccessful) {
+                    Log.w("MP", "search failed: HTTP ${response.code} url=$url body=${body.take(300)}")
+                    error("HTTP ${response.code}: ${body.take(200)}")
+                }
                 val json = JSONObject(body)
                 val data = json.optJSONArray("data") ?: JSONArray()
-                (0 until data.length()).map { index ->
+                val results = (0 until data.length()).map { index ->
                     val item = data.getJSONObject(index)
                     val symmetry = item.optJSONObject("symmetry") ?: JSONObject()
                     MpSearchResult(
@@ -102,6 +121,8 @@ object MaterialsProject {
                         nsites = item.optInt("nsites", 0),
                     )
                 }
+                Log.d("MP", "search ok: ${results.size} items for '$query'")
+                results
             }
         }
     }
@@ -116,17 +137,27 @@ object MaterialsProject {
         runCatching {
             client.newCall(request).execute().use { response ->
                 val body = response.body?.string() ?: ""
-                if (!response.isSuccessful) error("HTTP ${response.code}: ${body.take(200)}")
+                if (!response.isSuccessful) {
+                    Log.w("MP", "downloadCif failed: HTTP ${response.code} id=$materialId body=${body.take(300)}")
+                    error("HTTP ${response.code}: ${body.take(200)}")
+                }
                 val json = JSONObject(body)
                 val data = json.optJSONArray("data") ?: JSONArray()
-                if (data.length() == 0) error("No structure data returned")
+                if (data.length() == 0) {
+                    Log.w("MP", "downloadCif: no structure data for $materialId")
+                    error("No structure data returned")
+                }
                 val item = data.getJSONObject(0)
                 val structure = item.getJSONObject("structure")
                 val cif = structureToCif(item, structure)
                 target.parentFile?.mkdirs()
                 target.writeText(cif, Charsets.UTF_8)
                 val parsed = CifCodec.parseStructure(cif)
-                parsed.copy(structure = CrystalEditor.ensureAutoBondRules(parsed.structure).structure)
+                Log.d("MP", "downloadCif ok: $materialId -> ${parsed.structure.sites.size} sites")
+                // Per v0.2: a freshly downloaded MP structure has no bond rules, so synthesize them.
+                if (parsed.structure.bondRules.isEmpty()) {
+                    parsed.copy(structure = CrystalEditor.ensureAutoBondRules(parsed.structure).structure)
+                } else parsed
             }
         }
     }
@@ -146,15 +177,23 @@ object MaterialsProject {
         val materialId = item.optString("material_id", "mp")
         val symmetry = item.optJSONObject("symmetry")
         val spaceGroup = symmetry?.optString("symbol", "P1") ?: "P1"
+        val spaceGroupNumber = symmetry?.optInt("number", 0)?.takeIf { it in 1..230 }
+        // Resolve symmetry operations from our own catalog so the downloaded CIF carries a full
+        // symmetry loop (MP's structure endpoint only returns the asymmetric-unit sites). Falls back
+        // to identity (x,y,z) when the symbol isn't recognized.
+        val symopSources = SpaceGroupCatalog.operations(spaceGroup).map { it.source }
         return buildString {
             append("data_${materialId}\n")
             append("_symmetry_space_group_name_H-M_alt   '${spaceGroup}'\n")
+            spaceGroupNumber?.let { append("_space_group_IT_number   $it\n") }
             append("_cell_length_a   ${format(a)}\n")
             append("_cell_length_b   ${format(b)}\n")
             append("_cell_length_c   ${format(c)}\n")
             append("_cell_angle_alpha   ${format(alpha)}\n")
             append("_cell_angle_beta   ${format(beta)}\n")
             append("_cell_angle_gamma   ${format(gamma)}\n")
+            append("loop_\n _space_group_symop_id\n _space_group_symop_operation_xyz\n")
+            symopSources.forEachIndexed { index, op -> append(" ${index + 1} '${op}'\n") }
             append("loop_\n _atom_site_label\n _atom_site_type_symbol\n _atom_site_fract_x\n _atom_site_fract_y\n _atom_site_fract_z\n _atom_site_occupancy\n")
             (0 until sites.length()).map { index ->
                 val site = sites.getJSONObject(index)

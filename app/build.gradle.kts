@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -29,11 +31,31 @@ android {
         resources.excludes += setOf("META-INF/{AL2.0,LGPL2.1}", "META-INF/LICENSE*")
         jniLibs.useLegacyPackaging = true
     }
+    // Release signing: populate a keystore.properties (gitignored) next to the repo root with
+    //   storeFile=/absolute/path/to/release.keystore
+    //   storePassword=...
+    //   keyAlias=...
+    //   keyPassword=...
+    // then `./gradlew :app:assembleRelease` will sign the APK. Absent the file, release builds
+    // remain unsigned (you can still sign with apksigner afterwards).
+    val keystoreProps = rootProject.file("keystore.properties")
+    if (keystoreProps.exists()) {
+        val props = Properties()
+        keystoreProps.inputStream().use { props.load(it) }
+        signingConfigs.create("release") {
+            storeFile = file(props.getProperty("storeFile"))
+            storePassword = props.getProperty("storePassword")
+            keyAlias = props.getProperty("keyAlias")
+            keyPassword = props.getProperty("keyPassword")
+        }
+    }
     buildTypes {
         debug { isDebuggable = true }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (keystoreProps.exists()) signingConfig = signingConfigs.getByName("release")
         }
     }
 }

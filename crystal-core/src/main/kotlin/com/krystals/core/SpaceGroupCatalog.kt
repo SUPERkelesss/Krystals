@@ -254,6 +254,12 @@ object SpaceGroupCatalog {
             ?: listOf(SymmetryOperation.IDENTITY)
     }
 
+    /** Space-group numbers that use the rhombohedral (R) lattice setting. */
+    val RHOMBOHEDRAL_GROUPS: Set<Int> = setOf(146, 148, 155, 160, 161, 166, 167)
+
+    /** True when [name] resolves to an R-lattice trigonal space group. */
+    fun isRhombohedral(name: String): Boolean = find(name)?.number in RHOMBOHEDRAL_GROUPS
+
     private fun crystalSystem(n: Int) = when (n) {
         1, 2 -> "Triclinic"
         in 3..15 -> "Monoclinic"

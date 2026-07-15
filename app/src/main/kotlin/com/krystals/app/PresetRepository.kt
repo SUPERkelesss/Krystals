@@ -10,21 +10,38 @@ import java.io.File
 
 enum class PresetSource { BUNDLED, USER }
 
-data class PresetEntry(val name: String, val source: PresetSource, val assetPath: String? = null, val file: File? = null)
+data class PresetEntry(val name: String, val source: PresetSource, val assetPath: String? = null, val file: File? = null, val category: String? = null)
 
 object PresetRepository {
     private const val ASSET_DIR = "cifs_example"
     private const val USER_DIR = "presets"
 
+    /** Recursively collect bundled `.cif` files under [dir] (relative to assets root), tagging each with its [category]. */
+    private fun collectBundled(context: Context, dir: String, category: String?): List<PresetEntry> {
+        val entries = runCatching { context.assets.list(dir).orEmpty().toList() }.getOrDefault(emptyList())
+        val result = mutableListOf<PresetEntry>()
+        for (entry in entries) {
+            val relPath = if (dir.isEmpty()) entry else "$dir/$entry"
+            if (entry.endsWith(".cif", ignoreCase = true)) {
+                result += PresetEntry(entry, PresetSource.BUNDLED, assetPath = relPath, category = category)
+            } else {
+                // A subdirectory: descend. Its own name becomes the category for the files within.
+                result += collectBundled(context, relPath, entry)
+            }
+        }
+        return result
+    }
+
     fun listPresets(context: Context): List<PresetEntry> {
-        val bundled = runCatching { context.assets.list(ASSET_DIR).orEmpty().toList() }.getOrDefault(emptyList())
-            .filter { it.endsWith(".cif", ignoreCase = true) }
-            .map { PresetEntry(it, PresetSource.BUNDLED, assetPath = "$ASSET_DIR/$it") }
+        // Bundled presets live in nested subdirectories of cifs_example (01_basic, 02_oxides, …).
+        // A flat assets.list() only returns the subdirectory names, so we recurse.
+        val bundled = collectBundled(context, ASSET_DIR, null)
         val userDir = File(context.filesDir, USER_DIR).apply { if (!exists()) mkdirs() }
         val user = userDir.listFiles { file -> file.extension.equals("cif", ignoreCase = true) }.orEmpty()
             .sortedBy { it.name }
-            .map { PresetEntry(it.name, PresetSource.USER, file = it) }
-        return bundled + user
+            // Per v0.2.2: user-saved presets form their own group, shown first.
+            .map { PresetEntry(it.name, PresetSource.USER, file = it, category = "__user__") }
+        return user + bundled
     }
 
     fun openPreset(context: Context, entry: PresetEntry): ParsedStructure {
@@ -33,7 +50,11 @@ object PresetRepository {
             PresetSource.USER -> entry.file!!.readText()
         }
         val parsed = CifCodec.parseStructure(text)
-        return parsed.copy(structure = CrystalEditor.ensureAutoBondRules(parsed.structure).structure)
+        // Per v0.2: only synthesize bond rules when the CIF has none of its own.
+        val withRules = if (parsed.structure.bondRules.isEmpty()) {
+            parsed.copy(structure = CrystalEditor.ensureAutoBondRules(parsed.structure).structure)
+        } else parsed
+        return withRules
     }
 
     fun saveToPreset(context: Context, parsed: ParsedStructure, structure: CrystalStructure, name: String): File {

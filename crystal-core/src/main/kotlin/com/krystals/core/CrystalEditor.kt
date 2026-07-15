@@ -33,7 +33,9 @@ object CrystalEditor {
                 element = PeriodicTable.normalizeElement(command.element), fractional = command.fractional.wrapped(),
                 occupancy = command.occupancy.coerceIn(0.0, 1.0),
             )
-            EditResult(structure.copy(sites = structure.sites + site), occupancyWarnings(command.occupancy))
+            // Per v0.2: creating an atom checks its distance to every other atom and adds matching bond rules.
+            val withRules = ensureAutoBondRules(structure.copy(sites = structure.sites + site))
+            withRules.copy(warnings = occupancyWarnings(command.occupancy) + withRules.warnings)
         }
         is EditCommand.UpdateAtom -> {
             require(structure.sites.any { it.id == command.siteId }) { "Atom site not found" }
@@ -51,9 +53,15 @@ object CrystalEditor {
         ))
         is EditCommand.SetBondRule -> {
             val rules = structure.bondRules.filterNot { it.key == command.rule.key } + command.rule
-            EditResult(structure.copy(bondRules = rules))
+            // Re-adding a rule for a previously disabled pair re-enables it.
+            EditResult(structure.copy(bondRules = rules, disabledBondPairs = structure.disabledBondPairs - command.rule.key))
         }
-        is EditCommand.RemoveBondRule -> EditResult(structure.copy(bondRules = structure.bondRules.filterNot { it.key == command.key }))
+        // Per v0.2.3: removing a rule disables the pair so the covalent-radius fallback won't
+        // redraw the bond. The rule is dropped from bondRules (hidden from lists) AND recorded.
+        is EditCommand.RemoveBondRule -> EditResult(structure.copy(
+            bondRules = structure.bondRules.filterNot { it.key == command.key },
+            disabledBondPairs = structure.disabledBondPairs + command.key,
+        ))
         is EditCommand.Transform -> transform(structure, command.rows)
     }
 
@@ -95,7 +103,27 @@ object CrystalEditor {
                 sites += site.copy(id = "${site.id}:T${index + 1}", label = label, fractional = position)
             }
         }
-        return EditResult(structure.copy(cell = UnitCell.fromMatrix(newCellMatrix), sites = sites, bondRules = emptyList()))
+        return EditResult(structure.copy(cell = UnitCell.fromMatrix(newCellMatrix), sites = sites, bondRules = emptyList(), disabledBondPairs = emptySet()))
+    }
+
+    /**
+     * Convert an R-lattice trigonal structure between the hexagonal and rhombohedral settings.
+     * hex → rhom uses the matrix [[1,0,0],[1,1,0],[1,1,1]]; rhom → hex uses its inverse.
+     * Unlike [transform], this preserves the (non-orthogonal) rhombohedral cell angles instead of
+     * re-applying [constrainCell], which would force the hexagonal a=b, α=β=90, γ=120 constraint.
+     */
+    fun convertHexRhom(structure: CrystalStructure, toRhombohedral: Boolean): EditResult {
+        val rows = if (toRhombohedral) listOf(listOf(1, 0, 0), listOf(1, 1, 0), listOf(1, 1, 1))
+        else listOf(listOf(1, 0, 0), listOf(-1, 1, 0), listOf(0, -1, 1))
+        val transform = Mat3.fromRows(rows)
+        val inverse = transform.inverse()
+        val newCellMatrix = structure.cell.matrix * transform
+        val sites = structure.sites.map { site ->
+            val position = (inverse * site.fractional).wrapped()
+            site.copy(fractional = position)
+        }
+        val newStructure = structure.copy(cell = UnitCell.fromMatrix(newCellMatrix), sites = sites, bondRules = emptyList(), disabledBondPairs = emptySet())
+        return ensureAutoBondRules(newStructure)
     }
 
     private fun constrainCell(cell: UnitCell, groupNumber: Int?): UnitCell = when (groupNumber ?: 1) {

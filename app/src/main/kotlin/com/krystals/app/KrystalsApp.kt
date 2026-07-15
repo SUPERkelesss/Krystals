@@ -17,15 +17,14 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -33,6 +32,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
@@ -54,9 +56,11 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.BrightnessAuto
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Info
@@ -81,7 +85,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -105,12 +109,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -121,6 +126,7 @@ import com.krystals.app.ui.KrystalsTheme
 import com.krystals.app.ui.ThemeMode
 import com.krystals.core.CifCodec
 import com.krystals.core.CrystalEditor
+import com.krystals.core.BondRuleMatching
 import com.krystals.core.CrystalEngine
 import com.krystals.core.EditCommand
 import com.krystals.core.PeriodicTable
@@ -139,46 +145,6 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private data class PendingOpen(val uri: Uri, val name: String, val text: String, val candidates: List<Int>)
-private data class RecentEntry(val name: String, val uri: String)
-
-private const val RECENTS_KEY = "recent_files"
-private const val MAX_RECENTS = 10
-
-private fun loadRecents(preferences: android.content.SharedPreferences): List<RecentEntry> {
-    return runCatching {
-        org.json.JSONArray(preferences.getString(RECENTS_KEY, "[]") ?: "[]").let { array ->
-            (0 until array.length()).map { index ->
-                val obj = array.getJSONObject(index)
-                RecentEntry(obj.getString("name"), obj.getString("uri"))
-            }
-        }
-    }.getOrDefault(emptyList())
-}
-
-private fun saveRecents(preferences: android.content.SharedPreferences, recents: List<RecentEntry>) {
-    val array = org.json.JSONArray().apply {
-        recents.forEach { entry ->
-            put(org.json.JSONObject().apply {
-                put("name", entry.name)
-                put("uri", entry.uri)
-            })
-        }
-    }
-    preferences.edit().putString(RECENTS_KEY, array.toString()).apply()
-}
-
-private fun addRecent(preferences: android.content.SharedPreferences, entry: RecentEntry): List<RecentEntry> {
-    val current = loadRecents(preferences).filterNot { it.uri == entry.uri }
-    val updated = listOf(entry) + current.take(MAX_RECENTS - 1)
-    saveRecents(preferences, updated)
-    return updated
-}
-
-private fun removeRecent(preferences: android.content.SharedPreferences, uri: String): List<RecentEntry> {
-    val updated = loadRecents(preferences).filterNot { it.uri == uri }
-    saveRecents(preferences, updated)
-    return updated
-}
 
 @Composable
 fun KrystalsRoot(
@@ -215,10 +181,17 @@ fun KrystalsRoot(
     var closeRequest by remember { mutableStateOf<Int?>(null) }
     var exitRequest by remember { mutableStateOf(false) }
     var pendingExportBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var recents by remember { mutableStateOf(loadRecents(preferences)) }
     var helpOpen by remember { mutableStateOf(false) }
     var sponsorOpen by remember { mutableStateOf(false) }
+    var sponsorLaunchCount by remember { mutableStateOf(0) }
     var aboutOpen by remember { mutableStateOf(false) }
+    // Per v0.2.2: prompt for sponsorship on the 5th, 20th, 50th, and every 50th launch thereafter.
+    LaunchedEffect(Unit) {
+        val count = preferences.getInt("launch_count", 0) + 1
+        preferences.edit().putInt("launch_count", count).apply()
+        val prompt = count == 5 || count == 20 || count == 50 || (count > 50 && count % 50 == 0)
+        if (prompt) { sponsorLaunchCount = count; sponsorOpen = true }
+    }
     var presetOpen by remember { mutableStateOf(false) }
     var mpSearchOpen by remember { mutableStateOf(false) }
     var mpKeyDialogOpen by remember { mutableStateOf(false) }
@@ -228,8 +201,6 @@ fun KrystalsRoot(
     fun openUrl(url: String) {
         runCatching { activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))) }.onFailure { showMessage("Unable to open browser") }
     }
-
-    fun rememberOpen(uri: Uri, name: String) { recents = addRecent(preferences, RecentEntry(name, uri.toString())) }
 
     fun loadUri(uri: Uri) {
         scope.launch {
@@ -248,15 +219,9 @@ fun KrystalsRoot(
                 if (result.candidates.size == 1) {
                     val parsed = CifCodec.parseStructure(result.text, result.candidates.first())
                     viewModel.add(parsed, result.name, result.uri)
-                    rememberOpen(result.uri, result.name)
                 } else pendingOpen = result
             }.onFailure { showMessage(it.message ?: "Unable to open CIF") }
         }
-    }
-
-    fun openRecent(entry: RecentEntry) {
-        runCatching { Uri.parse(entry.uri) }.getOrNull()?.let(::loadUri)
-            ?: run { recents = removeRecent(preferences, entry.uri); showMessage("Unable to open recent file") }
     }
 
     val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(::loadUri) }
@@ -272,7 +237,6 @@ fun KrystalsRoot(
                     tab.parsed = CifCodec.parseStructure(content, tab.parsed.blockIndex)
                 }.onSuccess {
                     showMessage("Saved ${tab.name}")
-                    rememberOpen(uri, tab.name)
                 }.onFailure { showMessage(it.message ?: "Save failed") }
             }
         }
@@ -334,8 +298,6 @@ fun KrystalsRoot(
                         onMaterials = {
                             if (MaterialsProject.hasKey(activity)) mpSearchOpen = true else mpKeyDialogOpen = true
                         },
-                        recents = recents,
-                        onRecent = ::openRecent,
                     )
                 } else {
                     ViewerScreen(
@@ -362,8 +324,6 @@ fun KrystalsRoot(
                         language = language,
                         onLanguage = { value -> language = value; preferences.edit().putString("language", value).apply(); activity.recreate() },
                         onMessage = ::showMessage,
-                        recents = recents,
-                        onRecent = ::openRecent,
                         onHelp = { helpOpen = true },
                         onAbout = { aboutOpen = true },
                         onSponsor = { sponsorOpen = true },
@@ -371,9 +331,9 @@ fun KrystalsRoot(
                 }
             }
         }
-    }
 
-    pendingOpen?.let { pending ->
+        // Dialogs live inside KrystalsTheme so they pick up the correct color scheme (dark/light).
+        pendingOpen?.let { pending ->
         val document = remember(pending) { CifCodec.parse(pending.text) }
         AlertDialog(
             onDismissRequest = { pendingOpen = null },
@@ -381,7 +341,6 @@ fun KrystalsRoot(
             text = { Column { pending.candidates.forEach { index -> TextButton(onClick = {
                 val parsed = CifCodec.parseStructure(pending.text, index)
                 viewModel.add(parsed, pending.name, pending.uri)
-                rememberOpen(pending.uri, pending.name)
                 pendingOpen = null
             }) { Text(document.blocks[index].name) } } } },
             confirmButton = {},
@@ -412,11 +371,12 @@ fun KrystalsRoot(
         onDismiss = { helpOpen = false },
         onConfirm = { helpOpen = false; openUrl("https://www.kelesss.art") },
     )
-    if (sponsorOpen) SponsorDialog(onDismiss = { sponsorOpen = false })
+    if (sponsorOpen) SponsorDialog(onDismiss = { sponsorOpen = false }, launchCount = sponsorLaunchCount, onSponsor = { openUrl("https://ifdian.net/a/krystals/plan"); sponsorOpen = false })
     if (aboutOpen) AboutScreen(onBack = { aboutOpen = false })
     if (presetOpen) PresetLibraryDialog(
         context = activity,
         viewModel = viewModel,
+        preferences = preferences,
         onDismiss = { presetOpen = false },
         onMessage = ::showMessage,
     )
@@ -434,6 +394,7 @@ fun KrystalsRoot(
         onChangeKey = { mpSearchOpen = false; mpKeyDialogOpen = true },
         onMessage = ::showMessage,
     )
+    }
 }
 
 @Composable
@@ -442,8 +403,6 @@ private fun HomeScreen(
     onOpenPreset: () -> Unit,
     onNew: () -> Unit,
     onMaterials: () -> Unit,
-    recents: List<RecentEntry>,
-    onRecent: (RecentEntry) -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
         Column(
@@ -461,21 +420,6 @@ private fun HomeScreen(
             Button(onClick = onNew, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.new_file)) }
             Spacer(Modifier.height(12.dp))
             Button(onClick = onMaterials, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.Science, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.materials_project)) }
-            if (recents.isNotEmpty()) {
-                Spacer(Modifier.height(28.dp))
-                Text(localized("历史打开文件", "Recent files"), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
-                LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    itemsIndexed(recents, key = { _, item -> item.uri }) { _, entry ->
-                        Surface(shape = RoundedCornerShape(10.dp), tonalElevation = 3.dp, modifier = Modifier.clickable { onRecent(entry) }) {
-                            Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.FileOpen, null, modifier = Modifier.size(18.dp))
-                                Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp).widthIn(max = 160.dp))
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -497,8 +441,6 @@ private fun ViewerScreen(
     language: String,
     onLanguage: (String) -> Unit,
     onMessage: (String) -> Unit,
-    recents: List<RecentEntry>,
-    onRecent: (RecentEntry) -> Unit,
     onHelp: () -> Unit,
     onAbout: () -> Unit,
     onSponsor: () -> Unit,
@@ -526,17 +468,6 @@ private fun ViewerScreen(
             title = { Text("Krystals", fontWeight = FontWeight.Bold, maxLines = 1) },
             navigationIcon = { Box { IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.Menu, null) }; DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_local)) }, leadingIcon = { Icon(Icons.Default.FileOpen, null) }, onClick = { menuOpen = false; onOpen() })
-                if (recents.isNotEmpty()) {
-                    HorizontalDivider()
-                    Text(localized("历史打开文件", "Recent files"), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-                    recents.forEach { entry ->
-                        DropdownMenuItem(
-                            text = { Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            onClick = { menuOpen = false; onRecent(entry) },
-                        )
-                    }
-                    HorizontalDivider()
-                }
                 DropdownMenuItem(text = { Text(stringResource(R.string.open_preset_library)) }, leadingIcon = { Icon(Icons.Default.FileOpen, null) }, onClick = { menuOpen = false; onOpenPreset() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.materials_project)) }, leadingIcon = { Icon(Icons.Default.Science, null) }, onClick = { menuOpen = false; onMaterials() })
@@ -545,7 +476,7 @@ private fun ViewerScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
                     menuOpen = false
                     sceneResult.getOrNull()?.let { snapshot ->
-                        onExport(CrystalImageExporter.render(snapshot, tab.appearance, controller, tab.visibility, tab.selectedAtomIds, tab.measurementMode, tab.measurementLocked, tab.inspectedAtomId, tab.inspectionLocked))
+                        onExport(CrystalImageExporter.render(snapshot, tab.appearance, controller, tab.visibility, tab.selectedAtomIds, tab.measurementMode, tab.measurementLocked, tab.inspectedAtomId, tab.lockedMeasurementIds, tab.lockedMeasurementMode, tab.lockedInspectedAtomIds))
                     } ?: onMessage("Unable to export current crystal")
                 })
                 HorizontalDivider()
@@ -576,14 +507,49 @@ private fun ViewerScreen(
                     selectedAtomIds = tab.selectedAtomIds,
                     measurementMode = tab.measurementMode,
                     measurementLocked = tab.measurementLocked,
-                    onMeasurementLockToggle = { tab.measurementLocked = !tab.measurementLocked },
+                    lockedMeasurementIds = tab.lockedMeasurementIds,
+                    lockedMeasurementMode = tab.lockedMeasurementMode,
+                    onMeasurementLockToggle = {
+                        // Per v0.2.3: if there is an active (unlocked) measurement, lock it into the
+                        // persistent slot and clear the active selection; if the active one is already
+                        // locked, tapping the locked box dismisses it.
+                        if (tab.measurementLocked) {
+                            tab.measurementLocked = false
+                            tab.selectedAtomIds = emptyList()
+                            tab.lockedMeasurementIds = emptyList()
+                            tab.lockedMeasurementMode = MeasurementMode.NONE
+                        } else if (tab.lockedMeasurementIds.isNotEmpty()) {
+                            // Tapping the locked measurement clears it.
+                            tab.lockedMeasurementIds = emptyList()
+                            tab.lockedMeasurementMode = MeasurementMode.NONE
+                        } else {
+                            // Lock the current active measurement.
+                            tab.lockedMeasurementIds = tab.selectedAtomIds
+                            tab.lockedMeasurementMode = tab.measurementMode
+                            tab.selectedAtomIds = emptyList()
+                        }
+                    },
                     inspectedAtomId = tab.inspectedAtomId,
-                    inspectionLocked = tab.inspectionLocked,
-                    onInspectAtom = { atom -> tab.inspectedAtomId = atom.id; tab.inspectionLocked = false },
-                    onInspectionLockToggle = { tab.inspectionLocked = !tab.inspectionLocked },
+                    lockedInspectedAtomIds = tab.lockedInspectedAtomIds,
+                    onInspectAtom = { atom ->
+                        // Per v0.2.4: double-tap opens an unlocked info window for the atom. Any
+                        // already-locked windows are preserved; the active window is replaceable.
+                        tab.inspectedAtomId = atom.id
+                    },
+                    onInspectionLockToggle = { atomId, isLocked ->
+                        // Tapping an unlocked (active) info box locks it into the persistent list and
+                        // clears the active window; tapping a locked box removes just that one.
+                        if (isLocked) {
+                            tab.lockedInspectedAtomIds = tab.lockedInspectedAtomIds - atomId
+                        } else {
+                            tab.lockedInspectedAtomIds = tab.lockedInspectedAtomIds + atomId
+                            tab.inspectedAtomId = null
+                        }
+                    },
                     onViewMoved = {
                         if (tab.measurementMode != MeasurementMode.NONE && !tab.measurementLocked) tab.selectedAtomIds = emptyList()
-                        if (!tab.inspectionLocked) tab.inspectedAtomId = null
+                        // Moving the view dismisses the unlocked info window; locked ones persist.
+                        tab.inspectedAtomId = null
                     },
                     onAtomTap = { atom ->
                         when (tab.atomEditMode) {
@@ -603,18 +569,37 @@ private fun ViewerScreen(
                 )
             }.onFailure { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(it.message ?: "Unable to build scene", color = MaterialTheme.colorScheme.error) } }
 
-            val legendElements = sceneResult.getOrNull()?.atoms
-                ?.filterNot { it.siteId in tab.visibility.hiddenSites }
-                ?.map { it.element }?.distinct()?.sorted().orEmpty()
+            // Per v0.2.4: group legend by (element, resolved color). Sites of the same element that
+            // share a color collapse into a single element row; sites whose color was overridden per-
+            // site split into their own rows labeled by site.label (e.g. C1, C2).
+            val legendEntries = remember(tab.structure, tab.visibility) {
+                val atoms = sceneResult.getOrNull()?.atoms ?: return@remember emptyList<LegendEntry>()
+                val visibleSites = tab.structure.sites.filterNot { it.id in tab.visibility.hiddenSites }
+                val siteById = visibleSites.associateBy { it.id }
+                atoms.mapNotNull { atom -> siteById[atom.siteId] }
+                    .distinctBy { it.id }
+                    .groupBy { site -> site.element to PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides) }
+                    .toSortedMap(compareBy({ it.first }, { it.second }))
+                    .flatMap { (key, sites) ->
+                        val (element, argb) = key
+                        if (sites.size == 1 && sites.first().element == element) listOf(LegendEntry(element, argb))
+                        else sites.sortedBy { it.label }.map { LegendEntry(it.label, argb) }
+                    }
+            }
             ElementLegend(
-                elements = legendElements,
+                entries = legendEntries,
                 expanded = legendExpanded,
                 onToggle = { legendExpanded = !legendExpanded },
-                elementArgbOverrides = tab.structure.elementArgbOverrides,
                 modifier = Modifier.align(Alignment.BottomStart).padding(14.dp),
             )
 
             val floatingAlpha by animateFloatAsState(targetValue = if (toolOpen) 1f else 0.45f, label = "floatingAlpha")
+            // Per v0.2.2: floating-ball palette uses the project's two purples (deep 0xFF7542A5 /
+            // light 0xFFCFA7F5). Dark mode = deep bg + light icon; light mode = light bg + deep icon.
+            // The active (measure/lock) tool buttons invert this pairing.
+            val dark = when (themeMode) { ThemeMode.SYSTEM -> isSystemInDarkTheme(); ThemeMode.DARK -> true; ThemeMode.LIGHT -> false }
+            val baseContainer = Color(if (dark) 0xFF7542A5 else 0xFFCFA7F5)
+            val baseContent = Color(if (dark) 0xFFCFA7F5 else 0xFF7542A5)
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -633,19 +618,24 @@ private fun ViewerScreen(
             ) {
                 if (toolOpen) {
                     val radius = 62.dp
+                    // Per v0.2: the Measure button shows an active (light bg / dark icon) state while a
+                    // measurement mode is active; the Lock button does the same while the view is locked.
+                    data class Tool(val icon: androidx.compose.ui.graphics.vector.ImageVector, val active: Boolean, val action: () -> Unit)
                     val tools = listOf(
-                        Icons.Default.FitScreen to { alignOpen = true },
-                        Icons.Default.Straighten to { measureOpen = true },
-                        Icons.Default.Visibility to { displayOpen = true },
-                        Icons.Default.Info to { infoOpen = true },
-                        Icons.Default.Edit to { tab.editorOpen = true },
-                        (if (controller.locked) Icons.Default.LockOpen else Icons.Default.Lock) to { controller.locked = !controller.locked },
+                        Tool(Icons.Default.FitScreen, active = false) { alignOpen = true },
+                        Tool(Icons.Default.Straighten, active = tab.measurementMode != MeasurementMode.NONE) { measureOpen = true },
+                        Tool(Icons.Default.Visibility, active = false) { displayOpen = true },
+                        Tool(Icons.Default.Info, active = false) { infoOpen = true },
+                        Tool(Icons.Default.Edit, active = false) { tab.editorOpen = true },
+                        Tool(if (controller.locked) Icons.Default.LockOpen else Icons.Default.Lock, active = controller.locked) { controller.locked = !controller.locked },
                     )
-                    tools.forEachIndexed { index, (icon, action) ->
+                    tools.forEachIndexed { index, (icon, active, action) ->
                         val angle = Math.PI / 180 * (index * 60 - 90)
                         FloatingActionButton(
                             onClick = action,
                             shape = CircleShape,
+                            containerColor = if (active) baseContent else baseContainer,
+                            contentColor = if (active) baseContainer else baseContent,
                             modifier = Modifier
                                 .size(40.dp)
                                 .offset(
@@ -658,8 +648,10 @@ private fun ViewerScreen(
                 FloatingActionButton(
                     onClick = { toolOpen = !toolOpen },
                     shape = CircleShape,
+                    containerColor = baseContainer,
+                    contentColor = baseContent,
                     modifier = Modifier.size(54.dp),
-                ) { AssetImage("icon_svg.png", Modifier.size(44.dp), ContentScale.Crop) }
+                ) { AssetImage("icon_trans.png", Modifier.size(43.dp), ContentScale.Fit) }
             }
             if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateStructure(tab, it) }, onMessage = onMessage)
         }
@@ -682,6 +674,7 @@ private fun ViewerScreen(
         off = offChoice,
         onDismiss = { measureOpen = false },
         onChoice = { choice ->
+            // Per v0.2.3: switching mode keeps any locked measurement; only the active selection resets.
             tab.measurementMode = when {
                 choice == lengthChoice -> MeasurementMode.LENGTH
                 choice == angleChoice -> MeasurementMode.ANGLE
@@ -691,7 +684,7 @@ private fun ViewerScreen(
             tab.selectedAtomIds = emptyList(); measureOpen = false
         },
     )
-    if (displayOpen) DisplayDialog(tab, onDismiss = { displayOpen = false })
+    if (displayOpen) DisplayPanel(tab, onDismiss = { displayOpen = false })
     if (infoOpen) InfoDialog(tab, onDismiss = { infoOpen = false })
     if (appearanceOpen) AppearanceDialog(tab, onDismiss = { appearanceOpen = false }) { viewModel.defaultAppearance = it }
 }
@@ -724,8 +717,10 @@ private fun DocumentTabs(viewModel: KrystalsViewModel, onClose: (Int) -> Unit) {
     }
 }
 
+private data class LegendEntry(val label: String, val argb: Long)
+
 @Composable
-private fun ElementLegend(elements: List<String>, expanded: Boolean, onToggle: () -> Unit, elementArgbOverrides: Map<String, Long>, modifier: Modifier = Modifier) {
+private fun ElementLegend(entries: List<LegendEntry>, expanded: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
     Surface(modifier.alpha(0.84f), shape = RoundedCornerShape(14.dp), tonalElevation = 5.dp) {
         Column(Modifier.width(if (expanded) 130.dp else 140.dp)) {
             Row(Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -735,10 +730,10 @@ private fun ElementLegend(elements: List<String>, expanded: Boolean, onToggle: (
             }
             if (expanded) {
                 Column(Modifier.fillMaxWidth().height(220.dp).verticalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp)) {
-                    elements.forEach { element ->
+                    entries.forEach { entry ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(18.dp).background(androidx.compose.ui.graphics.Color(PeriodicTable.resolveArgb(element, elementArgbOverrides)), CircleShape))
-                            Text(element, modifier = Modifier.padding(start = 9.dp), fontWeight = FontWeight.Medium)
+                            Box(Modifier.size(18.dp).background(Color(entry.argb), CircleShape))
+                            Text(entry.label, modifier = Modifier.padding(start = 9.dp), fontWeight = FontWeight.Medium)
                         }
                     }
                 }
@@ -747,84 +742,172 @@ private fun ElementLegend(elements: List<String>, expanded: Boolean, onToggle: (
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DisplayDialog(tab: DocumentTab, onDismiss: () -> Unit) {
+private fun DisplayPanel(tab: DocumentTab, onDismiss: () -> Unit) {
     val sites = tab.structure.sites
     val siteIds = remember(tab.structure) { sites.map { it.id }.toSet() }
+    // Per v0.2.3: per-site atom color overrides, edited in the ATOMS sub-menu.
+    var colorPickerOpen by remember { mutableStateOf(false) }
+    var colorPickerTarget by remember { mutableStateOf<String?>(null) }
     val rules = tab.structure.bondRules
     val allSitesVisible = siteIds.isNotEmpty() && tab.visibility.hiddenSites.intersect(siteIds).isEmpty()
     val allBondsVisible = tab.visibility.showBonds && tab.visibility.hiddenBondPairs.none { key -> rules.any { it.key == key } }
     val allPolyhedraEnabled = siteIds.isNotEmpty() && siteIds.all { it in tab.visibility.polyhedronSites }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(localized("显示", "Display")) },
-        text = { Column(Modifier.horizontalScroll(rememberScrollState()).verticalScroll(rememberScrollState())) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(localized("原子", "Atoms"), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(allSitesVisible, onCheckedChange = { checked ->
-                        tab.visibility = tab.visibility.copy(hiddenSites = if (checked) emptySet() else siteIds)
-                    })
-                    Text(stringResource(R.string.select_all))
+    var selected by remember { mutableStateOf(DisplayTab.ATOMS) }
+    // Per v0.2.3: resizable panel — drag the handle to change how much of the screen the panel
+    // occupies. Portrait: bottom sheet height fraction; landscape: right sheet width fraction.
+    var panelRatio by remember { mutableStateOf(0.62f) }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val landscape = maxWidth > maxHeight
+        val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
+        val heightPx = with(LocalDensity.current) { maxHeight.toPx() }
+        Box(
+            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f)).clickable(
+                interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss,
+            ),
+        )
+        val panelModifier = if (landscape) {
+            Modifier.fillMaxHeight().fillMaxWidth(panelRatio).align(Alignment.CenterEnd)
+        } else {
+            Modifier.fillMaxWidth().fillMaxHeight(panelRatio).align(Alignment.BottomCenter)
+        }
+        Surface(
+            tonalElevation = 8.dp,
+            modifier = panelModifier,
+        ) {
+            Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
+                // Drag handle: a thin bar at the leading edge (top in portrait, left in landscape).
+                val handleModifier = if (landscape) {
+                    Modifier.fillMaxHeight().width(12.dp)
+                } else {
+                    Modifier.fillMaxWidth().height(12.dp)
                 }
-            }
-            FlowRow { sites.forEach { site -> Row(verticalAlignment = Alignment.CenterVertically) {
-                val visible = site.id !in tab.visibility.hiddenSites
-                Checkbox(visible, onCheckedChange = { checked -> tab.visibility = tab.visibility.copy(hiddenSites = if (checked) tab.visibility.hiddenSites - site.id else tab.visibility.hiddenSites + site.id) })
-                Text(site.label)
-            } } }
-            HorizontalDivider(Modifier.padding(vertical = 10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(localized("化学键", "Bonds"), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(allBondsVisible, onCheckedChange = { checked ->
-                        tab.visibility = tab.visibility.copy(
-                            showBonds = checked,
-                            hiddenBondPairs = if (checked) emptySet() else rules.map { it.key }.toSet(),
-                        )
-                    })
-                    Text(stringResource(R.string.select_all))
+                Box(
+                    Modifier
+                        .pointerInput(landscape) {
+                            detectDragGestures { change, amount ->
+                                change.consume()
+                                if (landscape) {
+                                    panelRatio = (panelRatio - amount.x / widthPx).coerceIn(0.2f, 0.95f)
+                                } else {
+                                    panelRatio = (panelRatio - amount.y / heightPx).coerceIn(0.2f, 0.95f)
+                                }
+                            }
+                        }
+                        .then(handleModifier)
+                        .background(MaterialTheme.colorScheme.outlineVariant),
+                )
+                Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    listOf(
+                        DisplayTab.ATOMS to localized("原子", "Atoms"),
+                        DisplayTab.BONDS to localized("化学键", "Bonds"),
+                        DisplayTab.POLYHEDRA to localized("多面体", "Polyhedra"),
+                    ).forEach { (kind, label) -> FilterChip(selected == kind, onClick = { selected = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
+                    Spacer(Modifier.weight(1f)); IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null) }
                 }
-            }
-            if (rules.isEmpty()) {
-                Text(localized("无化学键规则", "No bond rules"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
-            } else {
-                FlowRow { rules.forEach { rule ->
-                    val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
-                    val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
-                    val label = "$labelA—$labelB %.3f–%.3f Å".format(rule.minAngstrom, rule.maxAngstrom)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        val visible = tab.visibility.showBonds && rule.key !in tab.visibility.hiddenBondPairs
-                        Checkbox(visible, onCheckedChange = { checked ->
-                            tab.visibility = tab.visibility.copy(
-                                showBonds = true,
-                                hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - rule.key else tab.visibility.hiddenBondPairs + rule.key,
-                            )
-                        })
-                        Text(label)
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+                    when (selected) {
+                        DisplayTab.ATOMS -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(allSitesVisible, onCheckedChange = { checked ->
+                                    tab.visibility = tab.visibility.copy(hiddenSites = if (checked) emptySet() else siteIds)
+                                })
+                                Text(stringResource(R.string.select_all))
+                                Spacer(Modifier.width(8.dp))
+                                TextButton(onClick = { tab.visibility = tab.visibility.copy(hiddenSites = siteIds - tab.visibility.hiddenSites) }) { Text(localized("反选", "Invert")) }
+                            }
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                            // Per v0.2.4: one row per site = visibility checkbox + label + color swatch.
+                            // The swatch opens the per-site color picker (overrides siteArgbOverrides).
+                            sites.forEach { site ->
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                                    val visible = site.id !in tab.visibility.hiddenSites
+                                    Checkbox(visible, onCheckedChange = { checked ->
+                                        tab.visibility = tab.visibility.copy(hiddenSites = if (checked) tab.visibility.hiddenSites - site.id else tab.visibility.hiddenSites + site.id)
+                                    })
+                                    Text("${site.label} (${site.element})", modifier = Modifier.weight(1f))
+                                    val argb = PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides)
+                                    Box(
+                                        Modifier.size(22.dp).background(Color(argb), CircleShape).clickable { colorPickerTarget = site.id; colorPickerOpen = true }
+                                    )
+                                }
+                            }
+                        }
+                        DisplayTab.BONDS -> {
+                            // Per v0.2.2: only list rules whose two sites still exist (others don't affect rendering).
+                            val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(allBondsVisible, onCheckedChange = { checked ->
+                                    tab.visibility = tab.visibility.copy(
+                                        showBonds = checked,
+                                        hiddenBondPairs = if (checked) emptySet() else visibleRules.map { it.key }.toSet(),
+                                    )
+                                })
+                                Text(stringResource(R.string.select_all))
+                                Spacer(Modifier.width(8.dp))
+                                TextButton(onClick = {
+                                    val allKeys = visibleRules.map { it.key }.toSet()
+                                    tab.visibility = tab.visibility.copy(showBonds = true, hiddenBondPairs = allKeys - tab.visibility.hiddenBondPairs)
+                                }) { Text(localized("反选", "Invert")) }
+                            }
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                            if (visibleRules.isEmpty()) {
+                                Text(localized("无化学键规则", "No bond rules"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                            } else visibleRules.forEach { rule ->
+                                val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
+                                val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
+                                val label = "$labelA—$labelB"
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val visible = tab.visibility.showBonds && rule.key !in tab.visibility.hiddenBondPairs
+                                    Checkbox(visible, onCheckedChange = { checked ->
+                                        tab.visibility = tab.visibility.copy(
+                                            showBonds = true,
+                                            hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - rule.key else tab.visibility.hiddenBondPairs + rule.key,
+                                        )
+                                    })
+                                    Text(label)
+                                }
+                            }
+                        }
+                        DisplayTab.POLYHEDRA -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(allPolyhedraEnabled, onCheckedChange = { checked ->
+                                    tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) siteIds else emptySet())
+                                })
+                                Text(stringResource(R.string.select_all))
+                                Spacer(Modifier.width(8.dp))
+                                TextButton(onClick = { tab.visibility = tab.visibility.copy(polyhedronSites = siteIds - tab.visibility.polyhedronSites) }) { Text(localized("反选", "Invert")) }
+                            }
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                            sites.forEach { site -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                val enabled = site.id in tab.visibility.polyhedronSites
+                                Checkbox(enabled, onCheckedChange = { checked -> tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) tab.visibility.polyhedronSites + site.id else tab.visibility.polyhedronSites - site.id) })
+                                Text(site.label)
+                            } }
+                        }
                     }
-                } }
-            }
-            HorizontalDivider(Modifier.padding(vertical = 10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(localized("多面体", "Polyhedra"), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(allPolyhedraEnabled, onCheckedChange = { checked ->
-                        tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) siteIds else emptySet())
-                    })
-                    Text(stringResource(R.string.select_all))
                 }
             }
-            FlowRow { sites.forEach { site -> Row(verticalAlignment = Alignment.CenterVertically) {
-                val enabled = site.id in tab.visibility.polyhedronSites
-                Checkbox(enabled, onCheckedChange = { checked -> tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) tab.visibility.polyhedronSites + site.id else tab.visibility.polyhedronSites - site.id) })
-                Text(site.label)
-            } } }
-        } },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.confirm)) } },
-    )
+        }
+    }
+    // Per v0.2.3: per-site color picker, driven from the ATOMS sub-menu.
+    if (colorPickerOpen) {
+        val target = colorPickerTarget
+        val site = sites.firstOrNull { it.id == target }
+        val initial = if (site != null) PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides) else 0xFFCCCCCC
+        ColorPickerDialog(
+            initialArgb = initial,
+            onDismiss = { colorPickerOpen = false; colorPickerTarget = null },
+            onColorSelected = { color ->
+                if (target != null) tab.structure = tab.structure.copy(siteArgbOverrides = tab.structure.siteArgbOverrides + (target to color))
+                colorPickerOpen = false
+                colorPickerTarget = null
+            },
+        )
+    }
 }
+
+private enum class DisplayTab { ATOMS, BONDS, POLYHEDRA }
 
 @Composable
 private fun InfoDialog(tab: DocumentTab, onDismiss: () -> Unit) {
@@ -883,11 +966,6 @@ private fun InfoRow(label: String, value: String) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
     }
-}
-
-@Composable
-private fun SimpleChoiceDialog(title: String, choices: List<String>, onDismiss: () -> Unit, onChoice: (String) -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, text = { Column { choices.forEach { choice -> TextButton(onClick = { onChoice(choice) }, modifier = Modifier.fillMaxWidth()) { Text(choice) } } } }, confirmButton = {})
 }
 
 @Composable
@@ -951,40 +1029,52 @@ private fun ChoiceTile(label: String, onClick: (String) -> Unit, aspect: Float =
 private fun PresetLibraryDialog(
     context: Context,
     viewModel: KrystalsViewModel,
+    preferences: android.content.SharedPreferences,
     onDismiss: () -> Unit,
     onMessage: (String) -> Unit,
 ) {
     var presets by remember { mutableStateOf(PresetRepository.listPresets(context)) }
     var pendingDelete by remember { mutableStateOf<PresetEntry?>(null) }
     fun refresh() { presets = PresetRepository.listPresets(context) }
+    // Per v0.2.3: collapsible category sections, default all collapsed (user group expanded).
+    // Expansion state persists across opens via SharedPreferences.
+    val EXPANDED_KEY = "preset_expanded_categories"
+    var expanded by remember {
+        mutableStateOf(
+            preferences.getString(EXPANDED_KEY, "__user__")!!.split(",").filter { it.isNotBlank() }.toMutableSet()
+        )
+    }
+    fun toggle(cat: String) {
+        expanded = expanded.toMutableSet().apply { if (!add(cat)) remove(cat) }.also {
+            preferences.edit().putString(EXPANDED_KEY, it.joinToString(",")).apply()
+        }
+    }
+    // Group by category; user presets (__user__) first, then bundled categories in directory order.
+    val grouped = presets.groupBy { it.category ?: "__user__" }
+    val userGroup = grouped["__user__"].orEmpty()
+    val bundledGroups = grouped.filterKeys { it != "__user__" }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.preset_library)) },
         text = {
             LazyColumn(Modifier.fillMaxWidth().height(420.dp)) {
-                items(presets, key = { it.name + it.source }) { entry ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable {
-                            runCatching { PresetRepository.openPreset(context, entry) }
-                                .onSuccess { parsed ->
-                                    viewModel.add(parsed, entry.name, null, isNew = true)
-                                    onDismiss()
-                                }
-                                .onFailure { onMessage(it.message ?: "Unable to open preset") }
-                        },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(entry.name, modifier = Modifier.weight(1f))
-                        Text(
-                            if (entry.source == PresetSource.BUNDLED) stringResource(R.string.bundled) else stringResource(R.string.user_saved),
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(horizontal = 8.dp),
-                        )
-                        if (entry.source == PresetSource.USER) {
-                            IconButton(onClick = { pendingDelete = entry }) { Icon(Icons.Default.Delete, null) }
+                if (userGroup.isNotEmpty()) {
+                    item(key = "header___user__") {
+                        Row(Modifier.fillMaxWidth().clickable { toggle("__user__") }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(if ("__user__" in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
+                            Text(localized("我的预设", "My presets"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
                         }
                     }
-                    HorizontalDivider()
+                    if ("__user__" in expanded) items(userGroup, key = { "u_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage) { pendingDelete = entry } }
+                }
+                bundledGroups.forEach { (category, entries) ->
+                    item(key = "header_$category") {
+                        Row(Modifier.fillMaxWidth().clickable { toggle(category) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(if (category in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
+                            Text(category, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
+                        }
+                    }
+                    if (category in expanded) items(entries, key = { category + "_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage) { pendingDelete = entry } }
                 }
             }
         },
@@ -1000,6 +1090,39 @@ private fun PresetLibraryDialog(
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
+}
+
+@Composable
+private fun PresetRow(
+    entry: PresetEntry,
+    context: Context,
+    viewModel: KrystalsViewModel,
+    onDismiss: () -> Unit,
+    onMessage: (String) -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable {
+            runCatching { PresetRepository.openPreset(context, entry) }
+                .onSuccess { parsed ->
+                    viewModel.add(parsed, entry.name, null, isNew = false)
+                    onDismiss()
+                }
+                .onFailure { onMessage(it.message ?: "Unable to open preset") }
+        },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(entry.name, modifier = Modifier.weight(1f))
+        Text(
+            if (entry.source == PresetSource.BUNDLED) stringResource(R.string.bundled) else stringResource(R.string.user_saved),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+        if (entry.source == PresetSource.USER) {
+            IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, null) }
+        }
+    }
+    HorizontalDivider()
 }
 
 @Composable
@@ -1054,57 +1177,78 @@ private fun MpSearchScreen(
     onMessage: (String) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
+    var fuzzySearch by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<MpSearchResult>?>(null) }
     var searching by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.Close, null) }
-            Text(localized("Materials Project 搜索", "Materials Project search"), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            TextButton(onClick = onChangeKey) { Text(localized("修改 apikey…", "Change API key…")) }
-        }
-        Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(query, { query = it }, label = { Text(localized("搜索", "Search")) }, modifier = Modifier.weight(1f), singleLine = true)
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = {
-                if (query.isBlank()) return@Button
-                searching = true
-                results = null
+    // Full-screen surface so the screen covers the whole viewport (status bar area
+    // included via the Scaffold insets already applied above) instead of a padded column.
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
+    ) {
+        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
+                Text(localized("MP 搜索", "MP search"), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                TextButton(onClick = onChangeKey) { Text(localized("修改 apikey…", "Change API key…")) }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(query, { query = it }, label = { Text(localized("搜索", "Search")) }, modifier = Modifier.weight(1f), singleLine = true)
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = {
+                    if (query.isBlank()) return@Button
+                    searching = true
+                    results = null
                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    val result = MaterialsProject.search(context, query)
+                    val result = MaterialsProject.search(context, query, fuzzySearch)
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                         searching = false
                         result.onSuccess { results = it }.onFailure { onMessage(it.message ?: "Search failed") }
                     }
                 }
             }) { Text(localized("搜索", "Search")) }
-        }
-        Spacer(Modifier.height(12.dp))
-        when {
-            searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索中…", "Searching…")) }
-            results == null -> {}
-            results!!.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
-            else -> LazyColumn(Modifier.fillMaxSize()) {
-                items(results!!) { item ->
-                    Card(
-                        onClick = {
-                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                val target = File(context.cacheDir, "${item.materialId}.cif")
-                                val result = MaterialsProject.downloadCif(context, item.materialId, target)
-                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                    result.onSuccess { parsed ->
-                                        viewModel.add(parsed, "${item.materialId}.cif", Uri.fromFile(target), isNew = true)
-                                        onBack()
-                                    }.onFailure { onMessage(it.message ?: "Download failed") }
+            }
+            // Per v0.2.4: exact match by default; opt-in fuzzy search with `*` wildcards.
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(fuzzySearch, onCheckedChange = { fuzzySearch = it })
+                Text(localized("模糊搜索", "Fuzzy search"), style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(
+                localized(
+                    "精确搜索匹配约化化学式（如 SiO2）。模糊搜索用 * 通配，如 *O2、Si*、*SiO*。",
+                    "Exact matches the reduced formula (e.g. SiO2). Fuzzy uses * wildcards, e.g. *O2, Si*, *SiO*.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+            )
+            Spacer(Modifier.height(12.dp))
+            when {
+                searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索中…", "Searching…")) }
+                results == null -> {}
+                results!!.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
+                else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                    items(results!!) { item ->
+                        Card(
+                            onClick = {
+                                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                    val target = File(context.cacheDir, "${item.materialId}.cif")
+                                    val result = MaterialsProject.downloadCif(context, item.materialId, target)
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        result.onSuccess { parsed ->
+                                            viewModel.add(parsed, "${item.materialId}.cif", Uri.fromFile(target), isNew = false)
+                                            onBack()
+                                        }.onFailure { onMessage(it.message ?: "Download failed") }
+                                    }
                                 }
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(item.materialId, fontWeight = FontWeight.Bold)
+                                Text("${item.formula}  ${item.crystalSystem}  ${item.spaceGroup}  ${item.nsites} sites")
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(item.materialId, fontWeight = FontWeight.Bold)
-                            Text("${item.formula}  ${item.crystalSystem}  ${item.spaceGroup}  ${item.nsites} sites")
                         }
                     }
                 }
@@ -1125,34 +1269,66 @@ private fun HelpDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
 }
 
 @Composable
-private fun SponsorDialog(onDismiss: () -> Unit) {
+private fun SponsorDialog(onDismiss: () -> Unit, launchCount: Int = 0, onSponsor: () -> Unit = {}) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.sponsor_title)) },
-        text = { Text("Sponsor page placeholder.") },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.confirm)) } },
+        text = {
+            Text(
+                if (launchCount > 0) localized("Krystals 已经为您启动了 $launchCount 次啦！如果想要支持开发，请多多赞助作者 kelesss 哦！\n\n支付一点大米让 kelesss 猫猫努力工作的说……", "Krystals has been launched $launchCount times! If you'd like to support development, please sponsor kelesss!\n\nToss a little rice to keep the kelesss kitty working hard…")
+                else localized("支付一点大米让kelesss猫猫努力工作的说……", "Toss a little rice to keep the kelesss kitty working hard…")
+            )
+        },
+        confirmButton = { TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(localized("狠心拒绝", "Maybe later")) } },
     )
 }
 
 @Composable
 private fun AboutScreen(onBack: () -> Unit) {
     BackHandler(enabled = true) { onBack() }
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
             title = { Text(stringResource(R.string.about)) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
+            colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
         )
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(24.dp))
-            AssetImage("icon_svg.png", Modifier.size(96.dp), ContentScale.Fit)
+            AssetImage("icon_foreground.png", Modifier.size(96.dp), ContentScale.Fit)
             Spacer(Modifier.height(16.dp))
-            Text("Krystals", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text("Krystals", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(8.dp))
-            Text("${stringResource(R.string.version)} ${com.krystals.app.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyLarge)
+            Text("${stringResource(R.string.version)} ${com.krystals.app.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(24.dp))
-            Text(stringResource(R.string.about_description), style = MaterialTheme.typography.bodyLarge)
+            Text(localized("Krystals 是由 凯楽斯kelesss 和AI辅助开发的一款 Android 平台轻量级晶体结构查看和编辑工具。", "Krystals is a lightweight Android CIF crystal structure viewer and editor, developed by kelesss with AI assistance."), style = MaterialTheme.typography.bodyLarge, textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = MaterialTheme.colorScheme.onBackground)
+            Spacer(Modifier.height(24.dp))
+            Text(localized("关于作者", "About the author"), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.padding(bottom = 8.dp))
+            // Per v0.2.3: links in one horizontal row, separated by " | " (dropped Bilibili live + Zhihu).
+            val links = listOf(
+                localized("个人网站", "Website") to "https://www.kelesss.art",
+                "GitHub" to "https://github.com/SUPERkelesss",
+                "Bilibili" to "https://space.bilibili.com/334614292",
+                localized("Q群", "QQ group") to "https://qm.qq.com/q/YXattqg3Kg",
+            )
+            val context = LocalContext.current
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                links.forEachIndexed { index, (label, url) ->
+                    if (index > 0) Text("  |  ", color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        label,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clickable {
+                            runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
+                        },
+                    )
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+            Text(localized("鸣谢名单", "Acknowledgements"), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.padding(bottom = 4.dp))
+            Text(localized("我自己。", "Myself."), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(32.dp))
-            Text("© 2026 kelesss.art", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(localized("© 2026 made with ♥ by kelesss", "© 2026 made with ♥ by kelesss"), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -1169,18 +1345,6 @@ private fun ThemeSelector(mode: ThemeMode, onTheme: (ThemeMode) -> Unit, modifie
                 val label = when (item) { ThemeMode.SYSTEM -> localized("跟随系统", "System"); ThemeMode.LIGHT -> localized("浅色", "Light"); ThemeMode.DARK -> localized("深色", "Dark") }
                 DropdownMenuItem(text = { Text((if (item == mode) "✓ " else "") + label) }, onClick = { expanded = false; onTheme(item) })
             }
-        }
-    }
-}
-
-@Composable
-private fun LanguageSelector(language: String, onLanguage: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        TextButton(onClick = { expanded = true }) { Text(if (language == "zh") "中" else "EN", fontWeight = FontWeight.Bold) }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(text = { Text(if (language == "zh") "✓ 中文" else "中文") }, onClick = { expanded = false; onLanguage("zh") })
-            DropdownMenuItem(text = { Text(if (language == "en") "✓ English" else "English") }, onClick = { expanded = false; onLanguage("en") })
         }
     }
 }

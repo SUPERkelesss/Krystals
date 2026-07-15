@@ -105,6 +105,11 @@ data class CrystalStructure(
     val sites: List<AtomSite>,
     val bondRules: List<BondRule> = emptyList(),
     val elementArgbOverrides: Map<String, Long> = emptyMap(),
+    // Per v0.2.3: site pairs the user has explicitly deleted a bond rule for. These pairs are
+    // skipped by inferBonds so the covalent-radius fallback does not silently redraw the bond.
+    val disabledBondPairs: Set<String> = emptySet(),
+    // Per v0.2.3: per-site color overrides (key = site id). Falls back to elementArgbOverrides.
+    val siteArgbOverrides: Map<String, Long> = emptyMap(),
 ) {
     val effectiveSymmetryOperations: List<SymmetryOperation>
         get() = symmetryOperations.ifEmpty { SpaceGroupCatalog.operations(spaceGroupName) }
@@ -118,6 +123,9 @@ data class Expansion(val x: Int = 1, val y: Int = 1, val z: Int = 1) {
 enum class FrameMode { NONE, SINGLE_CELL, ALL_CELLS }
 enum class LineStyle { SOLID, DASHED }
 enum class BondColorMode { BICOLOR, UNICOLOR }
+
+/** Coordinate system drawn by the on-screen axis indicator. */
+enum class AxisMode { ABC, XYZ }
 
 data class ViewerAppearance(
     val backgroundArgb: Long = 0xFF101014,
@@ -137,6 +145,8 @@ data class ViewerAppearance(
     val polyhedronEnabled: Boolean = true,
     val polyhedronOpacity: Float = 0.5f,
     val polyhedronReflectionEnabled: Boolean = true,
+    val showAxes: Boolean = true,
+    val axisMode: AxisMode = AxisMode.ABC,
 )
 
 data class SceneSnapshot(
@@ -177,16 +187,26 @@ object PeriodicTable {
         "Pt" to 195.08, "Au" to 196.97, "Hg" to 200.59, "Tl" to 204.38, "Pb" to 207.2,
         "Bi" to 208.98, "Th" to 232.04, "Pa" to 231.04, "U" to 238.03,
     )
+    // Covalent radii in Å, sourced from the v0.2.1 specification (single-bond covalent radii,
+    // original table in pm, divided by 100). Elements absent from the source table
+    // (Fr, Bk…Og) fall back to [covalentRadius]'s default.
     private val radii = mapOf(
-        "H" to 0.31, "Li" to 1.28, "Be" to 0.96, "B" to 0.84, "C" to 0.76, "N" to 0.71,
-        "O" to 0.66, "F" to 0.57, "Na" to 1.66, "Mg" to 1.41, "Al" to 1.21, "Si" to 1.11,
-        "P" to 1.07, "S" to 1.05, "Cl" to 1.02, "K" to 2.03, "Ca" to 1.76, "Ti" to 1.60,
-        "V" to 1.53, "Cr" to 1.39, "Mn" to 1.39, "Fe" to 1.32, "Co" to 1.26, "Ni" to 1.24,
-        "Cu" to 1.32, "Zn" to 1.22, "Ga" to 1.22, "Ge" to 1.20, "As" to 1.19, "Se" to 1.20,
-        "Br" to 1.20, "Rb" to 2.20, "Sr" to 1.95, "Zr" to 1.75, "Nb" to 1.64, "Mo" to 1.54,
-        "Ag" to 1.45, "Cd" to 1.44, "In" to 1.42, "Sn" to 1.39, "Sb" to 1.39, "Te" to 1.38,
-        "I" to 1.39, "Cs" to 2.44, "Ba" to 2.15, "La" to 2.07, "W" to 1.62, "Pt" to 1.36,
-        "Au" to 1.36, "Hg" to 1.32, "Pb" to 1.46, "Bi" to 1.48, "U" to 1.96,
+        "H" to 0.32, "He" to 0.46, "Li" to 1.33, "Be" to 1.02, "B" to 0.85, "C" to 0.75,
+        "N" to 0.71, "O" to 0.63, "F" to 0.64, "Ne" to 0.67, "Na" to 1.55, "Mg" to 1.39,
+        "Al" to 1.26, "Si" to 1.16, "P" to 1.11, "S" to 1.03, "Cl" to 0.99, "Ar" to 0.96,
+        "K" to 1.96, "Ca" to 1.71, "Sc" to 1.48, "Ti" to 1.36, "V" to 1.34, "Cr" to 1.22,
+        "Mn" to 1.19, "Fe" to 1.16, "Co" to 1.11, "Ni" to 1.10, "Cu" to 1.12, "Zn" to 1.18,
+        "Ga" to 1.24, "Ge" to 1.21, "As" to 1.21, "Se" to 1.16, "Br" to 1.14, "Kr" to 1.17,
+        "Rb" to 2.10, "Sr" to 1.85, "Y" to 1.63, "Zr" to 1.54, "Nb" to 1.47, "Mo" to 1.38,
+        "Tc" to 1.28, "Ru" to 1.25, "Rh" to 1.25, "Pd" to 1.20, "Ag" to 1.28, "Cd" to 1.36,
+        "In" to 1.42, "Sn" to 1.40, "Sb" to 1.40, "Te" to 1.36, "I" to 1.33, "Xe" to 1.31,
+        "Cs" to 2.32, "Ba" to 1.96, "La" to 1.80, "Ce" to 1.63, "Pr" to 1.76, "Nd" to 1.74,
+        "Pm" to 1.73, "Sm" to 1.72, "Eu" to 1.68, "Gd" to 1.69, "Tb" to 1.68, "Dy" to 1.67,
+        "Ho" to 1.66, "Er" to 1.65, "Tm" to 1.64, "Yb" to 1.70, "Lu" to 1.62, "Hf" to 1.52,
+        "Ta" to 1.46, "W" to 1.37, "Re" to 1.31, "Os" to 1.29, "Ir" to 1.22, "Pt" to 1.23,
+        "Au" to 1.24, "Hg" to 1.33, "Tl" to 1.44, "Pb" to 1.44, "Bi" to 1.51, "Po" to 1.45,
+        "At" to 1.47, "Rn" to 1.42, "Ra" to 2.01, "Ac" to 1.86, "Th" to 1.75, "Pa" to 1.69,
+        "U" to 1.70, "Np" to 1.71, "Pu" to 1.72, "Am" to 1.66, "Cm" to 1.66,
     )
 
     fun mass(symbol: String) = masses[symbol] ?: symbols.indexOf(symbol).takeIf { it >= 0 }?.let { (it + 1) * 2.25 }
@@ -197,6 +217,10 @@ object PeriodicTable {
     }
     fun defaultRadius(symbol: String) = (covalentRadius(symbol) * 0.42).coerceIn(0.22, 0.85)
     fun resolveArgb(symbol: String, overrides: Map<String, Long> = emptyMap()) = overrides[symbol] ?: vestaArgb(symbol)
+    // Per v0.2.3: per-site color override (key = site id), falling back to the element override
+    // then the VESTA palette. Same-element sites share a color by default unless individually set.
+    fun resolveSiteArgb(siteId: String, element: String, siteOverrides: Map<String, Long> = emptyMap(), elementOverrides: Map<String, Long> = emptyMap()): Long =
+        siteOverrides[siteId] ?: elementOverrides[element] ?: vestaArgb(element)
     fun vestaArgb(symbol: String): Long = when (symbol) {
         "H" -> 0xFFF4F4F4; "C" -> 0xFF505050; "N" -> 0xFF3050F8; "O" -> 0xFFFF0D0D
         "F", "Cl" -> 0xFF90E050; "Br" -> 0xFFA62929; "I" -> 0xFF940094; "S" -> 0xFFFFFF30
