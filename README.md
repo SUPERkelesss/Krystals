@@ -1,25 +1,129 @@
+
+
+[中文版文档](README_cn.md)
+
 # Krystals
 
-Krystals is a lightweight Android CIF crystal viewer and editor. It supports multi-block CIF 1.1 files, symmetry expansion, supercells, inferred/custom bonds, measurements, responsive editing, themes, and PNG export.
+<img src="img/banner.png" alt="banner" />
 
-## Build
+<h3 align="center"> Krystals: A lightweight CIF crystal editor for Android </h3>
+  <p align="center">
+    View crystals on mobile as conveniently as with VESTA!
+    <br />
+    <a href="https://github.com/SUPERkelesss/Krystals/releases"> <strong> Download releases </strong> </a> ·
+    <a href="https://github.com/SUPERkelesss/Krystals/issues"> Report a bug </a>
+  </p>
+
+
+---
+
+## How to install?
+
+Go to the project's [Release page](https://github.com/SUPERkelesss/Krystals/releases), download the latest package and install it.
+
+## Quick start
+
+The main screen offers four ways to import CIF files:
+
+- **Import local file**: select a CIF file from the file manager and open it.
+- **Import from presets**: the app provides a rich preset library covering most basic CIF test cases. You can also save your own CIF files into the presets.
+- **Import from online sources**: two options are available — importing from the [Crystallography Open Database](https://qiserver.ugr.es/cod/index.php) and from the [Materials Project](https://next-gen.materialsproject.org/). The latter requires an API key and is a premium feature unlocked with an activation code after sponsoring. The former has no usage restrictions.
+- **Create new file**: start creating a CIF document from an empty file.
+
+**Main screen**:
+
+![panel](img/panel.jpg)
+
+- ① Menu options, including file creation and save operations;
+- ② Change overall appearance settings and toggle light/dark themes;
+- ③ Viewer main screen
+  - Drag with one finger to rotate the crystal, drag with two fingers to zoom and pan the crystal;
+  - Double-tap an atom to display its info; tap an atom info window to lock it.
+- ④ Legend
+- ⑤ Quick-action floating ball
+  - **Align**: align the crystal view to a given axis;
+  - **Lock**: fix the unit-cell view so it stays unchanged;
+  - **Measure**: enter measurement mode to measure lengths and angles. Tap a measurement info window to lock it;
+  - **Edit**: enter the editor page to modify cell data, atom coordinates and bond rules;
+  - **Display**: enter the display page to adjust the visibility of atoms, bonds and coordination polyhedra;
+  - **Info**: show the crystal info window.
+
+---
+
+## Architecture
+
+Krystals adopts a three-module layered architecture, with dependencies flowing top-down: `app` → `renderer` → `crystal-core`. `crystal-core` is a pure JVM module (no Android dependencies); `renderer` exposes core via an `api` dependency; `app` depends on both and assembles the UI.
+
+```mermaid
+flowchart TB
+    subgraph app["app · Android application"]
+        UI["KrystalsApp<br/>Compose UI"]
+        VM["DocumentState<br/>ViewModel / multi-tab"]
+        Edit["EditorPanels<br/>structure editor"]
+        Repo["FileRepository<br/>CIF I/O / PNG export"]
+        Act["ActivationManager<br/>paid activation"]
+    end
+    subgraph renderer["renderer · rendering library"]
+        VP["CrystalViewport<br/>Canvas viewport"]
+        Exp["CrystalImageExporter<br/>high-res bitmap export"]
+    end
+    subgraph core["crystal-core · pure JVM core"]
+        Codec["CifCodec<br/>lossless CIF parse/write-back"]
+        Engine["CrystalEngine<br/>symmetry expansion / bonding"]
+        Editor["CrystalEditor<br/>immutable EditCommand edits"]
+        SG["SpaceGroupCatalog<br/>230 space groups"]
+    end
+
+    UI --> VP
+    UI --> Edit
+    UI --> VM
+    Repo -->|"parseStructure"| Codec
+    Edit -->|"EditCommand"| Editor
+    Editor --> Engine
+    Engine -->|"buildScene → SceneSnapshot"| VP
+    Engine -->|"buildScene"| Exp
+    Repo -->|"write back"| Codec
+    Engine --> SG
+
+    app -.->|depends on| renderer
+    renderer -.->|api dependency| core
+    app -.->|depends on| core
+```
+
+- **`crystal-core`**: multi-block CIF 1.1 parsing / lossless write-back, crystallographic math, symmetry-operation expansion (230 space groups), bond inference, structure-editing commands.
+- **`renderer`**: Compose Canvas-based orthographic viewport, supporting atom picking, measurements, polyhedra, and PNG export.
+- **`app`**: assembles the Compose UI, Storage Access Framework file I/O, multi-tab state, editors, theme/language and paid activation.
+
+Data flow: CIF file → `CifCodec.parseStructure` yields a `CrystalStructure` → the UI mutates the working structure via `EditCommand` → `CrystalEngine.buildScene` produces a `SceneSnapshot` → `CrystalViewport` renders it / `CrystalImageExporter` exports it → `CifCodec.write` writes the working structure back while preserving unrelated content.
+
+---
+
+### Building the package
+
+Required environment:
 
 - Android Studio with Android SDK 36
 - JDK 17
-- Gradle 8.11.1 (the project includes wrapper configuration)
+- Gradle
 
-```powershell
+Just run this script to download the required environment and configure the build:
+
+```pwsh
 .\scripts\bootstrap-build.ps1
 ```
 
-The bootstrap script locates or downloads a portable JDK 17, Android SDK 36, and the Gradle Wrapper before running tests and the APK build.
+The debug APK is located at `app/build/outputs/apk/debug/app-debug.apk`.
 
-The debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
+## Contributors
 
-## Modules
+None yet… come and be one of them!
 
-- `crystal-core`: loss-aware CIF parsing/writing and crystallographic calculations.
-- `renderer`: Filament 1.71.5 integration boundary and the orthographic mobile viewport.
-- `app`: Compose UI, Storage Access Framework, tabs, editors, settings, and MediaStore export.
+## License
 
-The supplied `res/main.png`, `res/icon_trans.png`, `res/icon_foreground.png`, and CIF corpus are packaged as application assets without modifying the originals. The editable icon source lives in `img/icon.svg`.
+This project is released under the [MIT License](LICENCE).
+
+## Acknowledgements
+
+
+- Openai ChatGPT 5.6 sol
+- Kimi k3
