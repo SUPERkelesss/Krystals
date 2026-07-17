@@ -13,17 +13,17 @@ object CrystalEngine {
         val ex = expansion.x
         val ey = expansion.y
         val ez = expansion.z
-        // Per v0.3.4: materialise a one-cell-thick shell of neighbour cells around the primary
-        // expansion region. Primary region = [0,ex) × [0,ey) × [0,ez). Shell region = [-1,ex+1) ×
-        // [-1,ey+1) × [-1,ez+1) minus the primary region. Bonds are computed from every primary atom
-        // to every atom in the primary+shell region using real Cartesian distances, so cross-cell
-        // bonds are real bonds to real shell atoms instead of minimum-image offsets. For expansion=1
-        // this is the classic 3×3×3 neighbourhood (26 shell cells); for 2×2×2 it gives the 56-cell
-        // shell described in v0.3.4 (4 cells per face, 2 per edge, 1 per vertex of the supercell).
-        //
-        // To avoid storing thousands of unused shell atoms in the SceneSnapshot, shell atoms that are
-        // not referenced by any bond are discarded after bonding, and the kept atoms are renumbered
-        // with compact ids.
+        // Per v0.3.4/v0.3.44: materialise a TWO-cell-thick shell of neighbour cells around the
+        // primary expansion region. Primary region = [0,ex) × [0,ey) × [0,ez). Shell region covers
+        // [-2,ex+2) × [-2,ey+2) × [-2,ez+2) minus the primary region. Bonds are computed from every
+        // primary/boundary atom to every atom in the primary+shell region using real Cartesian
+        // distances, so cross-cell bonds are real bonds to real shell atoms. The shell must be two
+        // cells thick so a boundary-image centre (sitting at offset ±1, on a primary-box face) finds
+        // its outward neighbours at offset ±2 materialised — otherwise a corner-atom polyhedron was
+        // only complete at the primary (0,0,0) site. Atoms outside the [0,ex] closure are external
+        // shell (hidden by default); those referenced by a bond are kept so they can be polyhedron
+        // vertices. Shell atoms that are not referenced by any bond are discarded after bonding, and
+        // the kept atoms are renumbered with compact ids.
         val primaryCapacity = base.size * expansion.multiplier
         val primaryAtoms = ArrayList<ExpandedAtom>(primaryCapacity)
         var tempId = 1L
@@ -44,7 +44,13 @@ object CrystalEngine {
 
         val shellAtoms = ArrayList<ExpandedAtom>()
         val boundaryEps = 1e-6
-        for (ix in -1 until ex + 1) for (iy in -1 until ey + 1) for (iz in -1 until ez + 1) {
+        // Per v0.3.44: the shell is TWO cells thick so a boundary-image centre's outward neighbours
+        // are materialised too. A boundary image sits on the primary-box face (offset ±1); its
+        // outward face/edge/corner neighbours land at offset ±2, which a 1-cell shell did not cover —
+        // so a corner-atom polyhedron was only complete at the primary (0,0,0) site. Atoms at offset
+        // ±2 are external shell (outside the [0,ex] closure): hidden by default, but kept when a bond
+        // references them so they can serve as polyhedron vertices.
+        for (ix in -2 until ex + 2) for (iy in -2 until ey + 2) for (iz in -2 until ez + 2) {
             if (ix in 0 until ex && iy in 0 until ey && iz in 0 until ez) continue
             base.forEach { atom ->
                 val offset = Int3(ix, iy, iz)
