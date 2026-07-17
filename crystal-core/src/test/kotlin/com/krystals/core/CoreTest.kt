@@ -80,9 +80,11 @@ class CoreTest {
             bondRules = listOf(BondRule("a", "b", 0.1, 0.9)),
         )
         val scene = CrystalEngine.buildScene(structure)
-        assertEquals(1, scene.bonds.size)
-        val bond = scene.bonds.single()
-        assertEquals(Int3(0, 0, 0), bond.offsetB)
+        // Per v0.3.4: the cross-cell bond to B's (-1,-1,-1) shell image (distance sqrt(3)*0.25 ≈ 0.433)
+        // is found via a real shell atom, not a minimum-image offset. Real-distance bonding with
+        // boundary images also reaches other in-range images of the centre atom, so assert the
+        // specific shell-image bond rather than an exact bond count.
+        val bond = scene.bonds.first { it.distance < 0.5 && it.offsetB == Int3(0, 0, 0) }
         assertEquals(0.433, bond.distance, 0.01)
         val bAtom = scene.atoms.first { it.id == bond.atomB }
         assertTrue(bAtom.isShell)
