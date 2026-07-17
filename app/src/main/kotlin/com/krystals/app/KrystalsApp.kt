@@ -120,7 +120,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -499,6 +501,20 @@ private fun ViewerScreen(
     var appearanceOpen by remember { mutableStateOf(false) }
     var floatingX by remember(tab.id) { mutableFloatStateOf(0f) }
     var floatingY by remember(tab.id) { mutableFloatStateOf(0f) }
+    // Per v0.4.1: clamp the floating ball within the scene so a drag can't push it off-screen.
+    // The ball is align(BottomEnd); outerSize = padding(18) + size(180) ≈ 216dp frame; positive
+    // floatingX/Y move it right/down past the edge, negative moves it left/up.
+    var ballParentSize by remember(tab.id) { mutableStateOf(IntSize.Zero) }
+    var ballOuterSize by remember(tab.id) { mutableStateOf(IntSize.Zero) }
+    // Re-clamp on rotation / tab swap / first layout so an out-of-range offset snaps back in bounds.
+    LaunchedEffect(ballParentSize, ballOuterSize) {
+        if (ballParentSize != IntSize.Zero && ballOuterSize != IntSize.Zero) {
+            val minX = (ballOuterSize.width - ballParentSize.width).toFloat().coerceAtMost(0f)
+            val minY = (ballOuterSize.height - ballParentSize.height).toFloat().coerceAtMost(0f)
+            floatingX = floatingX.coerceIn(minX, 0f)
+            floatingY = floatingY.coerceIn(minY, 0f)
+        }
+    }
     var legendExpanded by remember(tab.id) { mutableStateOf(false) }
     val lengthChoice = localized("长度", "Length")
     val angleChoice = localized("角度", "Angle")
@@ -635,6 +651,10 @@ private fun ViewerScreen(
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
+                    .onGloballyPositioned { coords ->
+                        ballOuterSize = coords.size
+                        ballParentSize = coords.parentCoordinates?.size ?: IntSize.Zero
+                    }
                     .padding(18.dp)
                     .size(180.dp)
                     .offset { IntOffset(floatingX.roundToInt(), floatingY.roundToInt()) }
@@ -642,8 +662,12 @@ private fun ViewerScreen(
                     .pointerInput(tab.id) {
                         detectDragGestures { change, amount ->
                             change.consume()
-                            floatingX += amount.x
-                            floatingY += amount.y
+                            // BottomEnd anchor: positive (right/down) caps at 0 (flush to edge);
+                            // negative (left/up) caps so the opposite edge stays inside the parent.
+                            val minX = (ballOuterSize.width - ballParentSize.width).toFloat().coerceAtMost(0f)
+                            val minY = (ballOuterSize.height - ballParentSize.height).toFloat().coerceAtMost(0f)
+                            floatingX = (floatingX + amount.x).coerceIn(minX, 0f)
+                            floatingY = (floatingY + amount.y).coerceIn(minY, 0f)
                         }
                     },
                 contentAlignment = Alignment.Center,
