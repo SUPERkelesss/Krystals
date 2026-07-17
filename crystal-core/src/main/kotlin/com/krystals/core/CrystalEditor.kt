@@ -73,12 +73,31 @@ object CrystalEditor {
                 if (key in existingKeys) return@mapNotNull null
                 BondRule(
                     siteA.id, siteB.id, 0.1,
-                    PeriodicTable.covalentRadius(siteA.element) + PeriodicTable.covalentRadius(siteB.element) + 0.45,
+                    PeriodicTable.radius(siteA.element, RadiusSource.IONIC) + PeriodicTable.radius(siteB.element, RadiusSource.IONIC) + 0.45,
                     BondRuleSource.CUSTOM,
                 )
             }
         }
         return EditResult(structure.copy(bondRules = structure.bondRules + newRules))
+    }
+
+    /**
+     * Per v0.4.1: clear every existing bond rule (and the disabled-pair record) and regenerate a
+     * rule for every site pair using the given [source] radius column. Used by the bond editor's
+     * "自动应用半径" (auto-apply radii) button. Same window formula as [ensureAutoBondRules]:
+     * min = 0.1 Å, max = rA + rB + 0.45 Å.
+     */
+    fun rebuildBondRules(structure: CrystalStructure, source: RadiusSource): EditResult {
+        val newRules = structure.sites.flatMapIndexed { i, siteA ->
+            structure.sites.drop(i).map { siteB ->
+                BondRule(
+                    siteA.id, siteB.id, 0.1,
+                    PeriodicTable.radius(siteA.element, source) + PeriodicTable.radius(siteB.element, source) + 0.45,
+                    BondRuleSource.CUSTOM,
+                )
+            }
+        }
+        return EditResult(structure.copy(bondRules = newRules, disabledBondPairs = emptySet()))
     }
 
     private fun transform(structure: CrystalStructure, rows: List<List<Int>>, translation: Vec3): EditResult {

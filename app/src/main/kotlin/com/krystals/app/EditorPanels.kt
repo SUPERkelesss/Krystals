@@ -85,6 +85,7 @@ import com.krystals.core.ExpressionParser
 import com.krystals.core.FrameMode
 import com.krystals.core.LineStyle
 import com.krystals.core.PeriodicTable
+import com.krystals.core.RadiusSource
 import com.krystals.core.SpaceGroupCatalog
 import com.krystals.core.UnitCell
 import com.krystals.core.Vec3
@@ -418,12 +419,38 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     if (sites.isEmpty()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("请先添加原子", "Add atoms first")) }; return }
     var addOpen by remember { mutableStateOf(false) }
     var editingRule by remember { mutableStateOf<BondRule?>(null) }
+    var radiiMenuOpen by remember { mutableStateOf(false) }
     val rules = tab.structure.bondRules
     // Per v0.2.3: hide rules that produce no bond in the current structure (no atom pair within
     // the distance window), not just rules whose sites are gone.
     val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        Button(onClick = { addOpen = true }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Add, null); Text(localized("新建规则", "New rule")) }
+        // Per v0.4.1: "自动应用半径" (auto-apply radii) clears every bond rule and regenerates them
+        // from one of the three elements.ini radius columns (ionic/covalent/vdW).
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { addOpen = true }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建规则", "New rule")) }
+            Box {
+                OutlinedButton(onClick = { radiiMenuOpen = true }, modifier = Modifier.weight(1f)) {
+                    Text(localized("自动应用半径", "Auto-apply radii"))
+                }
+                DropdownMenu(expanded = radiiMenuOpen, onDismissRequest = { radiiMenuOpen = false }) {
+                    DropdownMenuItem(text = { Text(localized("离子半径", "Ionic radius")) }, onClick = {
+                        radiiMenuOpen = false
+                        onStructure(CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.IONIC).structure)
+                    })
+                    DropdownMenuItem(text = { Text(localized("共价半径", "Covalent radius")) }, onClick = {
+                        radiiMenuOpen = false
+                        onStructure(CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.COVALENT).structure)
+                    })
+                    DropdownMenuItem(text = { Text(localized("vdW 半径", "vdW radius")) }, onClick = {
+                        radiiMenuOpen = false
+                        onStructure(CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.VDW).structure)
+                    })
+                    HorizontalDivider()
+                    DropdownMenuItem(text = { Text(localized("取消", "Cancel")) }, onClick = { radiiMenuOpen = false })
+                }
+            }
+        }
         Text(localized("选择两个原子并设置最小/最大距离", "Select two atoms and set the min/max distance"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
         LazyColumn(Modifier.fillMaxSize()) {
             items(visibleRules, key = { it.key }) { rule ->
@@ -466,25 +493,32 @@ private fun BondRuleDialog(
     var b by remember { mutableStateOf(editingRule?.siteB ?: sites.first().id) }
     val siteA = sites.firstOrNull { it.id == a } ?: sites.first()
     val siteB = sites.firstOrNull { it.id == b } ?: sites.first()
-    val defaultMax = PeriodicTable.covalentRadius(siteA.element) + PeriodicTable.covalentRadius(siteB.element)
+    // Per v0.4.1: default maximum is the sum of the two atoms' ionic radii (elements.ini column 4),
+    // matching the default bond-rule generator. It is recomputed as the user switches sites so the
+    // suggested window tracks the selected pair.
+    val defaultMax = PeriodicTable.radius(siteA.element, RadiusSource.IONIC) + PeriodicTable.radius(siteB.element, RadiusSource.IONIC)
     var minValue by remember { mutableFloatStateOf((editingRule?.minAngstrom ?: 0.1).toFloat()) }
+    // When creating a new rule (no editingRule), maxValue follows the selected pair's default; once
+    // the user drags the slider the override sticks until they switch sites again.
     var maxValue by remember { mutableFloatStateOf((editingRule?.maxAngstrom ?: defaultMax).toFloat()) }
-    var extendAcrossCell by remember { mutableStateOf(editingRule?.extendAcrossCell ?: false) }
+    var userTouchedMax by remember { mutableStateOf(editingRule != null) }
+    if (!userTouchedMax) {
+        // Re-sync the displayed maximum to the current pair's default whenever the user changes A/B
+        // without having manually adjusted the slider.
+        LaunchedEffect(defaultMax) { maxValue = defaultMax.toFloat() }
+    }
+    val extendAcrossCell = editingRule?.extendAcrossCell ?: false
     val sliderMax = max(5.0, defaultMax + 1.0).toFloat().coerceAtMost(10.0f)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (editingRule == null) localized("新建化学键规则", "New bond rule") else localized("修改化学键规则", "Edit bond rule")) },
         text = {
             Column {
-                DropdownField(localized("晶位 A", "Site A"), siteA.label, sites.map { it.label }) { label -> a = sites.first { it.label == label }.id }
-                DropdownField(localized("晶位 B", "Site B"), siteB.label, sites.map { it.label }) { label -> b = sites.first { it.label == label }.id }
+                DropdownField(localized("晶位 A", "Site A"), siteA.label, sites.map { it.label }) { label -> a = sites.first { it.label == label }.id; userTouchedMax = false }
+                DropdownField(localized("晶位 B", "Site B"), siteB.label, sites.map { it.label }) { label -> b = sites.first { it.label == label }.id; userTouchedMax = false }
                 DistanceControl(localized("最小值 (Å)", "Minimum (Å)"), minValue, 0f..sliderMax) { minValue = it }
-                DistanceControl(localized("最大值 (Å)", "Maximum (Å)"), maxValue, 0f..sliderMax) { maxValue = it }
-                Text(localized("默认最大值为两原子半径之和", "Default maximum is the sum of covalent radii"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
-                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.material3.Checkbox(extendAcrossCell, onCheckedChange = { extendAcrossCell = it })
-                    Text(localized("延伸至晶胞外", "Extend across cell"), style = MaterialTheme.typography.bodyMedium)
-                }
+                DistanceControl(localized("最大值 (Å)", "Maximum (Å)"), maxValue, 0f..sliderMax) { maxValue = it; userTouchedMax = true }
+                Text(localized("默认最大值为两原子离子半径之和", "Default maximum is the sum of ionic radii"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
             }
         },
         confirmButton = { TextButton(onClick = {
