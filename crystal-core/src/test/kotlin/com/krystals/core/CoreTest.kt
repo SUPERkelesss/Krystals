@@ -254,5 +254,57 @@ class CoreTest {
         })
     }
 
+    @Test fun boundaryImageToBoundaryImageBondIsGenerated() {
+        // Per v0.3.44: a bond lying in a cell-face/edge plane (both endpoints are boundary images,
+        // e.g. two different-site atoms on a shared cell edge) must be generated. Previously the
+        // `a.isBoundaryImage && !b.isExternalShell` skip suppressed every boundary↔boundary pair.
+        // Build a 1×1×1 cell with two atoms on the same cell edge (x=0,y=0 line): A at (0,0,0.25),
+        // B at (0,0,0.75). Their images on neighbouring cells share that edge, so the A–B bond along
+        // the edge is a boundary↔boundary bond.
+        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
+        val structure = CrystalStructure(
+            "edge", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
+            listOf(
+                AtomSite("A", "A1", "C", Vec3(0.0, 0.0, 0.25)),
+                AtomSite("B", "B1", "O", Vec3(0.0, 0.0, 0.75)),
+            ),
+            bondRules = listOf(BondRule("A", "B", 0.1, 2.5)),
+        )
+        val scene = CrystalEngine.buildScene(structure)
+        val atomById = scene.atoms.associateBy { it.id }
+        // At least one bond whose both endpoints are boundary images.
+        val bbBonds = scene.bonds.filter { bond ->
+            val a = atomById.getValue(bond.atomA)
+            val b = atomById.getValue(bond.atomB)
+            a.isBoundaryImage && b.isBoundaryImage
+        }
+        assertTrue(bbBonds.isNotEmpty(), "expected at least one boundary-image↔boundary-image bond")
+        // Deduplication: no duplicate unordered atom-id pair.
+        val keys = scene.bonds.map { bond -> listOf(bond.atomA, bond.atomB).sorted() }
+        assertEquals(keys.size, keys.toSet().size, "duplicate bonds detected")
+    }
+
+    @Test fun sameSiteIntegerTranslationStillSkippedForBoundaryImages() {
+        // Per v0.3.44: relaxing the boundary-centre skip must NOT reintroduce same-site periodic-
+        // image bonds (Cs–Cs etc.) when no explicit rule exists. A single corner atom (Cs at origin)
+        // with only an unrelated Cs–Cl rule should still produce zero Cs–Cs bonds.
+        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
+        val structure = CrystalStructure(
+            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
+            listOf(
+                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
+                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
+            ),
+            bondRules = listOf(BondRule("Cs", "Cl", 0.1, 4.0)),
+        )
+        val scene = CrystalEngine.buildScene(structure)
+        val atomById = scene.atoms.associateBy { it.id }
+        assertTrue(scene.bonds.none { bond ->
+            val a = atomById.getValue(bond.atomA)
+            val b = atomById.getValue(bond.atomB)
+            a.siteId == "Cs" && b.siteId == "Cs"
+        }, "spurious Cs–Cs same-site periodic-image bond generated")
+    }
+
     private fun atomById(scene: SceneSnapshot, id: Long): ExpandedAtom = scene.atoms.first { it.id == id }
 }
