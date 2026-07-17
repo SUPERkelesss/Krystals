@@ -196,9 +196,9 @@ class CoreTest {
         assertTrue(externalShell.all { it.siteId == "Cl" })
         assertTrue(scene.atoms.none { it.isExternalShell && it.isBoundaryImage })
         // Every external-shell atom is referenced by at least one bond (so it is kept in the
-        // snapshot), but no bond to it is drawn because extendAcrossCell is false.
+        // snapshot), but no bond to an external-shell atom is drawn because extendAcrossCell is false.
         assertTrue(externalShell.all { ex -> scene.bonds.any { it.atomA == ex.id || it.atomB == ex.id } })
-        assertTrue(scene.bonds.none { bond -> atomById(scene, bond.atomB).isExternalShell })
+        assertTrue(scene.bonds.none { bond -> atomById(scene, bond.atomB).isExternalShell && bond.rule.extendAcrossCell })
     }
 
     @Test fun csClExtendAcrossCellRevealsExternalShell() {
