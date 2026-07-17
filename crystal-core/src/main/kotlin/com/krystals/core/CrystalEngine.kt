@@ -82,10 +82,14 @@ object CrystalEngine {
 
         // Discard shell atoms that are not referenced by any bond. This keeps the SceneSnapshot small
         // while still allowing polyhedra to use every cross-cell ligand (they come from bonds).
+        // Per v0.3.41: a shell atom may appear as either atomA (a boundary image acting as a bond
+        // centre) or atomB (an external-shell ligand), so both endpoints must be considered.
         val atomById = (primaryAtoms + shellAtoms).associateBy { it.id }
-        val referencedShellTempIds = rawBonds.asSequence()
-            .mapNotNull { bond -> atomById[bond.atomB]?.takeIf { it.isShell }?.id }
-            .toMutableSet()
+        val referencedShellTempIds = mutableSetOf<Long>()
+        rawBonds.forEach { bond ->
+            atomById[bond.atomA]?.takeIf { it.isShell }?.let { referencedShellTempIds += it.id }
+            atomById[bond.atomB]?.takeIf { it.isShell }?.let { referencedShellTempIds += it.id }
+        }
         val keptShellAtoms = shellAtoms.filter { it.id in referencedShellTempIds }
 
         // Renumber kept atoms compactly so the id space is dense.
