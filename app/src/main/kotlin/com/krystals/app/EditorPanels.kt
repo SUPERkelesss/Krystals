@@ -429,8 +429,8 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
         // from one of the three elements.ini radius columns (ionic/covalent/vdW).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { addOpen = true }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建规则", "New rule")) }
-            Box {
-                OutlinedButton(onClick = { radiiMenuOpen = true }, modifier = Modifier.weight(1f)) {
+            Box(Modifier.weight(1f)) {
+                OutlinedButton(onClick = { radiiMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
                     Text(localized("自动应用半径", "Auto-apply radii"))
                 }
                 DropdownMenu(expanded = radiiMenuOpen, onDismissRequest = { radiiMenuOpen = false }) {
