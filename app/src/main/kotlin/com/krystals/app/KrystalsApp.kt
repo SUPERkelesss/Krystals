@@ -1547,9 +1547,9 @@ private fun SponsorDialog(onDismiss: () -> Unit, launchCount: Int = 0, onSponsor
                 Text(localized("· 赞助后可永久关闭赞助提醒，并可以接入materials project检索。未赞助不影响绝大部分功能的使用。", "· Sponsoring permanently dismisses this prompt and unlocks Materials Project search. Not sponsoring does not affect most features."), style = MaterialTheme.typography.bodySmall)
             }
         },
-        confirmButton = { TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) } },
-        dismissButton = {
+        confirmButton = {
             Row {
+                TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) }
                 TextButton(onClick = onAlreadySponsored) { Text(localized("我已经赞助！", "I've sponsored!")) }
                 TextButton(onClick = onDismiss) { Text(localized("狠心拒绝", "Maybe later")) }
             }
@@ -1602,7 +1602,7 @@ private fun MpPremiumDialog(onDismiss: () -> Unit, onSponsor: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text(localized("高级内容", "Premium content")) },
         text = {
-            Text(localized("【高级内容！】 materials project中导入晶体需要获取apikey，属于高级内容，使用COD数据库完全可以解决大部分问题。\n · 如果需要使用，请赞助一点点以支持开发！", "【Premium!】 Importing crystals from Materials Project requires an API key and is a premium feature — the COD database handles most needs.\n · To use it, please sponsor a little to support development!"))
+            Text(localized("materials project中导入晶体需要获取apikey，属于高级内容，使用COD数据库完全可以解决大部分问题。\n · 如果需要使用，请赞助一点点以支持开发！", "Importing crystals from Materials Project requires an API key and is a premium feature — the COD database handles most needs.\n · To use it, please sponsor a little to support development!"))
         },
         confirmButton = { TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(localized("再考虑一下…", "Maybe later…")) } },
