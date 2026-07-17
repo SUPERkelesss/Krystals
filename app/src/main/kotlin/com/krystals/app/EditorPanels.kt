@@ -76,6 +76,7 @@ import com.krystals.core.AtomSite
 import com.krystals.core.BondColorMode
 import com.krystals.core.BondRule
 import com.krystals.core.BondRuleMatching
+import com.krystals.core.BondRuleSource
 import com.krystals.core.CrystalEditor
 import com.krystals.core.CrystalStructure
 import com.krystals.core.EditCommand
@@ -122,12 +123,15 @@ fun EditorPanel(
             tonalElevation = 8.dp,
             modifier = panelModifier,
         ) {
-            Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
-                val handleModifier = if (landscape) {
-                    Modifier.fillMaxHeight().width(12.dp)
-                } else {
-                    Modifier.fillMaxWidth().height(12.dp)
-                }
+            // Per v0.3.3: in landscape the drag handle is a vertical bar on the left, so the panel
+            // content must sit beside it in a Row (a Column with a fillMaxHeight first child would
+            // leave no height for the tabs/content — the cause of the blank landscape panel).
+            val handleModifier = if (landscape) {
+                Modifier.fillMaxHeight().width(12.dp)
+            } else {
+                Modifier.fillMaxWidth().height(12.dp)
+            }
+            val handle = @Composable {
                 Box(
                     Modifier
                         .pointerInput(landscape) {
@@ -143,18 +147,33 @@ fun EditorPanel(
                         .then(handleModifier)
                         .background(MaterialTheme.colorScheme.outlineVariant),
                 )
-                Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    listOf(
-                        EditorTab.BASIC to stringResource(R.string.basic_info), EditorTab.ATOMS to stringResource(R.string.atoms),
-                        EditorTab.BONDS to stringResource(R.string.bonds), EditorTab.EXPANSION to stringResource(R.string.expand_cell),
-                    ).forEach { (kind, label) -> FilterChip(selectedTab == kind, onClick = { selectedTab = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
-                    Spacer(Modifier.weight(1f)); IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null) }
+            }
+            val content = @Composable {
+                Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
+                    Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        listOf(
+                            EditorTab.BASIC to stringResource(R.string.basic_info), EditorTab.ATOMS to stringResource(R.string.atoms),
+                            EditorTab.BONDS to stringResource(R.string.bonds), EditorTab.EXPANSION to stringResource(R.string.expand_cell),
+                        ).forEach { (kind, label) -> FilterChip(selectedTab == kind, onClick = { selectedTab = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
+                        Spacer(Modifier.weight(1f)); IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null) }
+                    }
+                    when (selectedTab) {
+                        EditorTab.BASIC -> BasicEditor(tab, onStructure, onMessage)
+                        EditorTab.ATOMS -> AtomEditor(tab, onDismiss, onStructure, onMessage)
+                        EditorTab.BONDS -> BondEditor(tab, onStructure, onMessage)
+                        EditorTab.EXPANSION -> ExpansionEditor(tab, onMessage)
+                    }
                 }
-                when (selectedTab) {
-                    EditorTab.BASIC -> BasicEditor(tab, onStructure, onMessage)
-                    EditorTab.ATOMS -> AtomEditor(tab, onDismiss, onStructure, onMessage)
-                    EditorTab.BONDS -> BondEditor(tab, onStructure, onMessage)
-                    EditorTab.EXPANSION -> ExpansionEditor(tab, onMessage)
+            }
+            if (landscape) {
+                Row(Modifier.fillMaxSize()) {
+                    handle()
+                    Column(Modifier.weight(1f)) { content() }
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    handle()
+                    content()
                 }
             }
         }
@@ -224,8 +243,8 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Uni
         }
         OutlinedButton(onClick = { transformOpen = true }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("3×3 变换矩阵", "3×3 Transform")) }
     }
-    if (transformOpen) TransformDialog(onDismiss = { transformOpen = false }) { rows ->
-        runCatching { CrystalEditor.apply(tab.structure, EditCommand.Transform(rows)).structure }
+    if (transformOpen) TransformDialog(onDismiss = { transformOpen = false }) { rows, translation ->
+        runCatching { CrystalEditor.apply(tab.structure, EditCommand.Transform(rows, translation)).structure }
             .mapCatching { CrystalEditor.ensureAutoBondRules(it).structure }
             .onSuccess { onStructure(it); transformOpen = false }.onFailure { onMessage(it.message ?: "Invalid transformation") }
     }
@@ -271,21 +290,33 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Cr
 }
 
 @Composable
-private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>) -> Unit) {
-    val values = remember { List(9) { index -> mutableStateOf(if (index % 4 == 0) "1" else "0") } }
+private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, Vec3) -> Unit) {
+    // 9 matrix entries (default identity) + 3 translation entries (default 0). Per v0.3.3 the
+    // translation is a separate column to the right of the matrix; it applies after the linear
+    // transform in the new fractional basis and allows fractional values (e.g. 1/4, 1/2).
+    val matrixValues = remember { List(9) { index -> mutableStateOf(if (index % 4 == 0) "1" else "0") } }
+    val translationValues = remember { List(3) { mutableStateOf("0") } }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(localized("3×3 变换矩阵", "3×3 Transform")) },
-        text = { Column { repeat(3) { row -> Row { repeat(3) { column ->
-            OutlinedTextField(values[row * 3 + column].value, { values[row * 3 + column].value = it }, singleLine = true, modifier = Modifier.weight(1f).padding(3.dp))
-        } } } } },
+        text = { Column {
+            repeat(3) { row -> Row(verticalAlignment = Alignment.CenterVertically) {
+                repeat(3) { column ->
+                    OutlinedTextField(matrixValues[row * 3 + column].value, { matrixValues[row * 3 + column].value = it }, singleLine = true, modifier = Modifier.weight(1f).padding(3.dp))
+                }
+                // Per v0.3.3: the translation column. tx/ty/tz apply after the matrix, in the new basis.
+                OutlinedTextField(translationValues[row].value, { translationValues[row].value = it }, singleLine = true, label = { Text("t${row + 1}") }, modifier = Modifier.weight(1f).padding(3.dp))
+            } }
+            Text(localized("右侧为平移向量（变换后应用，允许分数如 1/4）", "Right column is the translation (applied after transform; fractions like 1/4 allowed)"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(4.dp))
+        } },
         confirmButton = { TextButton(onClick = {
             val rows = List(3) { r -> List(3) { c ->
-                val number = eval(values[r * 3 + c].value)
+                val number = eval(matrixValues[r * 3 + c].value)
                 require(kotlin.math.abs(number - kotlin.math.round(number)) < 1e-9) { "Matrix entries must be integers" }
                 number.toInt()
             } }
-            onApply(rows)
+            val translation = Vec3(eval(translationValues[0].value), eval(translationValues[1].value), eval(translationValues[2].value))
+            onApply(rows, translation)
         }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
@@ -397,13 +428,13 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
             }
         }
     }
-    if (addOpen) BondRuleDialog(sites, editingRule = null, onDismiss = { addOpen = false }) { siteA, siteB, min, max ->
-        runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max))).structure }
+    if (addOpen) BondRuleDialog(sites, editingRule = null, onDismiss = { addOpen = false }) { siteA, siteB, min, max, extend ->
+        runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extend))).structure }
             .onSuccess { onStructure(it); addOpen = false }.onFailure { onMessage(it.message ?: "Invalid bond rule") }
     }
     editingRule?.let { rule ->
-        BondRuleDialog(sites, editingRule = rule, onDismiss = { editingRule = null }) { siteA, siteB, min, max ->
-            runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max))).structure }
+        BondRuleDialog(sites, editingRule = rule, onDismiss = { editingRule = null }) { siteA, siteB, min, max, extend ->
+            runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extend))).structure }
                 .onSuccess { onStructure(it); editingRule = null }.onFailure { onMessage(it.message ?: "Invalid bond rule") }
         }
     }
@@ -414,7 +445,7 @@ private fun BondRuleDialog(
     sites: List<AtomSite>,
     editingRule: BondRule?,
     onDismiss: () -> Unit,
-    onApply: (String, String, Double, Double) -> Unit,
+    onApply: (String, String, Double, Double, Boolean) -> Unit,
 ) {
     var a by remember { mutableStateOf(editingRule?.siteA ?: sites.first().id) }
     var b by remember { mutableStateOf(editingRule?.siteB ?: sites.first().id) }
@@ -423,6 +454,7 @@ private fun BondRuleDialog(
     val defaultMax = PeriodicTable.covalentRadius(siteA.element) + PeriodicTable.covalentRadius(siteB.element)
     var minValue by remember { mutableFloatStateOf((editingRule?.minAngstrom ?: 0.1).toFloat()) }
     var maxValue by remember { mutableFloatStateOf((editingRule?.maxAngstrom ?: defaultMax).toFloat()) }
+    var extendAcrossCell by remember { mutableStateOf(editingRule?.extendAcrossCell ?: false) }
     val sliderMax = max(5.0, defaultMax + 1.0).toFloat().coerceAtMost(10.0f)
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -434,13 +466,17 @@ private fun BondRuleDialog(
                 DistanceControl(localized("最小值 (Å)", "Minimum (Å)"), minValue, 0f..sliderMax) { minValue = it }
                 DistanceControl(localized("最大值 (Å)", "Maximum (Å)"), maxValue, 0f..sliderMax) { maxValue = it }
                 Text(localized("默认最大值为两原子半径之和", "Default maximum is the sum of covalent radii"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.Checkbox(extendAcrossCell, onCheckedChange = { extendAcrossCell = it })
+                    Text(localized("延伸至晶胞外", "Extend across cell"), style = MaterialTheme.typography.bodyMedium)
+                }
             }
         },
         confirmButton = { TextButton(onClick = {
             val min = minValue.toDouble()
             val max = maxValue.toDouble()
             if (min > max) return@TextButton
-            runCatching { onApply(a, b, min, max) }.onFailure { /* ignore */ }
+            runCatching { onApply(a, b, min, max, extendAcrossCell) }.onFailure { /* ignore */ }
         }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
@@ -483,20 +519,20 @@ private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit) {
 @Composable
 private fun ExpansionCluster(label: String, value: Int, onValue: (Int) -> Unit) {
     var text by remember(value) { mutableStateOf(value.toString()) }
-    // Range 1..10.
+    // Range 1..5.
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, fontWeight = FontWeight.Medium, modifier = Modifier.padding(end = 8.dp))
         OutlinedTextField(
             text,
-            { input -> text = input; input.toIntOrNull()?.let { n -> if (n in 1..10) onValue(n) } },
+            { input -> text = input; input.toIntOrNull()?.let { n -> if (n in 1..5) onValue(n) } },
             singleLine = true,
             modifier = Modifier.width(64.dp),
         )
         Slider(
             value = value.toFloat(),
-            onValueChange = { v -> val n = v.toInt().coerceIn(1, 10); onValue(n); text = n.toString() },
-            valueRange = 1f..10f,
-            steps = 9,
+            onValueChange = { v -> val n = v.toInt().coerceIn(1, 5); onValue(n); text = n.toString() },
+            valueRange = 1f..5f,
+            steps = 3,
             modifier = Modifier.weight(1f).padding(start = 8.dp),
         )
     }
@@ -507,11 +543,9 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
     var appearance by remember { mutableStateOf(tab.appearance) }
     var colorPickerOpen by remember { mutableStateOf(false) }
     var colorPickerTarget by remember { mutableStateOf<String?>(null) }
-    var elementOverrides by remember { mutableStateOf(tab.structure.elementArgbOverrides) }
     val frameLabels = listOf(localized("不显示框线", "No frame"), localized("单个晶胞", "Single cell"), localized("所有框线", "All frames"))
     val lineLabels = listOf(localized("实线", "Solid"), localized("虚线", "Dashed"))
     val bondColorLabels = listOf(localized("双色圆柱", "Bicolor cylinder"), localized("单色圆柱", "Unicolor cylinder"))
-    val visibleElements = remember(tab.structure) { tab.structure.sites.map { it.element }.distinct().sorted() }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(localized("调整外观", "Appearance")) }, text = {
         Column(Modifier.fillMaxWidth().height(480.dp).verticalScroll(rememberScrollState())) {
             Text(localized("背景色", "Background"), fontWeight = FontWeight.Bold)
@@ -529,17 +563,6 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
                     Box(Modifier.size(40.dp).background(colorFromArgb(appearance.backgroundArgb), RoundedCornerShape(20.dp)).clickable { colorPickerTarget = "background"; colorPickerOpen = true })
                     Text(localized("自定义", "Custom"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
-                }
-            }
-            HorizontalDivider(Modifier.padding(vertical = 10.dp))
-            Text(localized("原子颜色", "Atom colors"), fontWeight = FontWeight.Bold)
-            FlowRow(verticalArrangement = Arrangement.Center) {
-                visibleElements.forEach { element ->
-                    val argb = elementOverrides[element] ?: PeriodicTable.vestaArgb(element)
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
-                        Box(Modifier.size(36.dp).background(colorFromArgb(argb), RoundedCornerShape(18.dp)).clickable { colorPickerTarget = element; colorPickerOpen = true })
-                        Text(element, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
-                    }
                 }
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
@@ -584,21 +607,14 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
                 LabeledSlider(localized("多面体不透明度", "Polyhedron opacity"), appearance.polyhedronOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(polyhedronOpacity = it) }
             }
         }
-    }, confirmButton = { TextButton(onClick = { tab.appearance = appearance; tab.structure = tab.structure.copy(elementArgbOverrides = elementOverrides); onApplied(appearance); onDismiss() }) { Text(stringResource(R.string.confirm)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })
+    }, confirmButton = { TextButton(onClick = { tab.appearance = appearance; onApplied(appearance); onDismiss() }) { Text(stringResource(R.string.confirm)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })
 
     if (colorPickerOpen) {
-        val initial = when (colorPickerTarget) {
-            "background" -> appearance.backgroundArgb
-            else -> elementOverrides[colorPickerTarget] ?: PeriodicTable.vestaArgb(colorPickerTarget ?: "C")
-        }
         ColorPickerDialog(
-            initialArgb = initial,
+            initialArgb = appearance.backgroundArgb,
             onDismiss = { colorPickerOpen = false; colorPickerTarget = null },
             onColorSelected = { color ->
-                when (colorPickerTarget) {
-                    "background" -> appearance = appearance.copy(backgroundArgb = color)
-                    else -> if (colorPickerTarget != null) elementOverrides = elementOverrides + (colorPickerTarget!! to color)
-                }
+                appearance = appearance.copy(backgroundArgb = color)
                 colorPickerOpen = false
                 colorPickerTarget = null
             },

@@ -4,7 +4,9 @@
     <string name="import_local">导入本地文件…</string>
     <string name="new_file">创建新文件</string>
     <string name="materials_project">从 Materials Project 中导入</string>
-    <string name="save">保存</string>
+    <string name="import_online">从在线源中导入</string>
+    <string name="import_cod">从 COD 中导入</string>
+    <string name="save">保存到本地路径…</string>
     <string name="export_image">导出图片</string>
     <string name="exit">退出</string>
     <string name="basic_info">基本信息</string>
@@ -26,6 +28,7 @@
     <string name="preset_library">预设晶体库</string>
     <string name="delete_preset_title">确认删除？</string>
     <string name="select_all">全选</string>
+    <string name="extend_across_cell">延伸至晶胞外</string>
     <string name="version">版本</string>
     <string name="bundled">内置</string>
     <string name="user_saved">用户保存</string>

@@ -49,7 +49,7 @@ fun convexHullFaces(center: Vec3, points: List<Vec3>): List<List<Vec3>> {
     if (triangles.isEmpty()) return emptyList()
 
     // 2) Merge coplanar triangles sharing an edge. Two triangles are coplanar when their outward
-    //    normals are parallel (dot ≈ ±1 with same sign) and a shared edge exists.
+    //    normals are parallel (dot ≈ 1, same sign) and a shared edge exists.
     val merged = mutableListOf<MutableList<Int>>()
     val used = BooleanArray(triangles.size)
     fun coplanar(a: Vec3, b: Vec3) = a.dot(b) > 1.0 - 1e-6
@@ -63,18 +63,42 @@ fun convexHullFaces(center: Vec3, points: List<Vec3>): List<List<Vec3>> {
             for (u in triangles.indices) {
                 if (used[u]) continue
                 if (!coplanar(triangles[t].normal, triangles[u].normal)) continue
-                // Find a shared edge between poly (as a cycle) and triangle u.
                 val shared = poly.filter { it in triangles[u].indices }
-                if (shared.size == 2) {
-                    // Merge: insert the third vertex of u between the two shared vertices of poly.
-                    val third = triangles[u].indices.first { it !in shared }
-                    val a = poly.indexOf(shared[0])
-                    val b = poly.indexOf(shared[1])
-                    // Insert third after the shared vertex that is followed by the other (cycle order).
-                    val insertAfter = if ((a + 1) % poly.size == b) a else b
-                    poly.add((insertAfter + 1) % poly.size, third)
-                    used[u] = true
-                    changed = true
+                when (shared.size) {
+                    // Merge: insert the third vertex of u between the two shared vertices of poly,
+                    // but only when those two are adjacent in the polygon cycle (otherwise the
+                    // shared edge is a diagonal and merging would self-intersect the polygon).
+                    2 -> {
+                        val third = triangles[u].indices.first { it !in shared }
+                        val a = poly.indexOf(shared[0])
+                        val b = poly.indexOf(shared[1])
+                        val size = poly.size
+                        val insertAfter = when {
+                            (a + 1) % size == b -> a
+                            (b + 1) % size == a -> b
+                            else -> -1
+                        }
+                        if (insertAfter >= 0) {
+                            poly.add((insertAfter + 1) % size, third)
+                            used[u] = true
+                            changed = true
+                        } else {
+                            // The two shared vertices are already non-adjacent in poly — i.e. the
+                            // shared edge is a diagonal of the merged polygon. Since u is coplanar
+                            // with poly and its vertices all lie inside poly's face, u is already
+                            // covered by poly. Absorb it without adding a vertex, so it is not
+                            // later seeded as a stray overlapping triangle on the same face.
+                            used[u] = true
+                            changed = true
+                        }
+                    }
+                    // 3 shared vertices: the triangle lies entirely inside this polygon (it's one of
+                    // the C(4,3)=4 triangles of a coplanar quad). Absorb it without adding a vertex,
+                    // so its edges are not drawn as a stray diagonal over the merged face.
+                    3 -> {
+                        used[u] = true
+                        changed = true
+                    }
                 }
             }
         }

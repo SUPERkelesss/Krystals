@@ -4,7 +4,9 @@
     <string name="import_local">Import local file…</string>
     <string name="new_file">Create new file</string>
     <string name="materials_project">Import from Materials Project</string>
-    <string name="save">Save</string>
+    <string name="import_online">Import from online sources</string>
+    <string name="import_cod">Import from COD</string>
+    <string name="save">Save to local path…</string>
     <string name="export_image">Export image</string>
     <string name="exit">Exit</string>
     <string name="basic_info">Basic</string>
@@ -26,6 +28,7 @@
     <string name="preset_library">Preset library</string>
     <string name="delete_preset_title">Delete preset?</string>
     <string name="select_all">Select all</string>
+    <string name="extend_across_cell">Extend across cell</string>
     <string name="version">Version</string>
     <string name="bundled">Bundled</string>
     <string name="user_saved">User saved</string>

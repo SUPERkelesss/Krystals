@@ -34,6 +34,7 @@ import com.krystals.core.LineStyle
 import com.krystals.core.PeriodicTable
 import com.krystals.core.SceneSnapshot
 import com.krystals.core.UnitCell
+import com.krystals.core.Int3
 import com.krystals.core.Vec3
 import com.krystals.core.ViewerAppearance
 import com.krystals.core.angleDegrees
@@ -48,6 +49,9 @@ import kotlin.math.min
 import kotlin.math.sin
 
 enum class MeasurementMode { NONE, LENGTH, ANGLE, DIHEDRAL }
+
+/** A measurement (length / angle / dihedral) pinned on screen until dismissed. */
+data class LockedMeasurement(val atomIds: List<Long>, val mode: MeasurementMode)
 
 data class ViewerVisibility(
     val hiddenSites: Set<String> = emptySet(),
@@ -70,8 +74,21 @@ private data class BondRenderable(val a: ProjectedAtom, val b: ProjectedAtom, va
     override val depth = (a.depth + b.depth) / 2.0
 }
 
-private data class PolyhedronRenderable(val center: ProjectedAtom, val vertices: List<ProjectedAtom>, val adjacency: Map<Long, Set<Long>>) : Renderable {
-    override val depth = center.depth
+/**
+ * A single polygonal face of a polyhedron, emitted as its own renderable so it sorts against atoms
+ * and bonds by its own face-center depth (rather than the whole polyhedron sorting as one block by
+ * its center, which let back faces occlude front atoms). [screenVerts] are the projected 2D vertices
+ * in draw order; [faceDepth] is the average rotated-Z of the face; [normal] is the outward face
+ * normal in camera space (after rotate) for screen-space lighting + back-face culling.
+ */
+private data class PolyhedronFaceRenderable(
+    val baseColor: Color,
+    val screenVerts: List<Offset>,
+    val vertexIds: List<Long>,
+    val faceDepth: Double,
+    val normalCam: Vec3,
+) : Renderable {
+    override val depth = faceDepth
 }
 
 @Stable
@@ -138,10 +155,8 @@ fun CrystalViewport(
     visibility: ViewerVisibility = ViewerVisibility(),
     selectedAtomIds: List<Long> = emptyList(),
     measurementMode: MeasurementMode = MeasurementMode.NONE,
-    measurementLocked: Boolean = false,
-    lockedMeasurementIds: List<Long> = emptyList(),
-    lockedMeasurementMode: MeasurementMode = MeasurementMode.NONE,
-    onMeasurementLockToggle: () -> Unit = {},
+    lockedMeasurements: List<LockedMeasurement> = emptyList(),
+    onMeasurementLockToggle: (measurement: LockedMeasurement?, isLocked: Boolean) -> Unit = { _, _ -> },
     inspectedAtomId: Long? = null,
     lockedInspectedAtomIds: List<Long> = emptyList(),
     onInspectAtom: (ExpandedAtom) -> Unit = {},
@@ -151,12 +166,12 @@ fun CrystalViewport(
 ) {
     val background = colorFromArgb(appearance.backgroundArgb)
     var lastTap by remember { mutableStateOf<TapEvent?>(null) }
-    var measurementBoundsList by remember { mutableStateOf<List<Pair<Rect, Boolean>>>(emptyList()) }
+    var measurementBoundsList by remember { mutableStateOf<List<Triple<Rect, Boolean, Int>>>(emptyList()) }
     var atomInfoBoundsList by remember { mutableStateOf<List<Triple<Rect, Boolean, Long>>>(emptyList()) }
     Canvas(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(snapshot, controller.locked, measurementLocked, lockedMeasurementIds, lockedInspectedAtomIds) {
+            .pointerInput(snapshot, controller.locked, lockedMeasurements, lockedInspectedAtomIds) {
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false)
                     val down = first.position
@@ -188,13 +203,17 @@ fun CrystalViewport(
                         event.changes.forEach { it.consume() }
                         if (pressed.isEmpty()) {
                             if (!moved) {
-                                // Per v0.2.4: a tap on any measurement or info box triggers the
-                                // toggle; the info box hit carries its atomId + locked state so the
-                                // host knows which window was tapped.
-                                val tapInMeasurementBox = measurementBoundsList.firstOrNull { it.first.contains(down) } != null
+                                // Per v0.3.0: a tap on any measurement or info box triggers the
+                                // toggle; the box hit carries its identity + locked state so the host
+                                // knows which window was tapped.
+                                val tapInMeasurementBox = measurementBoundsList.firstOrNull { it.first.contains(down) }
                                 val tapInAtomInfoBox = atomInfoBoundsList.firstOrNull { it.first.contains(down) }
                                 when {
-                                    tapInMeasurementBox -> onMeasurementLockToggle()
+                                    tapInMeasurementBox != null -> {
+                                        val idx = tapInMeasurementBox.third
+                                        val measurement = if (idx >= 0) lockedMeasurements.getOrNull(idx) else null
+                                        onMeasurementLockToggle(measurement, tapInMeasurementBox.second)
+                                    }
                                     tapInAtomInfoBox != null -> onInspectionLockToggle(tapInAtomInfoBox.third, tapInAtomInfoBox.second)
                                     else -> controller.pick(down)?.let { atom ->
                                         val prev = lastTap
@@ -226,14 +245,11 @@ fun CrystalViewport(
         }
 
         val visibleAtoms = snapshot.atoms.filterNot { it.siteId in visibility.hiddenSites }
-        if (visibleAtoms.isEmpty()) {
-            drawEmptyMessage()
-            controller.projectedAtoms = emptyList()
-            return@Canvas
-        }
         val center = boundingCenter(snapshot.atoms.map { it.cartesian })
-        val rotated = visibleAtoms.associateWith { rotate(it.cartesian - center, controller.yaw, controller.pitch) }
-        val fullRotated = snapshot.atoms.map { rotate(it.cartesian - center, controller.yaw, controller.pitch) }
+        // Per v0.3.0: project ALL atoms (not just visible) so bonds/polyhedra survive hiding an
+        // atom — the bond endpoint / polyhedron vertex lookup (byId) needs the hidden atoms too.
+        val rotated = snapshot.atoms.associateWith { rotate(it.cartesian - center, controller.yaw, controller.pitch) }
+        val fullRotated = rotated.values.toList()
         val extentX = fullRotated.maxOf { it.x } - fullRotated.minOf { it.x }
         val extentY = fullRotated.maxOf { it.y } - fullRotated.minOf { it.y }
         val baseScale = min(size.width / max(1.0, extentX).toFloat(), size.height / max(1.0, extentY).toFloat()) * 0.72f
@@ -246,33 +262,100 @@ fun CrystalViewport(
         drawCellFrames(snapshot, appearance, center, controller, scale, ::project)
         if (appearance.showAxes) drawAxes(snapshot, appearance, controller)
 
-        val projected = visibleAtoms.map { atom ->
+        val projected = snapshot.atoms.map { atom ->
             val v = rotated.getValue(atom)
             val radius = (PeriodicTable.defaultRadius(atom.element).toFloat() * scale).coerceIn(4.5f, 42f)
             ProjectedAtom(atom, project(v), v.z, radius)
         }
+        // Only visible atoms are rendered / pickable; bonds and polyhedra still see the full set.
+        val visibleProjected = projected.filter { it.atom.siteId !in visibility.hiddenSites }
+        if (visibleProjected.isEmpty()) {
+            drawEmptyMessage()
+            controller.projectedAtoms = emptyList()
+        } else {
+            controller.projectedAtoms = visibleProjected
+        }
         val byId = projected.associateBy { it.atom.id }
+        // Per v0.3.2: lattice vectors for offsetting a bonded atom's image across cell boundaries
+        // (minimum-image bonds). Used to project a neighbour-cell image of an atom for cross-cell
+        // bonds and polyhedron vertices that lie outside the primary cell.
+        val cell = snapshot.structure.cell
+        val la = cell.matrix.a
+        val lb = cell.matrix.b
+        val lc = cell.matrix.c
+        fun offsetVec(offset: Int3) = la * offset.x.toDouble() + lb * offset.y.toDouble() + lc * offset.z.toDouble()
+        // Project a periodic image of an existing atom (same id/element/radius, projected at its
+        // translated position). Cached by (atomId, offset) so repeated cross-cell bonds to the same
+        // neighbour image share one ProjectedAtom.
+        val imageCache = HashMap<Pair<Long, Int3>, ProjectedAtom>()
+        fun imageOf(base: ProjectedAtom, offset: Int3): ProjectedAtom {
+            if (offset.x == 0 && offset.y == 0 && offset.z == 0) return base
+            return imageCache.getOrPut(base.atom.id to offset) {
+                // Copy the atom with its translated cartesian so convex-hull / normal computation
+                // in polyhedronFaceRenderables (which reads atom.cartesian) uses the image position,
+                // not the in-cell one. id/siteId are unchanged (adjacency is by site).
+                val translated = base.atom.cartesian + offsetVec(offset)
+                val imgAtom = base.atom.copy(cartesian = translated)
+                val v = rotate(translated - center, controller.yaw, controller.pitch)
+                ProjectedAtom(imgAtom, project(v), v.z, base.radius)
+            }
+        }
         val neighbors = mutableMapOf<Long, MutableList<ProjectedAtom>>()
         val bondAdjacency = mutableMapOf<Long, MutableSet<Long>>()
         val renderables = buildList<Renderable> {
-            projected.forEach { add(AtomRenderable(it, it.atom.id in selectedAtomIds)) }
+            visibleProjected.forEach { add(AtomRenderable(it, it.atom.id in selectedAtomIds)) }
             if (visibility.showBonds) {
                 snapshot.bonds.forEach { bond ->
                     val a = byId[bond.atomA] ?: return@forEach
-                    val b = byId[bond.atomB] ?: return@forEach
+                    val bBase = byId[bond.atomB] ?: return@forEach
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
+                    val crossCell = bond.offsetB.x != 0 || bond.offsetB.y != 0 || bond.offsetB.z != 0
+                    // B's bonded image under the minimum-image convention (nearest periodic image).
+                    val b = imageOf(bBase, bond.offsetB)
+                    // A's bonded image from B's perspective: the same physical bond viewed from B
+                    // uses A's image in the negated offset cell, so a polyhedron centred on B also
+                    // gets A's correct (possibly cross-cell) vertex.
+                    val aFromB = if (crossCell) imageOf(a, Int3(-bond.offsetB.x, -bond.offsetB.y, -bond.offsetB.z)) else a
+                    // Polyhedron vertex collection is decoupled from bond-line rendering: every bond
+                    // (in-cell AND cross-cell) registers its vertices so polyhedra keep full
+                    // coordination, with cross-cell vertices extending outside the primary cell.
                     neighbors.getOrPut(a.atom.id) { mutableListOf() } += b
-                    neighbors.getOrPut(b.atom.id) { mutableListOf() } += a
-                    bondAdjacency.getOrPut(a.atom.id) { mutableSetOf() } += b.atom.id
-                    bondAdjacency.getOrPut(b.atom.id) { mutableSetOf() } += a.atom.id
+                    neighbors.getOrPut(bBase.atom.id) { mutableListOf() } += aFromB
+                    bondAdjacency.getOrPut(a.atom.id) { mutableSetOf() } += bBase.atom.id
+                    bondAdjacency.getOrPut(bBase.atom.id) { mutableSetOf() } += a.atom.id
+                    // Bond-line rendering: a cross-cell bond (offsetB != 0) only draws when its rule
+                    // opts in via extendAcrossCell. Unchecked => no bond line leaves the primary
+                    // cell, while the polyhedron vertex above is still collected.
+                    if (crossCell && !bond.rule.extendAcrossCell) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(1.5f, 16f)
                     add(BondRenderable(a, b, width))
+                    // A cross-cell bond's neighbour image sits outside the primary cell, so its atom
+                    // ball must be drawn too (only in-cell visible atoms are drawn above).
+                    if (crossCell && bBase.atom.siteId !in visibility.hiddenSites) {
+                        add(AtomRenderable(b, b.atom.id in selectedAtomIds))
+                    }
                 }
             }
             if (appearance.polyhedronEnabled && visibility.polyhedronSites.isNotEmpty()) {
-                projected.filter { it.atom.siteId in visibility.polyhedronSites }.forEach { center ->
+                // Polyhedra use the full (unfiltered) neighbor set so hiding a bond or a ligand atom
+                // does not dissolve the polyhedron — visibility is decoupled per the v0.3.0 fix.
+                projected.filter {
+                    it.atom.siteId in visibility.polyhedronSites &&
+                        // Per v0.3.2: only in-cell atoms are polyhedron centres; boundary image atoms
+                        // (same site, cellOffset != 0) would otherwise draw the same polyhedron again.
+                        it.atom.cellOffset.x == 0 && it.atom.cellOffset.y == 0 && it.atom.cellOffset.z == 0
+                }.forEach { center ->
                     val vertices = neighbors[center.atom.id].orEmpty()
-                    if (vertices.size >= 3) add(PolyhedronRenderable(center, vertices, bondAdjacency))
+                    if (vertices.size >= 3) {
+                        // Per v0.3.0: emit each face as its own renderable so faces sort against atoms
+                        // by their own depth (fixes back faces occluding front atoms) and get screen-
+                        // space lighting. Per v0.3.2: back faces are always culled (not just when
+                        // nearly opaque) so translucent polyhedra don't have back faces paint over
+                        // front atoms.
+                        val baseArgb = PeriodicTable.resolveSiteArgb(center.atom.siteId, center.atom.element, snapshot.structure.siteArgbOverrides, snapshot.elementArgbOverrides)
+                        val baseColor = colorFromArgb(baseArgb).copy(alpha = appearance.polyhedronOpacity.coerceIn(0f, 1f))
+                        polyhedronFaceRenderables(center, vertices, bondAdjacency, baseColor, controller.yaw, controller.pitch).forEach { add(it) }
+                    }
                 }
             }
         }.sortedBy { it.depth }
@@ -280,17 +363,18 @@ fun CrystalViewport(
         renderables.forEach { renderable ->
             when (renderable) {
                 is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides)
-                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides)
-                is PolyhedronRenderable -> drawPolyhedron(renderable.center, renderable.vertices, renderable.adjacency, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides)
+                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites)
+                is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance)
             }
         }
         // Per v0.2.3: draw the locked (persistent) measurement/info windows first, then the active
-        // (unlocked) ones, so both can coexist. Each returns its Rect + a "locked" flag for hit-testing.
-        val bounds = mutableListOf<Pair<Rect, Boolean>>()
-        if (lockedMeasurementIds.isNotEmpty() && lockedMeasurementMode != MeasurementMode.NONE) {
-            drawMeasurement(projected, lockedMeasurementIds, lockedMeasurementMode, true)?.let { bounds += it to true }
+        // (unlocked) ones, so both can coexist. Each returns its Rect + a "locked" flag + an index
+        // (locked measurements by position, -1 for the active one) for hit-testing.
+        val bounds = mutableListOf<Triple<Rect, Boolean, Int>>()
+        lockedMeasurements.forEachIndexed { idx, m ->
+            drawMeasurement(projected, m.atomIds, m.mode, true)?.let { bounds += Triple(it, true, idx) }
         }
-        drawMeasurement(projected, selectedAtomIds, measurementMode, measurementLocked)?.let { bounds += it to false }
+        drawMeasurement(projected, selectedAtomIds, measurementMode, false)?.let { bounds += Triple(it, false, -1) }
         measurementBoundsList = bounds
         val infoBounds = mutableListOf<Triple<Rect, Boolean, Long>>()
         lockedInspectedAtomIds.forEach { id ->
@@ -332,15 +416,20 @@ private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearanc
     if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))
 }
 
-private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap()) {
+private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet()) {
     val opacity = appearance.bondOpacity.coerceIn(0f, 1f)
     if (opacity < 0.01f) return
     val delta = b.point - a.point
     val length = delta.getDistance()
     if (length < 0.001f) return
     val dir = delta / length
-    val start = a.point + dir * a.radius
-    val end = b.point - dir * b.radius
+    // Per v0.3.2: a hidden atom's ball is not drawn, so a bond ending at one would float with a
+    // gap (it started at the atom's surface, not its center). Extend the bond to the hidden atom's
+    // center; visible atoms still start the bond at their surface.
+    val aHidden = a.atom.siteId in hiddenSites
+    val bHidden = b.atom.siteId in hiddenSites
+    val start = a.point + dir * if (aHidden) 0f else a.radius
+    val end = b.point - dir * if (bHidden) 0f else b.radius
     val clipped = end - start
     if (clipped.getDistance() < 0.001f) return
     val perp = Offset(-dir.y, dir.x)
@@ -412,96 +501,88 @@ private fun Color.lighten(factor: Float) = Color(
     alpha,
 )
 
-private fun DrawScope.drawPolyhedron(center: ProjectedAtom, vertices: List<ProjectedAtom>, adjacency: Map<Long, Set<Long>>, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap()) {
-    if (vertices.size < 3) return
-    val baseArgb = PeriodicTable.resolveSiteArgb(center.atom.siteId, center.atom.element, siteArgbOverrides, elementArgbOverrides)
-    val baseColor = colorFromArgb(baseArgb).copy(alpha = appearance.polyhedronOpacity.coerceIn(0f, 1f))
+/**
+ * Build per-face renderables for a coordination polyhedron. Each face is a polygon (coplanar
+ * triangles merged by [convexHullFaces]) and becomes its own [PolyhedronFaceRenderable] carrying a
+ * camera-space outward normal — used both for back-face culling and screen-space Lambert shading
+ * consistent with atoms/bonds. The view direction is +Z (camera looks down -Z), so a face is
+ * back-facing when its camera-space normal has a non-positive Z component.
+ */
+private fun polyhedronFaceRenderables(
+    center: ProjectedAtom,
+    vertices: List<ProjectedAtom>,
+    adjacency: Map<Long, Set<Long>>,
+    baseColor: Color,
+    yaw: Float,
+    pitch: Float,
+): List<PolyhedronFaceRenderable> {
+    if (vertices.size < 3) return emptyList()
     val vertexIds = vertices.map { it.atom.id }
+    val byCartesian = vertices.associateBy { it.atom.cartesian }
 
-    // Special case: when every ligand is mutually bonded (e.g. a square-planar AB4 unit),
-    // the polyhedron is flat — draw a single n-gon rather than decomposing into triangles.
+    // Flat special case: every ligand mutually bonded (e.g. square-planar AB4) → single n-gon.
     val allMutuallyAdjacent = vertices.size in 3..6 && vertices.indices.all { i ->
         (vertices.indices - i).all { j -> adjacency[vertexIds[i]]?.contains(vertexIds[j]) == true }
     }
-    if (allMutuallyAdjacent) {
-        val screenCenter = vertices.map { it.point }.reduce { a, b -> a + b } / vertices.size.toFloat()
-        val ordered = vertices.sortedBy { v -> atan2((v.point.y - screenCenter.y).toDouble(), (v.point.x - screenCenter.x).toDouble()) }
-        val normal = (ordered[1].atom.cartesian - ordered[0].atom.cartesian).cross(ordered[2].atom.cartesian - ordered[0].atom.cartesian)
-        val toCenter = center.atom.cartesian - ordered[0].atom.cartesian
-        val directed = if (normal.dot(toCenter) > 0) ordered.reversed() else ordered
-        val path = Path().apply {
-            moveTo(directed[0].point.x, directed[0].point.y)
-            for (i in 1 until directed.size) lineTo(directed[i].point.x, directed[i].point.y)
-            close()
-        }
-        val fill = if (appearance.polyhedronReflectionEnabled) {
-            val faceCenter = directed.map { it.atom.cartesian }.reduce { a, b -> a + b } / directed.size.toDouble()
-            val outward = (faceCenter - center.atom.cartesian).let { diff ->
-                val len = diff.length()
-                if (len < 1e-12) Vec3.ZERO else diff / len
-            }
-            val azimuth = appearance.lightAzimuth / 180.0 * PI
-            val elevation = appearance.lightElevation / 180.0 * PI
-            val light = Vec3(cos(azimuth) * cos(elevation), sin(azimuth) * cos(elevation), sin(elevation))
-            val factor = 0.55 + 0.45 * outward.dot(light).coerceIn(-1.0, 1.0)
-            baseColor.copy(
-                red = (baseColor.red * factor).toFloat().coerceIn(0f, 1f),
-                green = (baseColor.green * factor).toFloat().coerceIn(0f, 1f),
-                blue = (baseColor.blue * factor).toFloat().coerceIn(0f, 1f),
-            )
-        } else baseColor
-        drawPath(path, fill)
-        // Outline the polygon edges.
-        for (i in directed.indices) {
-            val a = directed[i]
-            val b = directed[(i + 1) % directed.size]
-            drawLine(Color.White.copy(alpha = 0.35f), a.point, b.point, 1.2f)
-        }
-        return
+    val hullPolygons: List<List<ProjectedAtom>> = if (allMutuallyAdjacent) {
+        listOf(vertices)
+    } else {
+        convexHullFaces(center.atom.cartesian, vertices.map { it.atom.cartesian })
+            .mapNotNull { poly -> poly.map { p -> byCartesian[p] ?: return@mapNotNull null } }
     }
 
-    val drawn = mutableSetOf<List<Long>>()
-    // Per v0.2.3: hull faces are now polygonal (coplanar triangles merged), so a square face is
-    // drawn as one quad. Each face is a list of vertices ordered around the face.
-    val hullFaces = convexHullFaces(center.atom.cartesian, vertices.map { it.atom.cartesian })
-    val faces = hullFaces.map { poly -> poly.map { p -> vertices.first { it.atom.cartesian == p } } }
-
-    faces.forEach { faceVerts ->
-        if (faceVerts.isEmpty()) return@forEach
-        val va = faceVerts.first()
-        val vb = faceVerts[1]
-        val vc = faceVerts[(2).coerceAtMost(faceVerts.lastIndex)]
-        val normal = (vb.atom.cartesian - va.atom.cartesian).cross(vc.atom.cartesian - va.atom.cartesian)
+    val result = mutableListOf<PolyhedronFaceRenderable>()
+    hullPolygons.forEach { faceVerts ->
+        if (faceVerts.size < 3) return@forEach
+        // Outward normal in world space, then rotate to camera space for culling + lighting.
+        val va = faceVerts[0]; val vb = faceVerts[1]; val vc = faceVerts[2]
+        var worldNormal = (vb.atom.cartesian - va.atom.cartesian).cross(vc.atom.cartesian - va.atom.cartesian)
         val toCenter = center.atom.cartesian - va.atom.cartesian
-        val ordered = if (normal.dot(toCenter) > 0) faceVerts.reversed() else faceVerts
-        val path = Path().apply {
-            moveTo(ordered[0].point.x, ordered[0].point.y)
-            for (i in 1 until ordered.size) lineTo(ordered[i].point.x, ordered[i].point.y)
-            close()
-        }
-        val fill = if (appearance.polyhedronReflectionEnabled) {
-            val faceCenter = ordered.map { it.atom.cartesian }.reduce { a, b -> a + b } / ordered.size.toDouble()
-            val outward = (faceCenter - center.atom.cartesian).let { diff ->
-                val len = diff.length()
-                if (len < 1e-12) Vec3.ZERO else diff / len
-            }
-            val azimuth = appearance.lightAzimuth / 180.0 * PI
-            val elevation = appearance.lightElevation / 180.0 * PI
-            val light = Vec3(cos(azimuth) * cos(elevation), sin(azimuth) * cos(elevation), sin(elevation))
-            val factor = 0.55 + 0.45 * outward.dot(light).coerceIn(-1.0, 1.0)
-            baseColor.copy(
-                red = (baseColor.red * factor).toFloat().coerceIn(0f, 1f),
-                green = (baseColor.green * factor).toFloat().coerceIn(0f, 1f),
-                blue = (baseColor.blue * factor).toFloat().coerceIn(0f, 1f),
-            )
-        } else baseColor
-        drawPath(path, fill)
-        // Outline polygon edges, deduplicated.
-        for (i in ordered.indices) {
-            val a = ordered[i]
-            val b = ordered[(i + 1) % ordered.size]
-            val key = listOf(a.atom.id, b.atom.id).sorted()
-            if (drawn.add(key)) drawLine(Color.White.copy(alpha = 0.35f), a.point, b.point, 1.2f)
+        if (worldNormal.dot(toCenter) < 0) worldNormal = worldNormal * -1.0
+        val len = worldNormal.length()
+        if (len < 1e-12) return@forEach
+        val camNormal = rotate(worldNormal / len, yaw, pitch)
+        // Per v0.3.2: always cull back faces (camera looks down -Z, so a back face has camNormal.z
+        // <= 0). Previously only nearly-opaque polyhedra culled, which let translucent back faces
+        // paint over front atoms.
+        if (camNormal.z <= 0.0) return@forEach
+        val screenVerts = faceVerts.map { it.point }
+        val faceDepth = faceVerts.map { it.depth }.average()
+        result += PolyhedronFaceRenderable(baseColor, screenVerts, faceVerts.map { it.atom.id }, faceDepth, camNormal)
+    }
+    return result
+}
+
+private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appearance: ViewerAppearance) {
+    if (face.screenVerts.size < 3) return
+    val fill = if (appearance.polyhedronReflectionEnabled) {
+        // Screen-space Lambert: light direction in camera space (matches atom highlight which is
+        // fixed relative to the screen). +Z toward viewer, so faces pointing at the light brighten.
+        val azimuth = appearance.lightAzimuth / 180.0 * PI
+        val elevation = appearance.lightElevation / 180.0 * PI
+        val light = Vec3(cos(azimuth) * cos(elevation), sin(azimuth) * cos(elevation), sin(elevation))
+        val dot = face.normalCam.dot(light).coerceIn(0.0, 1.0) // back faces already culled/handled
+        val factor = 0.5 + 0.5 * dot
+        face.baseColor.copy(
+            red = (face.baseColor.red * factor).toFloat().coerceIn(0f, 1f),
+            green = (face.baseColor.green * factor).toFloat().coerceIn(0f, 1f),
+            blue = (face.baseColor.blue * factor).toFloat().coerceIn(0f, 1f),
+        )
+    } else face.baseColor
+    val path = Path().apply {
+        moveTo(face.screenVerts[0].x, face.screenVerts[0].y)
+        for (i in 1 until face.screenVerts.size) lineTo(face.screenVerts[i].x, face.screenVerts[i].y)
+        close()
+    }
+    drawPath(path, fill)
+    // Outline polygon edges, deduplicated across adjacent faces via the caller's shared set is not
+    // possible here (per-face), so dedupe within the face by sorted endpoint pair.
+    val drawn = mutableSetOf<List<Long>>()
+    for (i in face.screenVerts.indices) {
+        val a = face.vertexIds[i]
+        val b = face.vertexIds[(i + 1) % face.vertexIds.size]
+        if (drawn.add(listOf(a, b).sorted())) {
+            drawLine(Color.White.copy(alpha = 0.35f), face.screenVerts[i], face.screenVerts[(i + 1) % face.screenVerts.size], 1.2f)
         }
     }
 }

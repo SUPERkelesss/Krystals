@@ -10,7 +10,7 @@ sealed interface EditCommand {
     data class DeleteAtom(val siteId: String) : EditCommand
     data class SetBondRule(val rule: BondRule) : EditCommand
     data class RemoveBondRule(val key: String) : EditCommand
-    data class Transform(val rows: List<List<Int>>) : EditCommand
+    data class Transform(val rows: List<List<Int>>, val translation: Vec3 = Vec3.ZERO) : EditCommand
 }
 
 data class EditResult(val structure: CrystalStructure, val warnings: List<String> = emptyList())
@@ -62,7 +62,7 @@ object CrystalEditor {
             bondRules = structure.bondRules.filterNot { it.key == command.key },
             disabledBondPairs = structure.disabledBondPairs + command.key,
         ))
-        is EditCommand.Transform -> transform(structure, command.rows)
+        is EditCommand.Transform -> transform(structure, command.rows, command.translation)
     }
 
     fun ensureAutoBondRules(structure: CrystalStructure): EditResult {
@@ -81,7 +81,7 @@ object CrystalEditor {
         return EditResult(structure.copy(bondRules = structure.bondRules + newRules))
     }
 
-    private fun transform(structure: CrystalStructure, rows: List<List<Int>>): EditResult {
+    private fun transform(structure: CrystalStructure, rows: List<List<Int>>, translation: Vec3): EditResult {
         require(rows.size == 3 && rows.all { it.size == 3 }) { "Transformation matrix must be 3x3" }
         val transform = Mat3.fromRows(rows)
         val determinant = transform.determinant()
@@ -94,7 +94,10 @@ object CrystalEditor {
         structure.sites.forEach { site ->
             val generated = mutableListOf<Vec3>()
             outer@ for (i in 0 until multiplicity) for (j in 0 until multiplicity) for (k in 0 until multiplicity) {
-                val candidate = (inverse * (site.fractional + Vec3(i.toDouble(), j.toDouble(), k.toDouble()))).wrapped()
+                // Per v0.3.3: x' = M⁻¹·x + t — the linear transform is applied first, then the
+                // translation in the new (transformed) fractional basis. The lattice itself is
+                // unaffected by t (an origin shift never changes the basis vectors).
+                val candidate = (inverse * (site.fractional + Vec3(i.toDouble(), j.toDouble(), k.toDouble())) + translation).wrapped()
                 if (generated.none { it.almostEquals(candidate) }) generated += candidate
                 if (generated.size == multiplicity) break@outer
             }

@@ -1,7 +1,6 @@
 package com.krystals.core
 
-import kotlin.math.floor
-import kotlin.math.max
+import kotlin.math.abs
 
 object CrystalEngine {
     const val MAX_RENDERED_ATOMS = 100_000
@@ -17,10 +16,14 @@ object CrystalEngine {
         require(predicted <= MAX_RENDERED_ATOMS) {
             "Expansion would create at least $predicted atoms; limit is $MAX_RENDERED_ATOMS"
         }
+        // Per v0.3.2: bonds use the minimum-image convention (inferBonds), so corner/edge neighbour
+        // bonds need no materialised image atoms. BUT the *display* of boundary atoms still needs
+        // their periodic images — a corner atom at (0,0,0) should render at all 8 cell corners, not
+        // just one. So we keep the boundary-image generation here (for display/byId lookup only),
+        // while inferBonds is fed only the in-cell atoms (cellOffset == 0) to avoid duplicate bonds.
         val atoms = ArrayList<ExpandedAtom>(predicted.toInt())
         var id = 1L
         for (ix in 0 until expansion.x) for (iy in 0 until expansion.y) for (iz in 0 until expansion.z) {
-            val offset = Int3(ix, iy, iz)
             base.forEach { atom ->
                 val boundaryX = atom.fractional.x < 1e-6 && ix == expansion.x - 1
                 val boundaryY = atom.fractional.y < 1e-6 && iy == expansion.y - 1
@@ -41,7 +44,10 @@ object CrystalEngine {
                 }
             }
         }
-        return SceneSnapshot(atoms, inferBonds(atoms, bondRules, structure.disabledBondPairs), structure, expansion)
+        // Bonds are computed only among in-cell atoms (cellOffset == 0); the minimum-image convention
+        // already covers cross-cell neighbours, so image atoms would only create duplicate bonds.
+        val inCell = atoms.filter { it.cellOffset.x == 0 && it.cellOffset.y == 0 && it.cellOffset.z == 0 }
+        return SceneSnapshot(atoms, inferBonds(inCell, bondRules, structure.disabledBondPairs, structure.cell), structure, expansion)
     }
 
     fun expandAsymmetricUnit(structure: CrystalStructure): List<ExpandedAtom> {
@@ -63,30 +69,44 @@ object CrystalEngine {
         return result
     }
 
-    fun inferBonds(atoms: List<ExpandedAtom>, rules: List<BondRule>, disabledPairs: Set<String> = emptySet()): List<Bond> {
+    fun inferBonds(atoms: List<ExpandedAtom>, rules: List<BondRule>, disabledPairs: Set<String> = emptySet(), cell: UnitCell): List<Bond> {
         if (atoms.size < 2) return emptyList()
         val custom = rules.associateBy { it.key }
-        val maxCustom = rules.maxOfOrNull { it.maxAngstrom } ?: 0.0
-        val maxRadius = atoms.maxOfOrNull { PeriodicTable.covalentRadius(it.element) } ?: 1.25
-        val cellSize = max(0.5, max(maxCustom, maxRadius * 2 + 0.45))
-        fun cellKey(v: Vec3) = Int3(floor(v.x / cellSize).toInt(), floor(v.y / cellSize).toInt(), floor(v.z / cellSize).toInt())
-        val buckets = atoms.groupBy { cellKey(it.cartesian) }
+        // Per v0.3.2: minimum-image convention. For each atom pair consider all 27 periodic images
+        // (offset in {-1,0,1}^3) of B and take the closest one, so corner/edge neighbour bonds are
+        // found without materialising 26 neighbour-cell atoms. O(N^2 * 27) - fine for N up to a few
+        // hundred; larger structures can be optimised later with spatial hashing.
+        val la = cell.matrix.a // lattice vectors in Cartesian (columns of the cell matrix)
+        val lb = cell.matrix.b
+        val lc = cell.matrix.c
+        val offsets = ArrayList<Vec3>(27)
+        val intOffsets = ArrayList<Int3>(27)
+        for (dx in -1..1) for (dy in -1..1) for (dz in -1..1) {
+            intOffsets += Int3(dx, dy, dz)
+            offsets += la * dx.toDouble() + lb * dy.toDouble() + lc * dz.toDouble()
+        }
         val result = mutableListOf<Bond>()
-        atoms.forEach { atom ->
-            val origin = cellKey(atom.cartesian)
-            for (dx in -1..1) for (dy in -1..1) for (dz in -1..1) {
-                buckets[Int3(origin.x + dx, origin.y + dy, origin.z + dz)].orEmpty().forEach { other ->
-                    if (other.id <= atom.id) return@forEach
-                    val key = listOf(atom.siteId, other.siteId).sorted().joinToString("\u0000")
-                    // Per v0.2.3: a pair the user explicitly deleted is not redrawn via the fallback.
-                    if (key in disabledPairs) return@forEach
-                    val rule = custom[key] ?: BondRule(
-                        atom.siteId, other.siteId, 0.1,
-                        PeriodicTable.covalentRadius(atom.element) + PeriodicTable.covalentRadius(other.element) + 0.45,
-                        BondRuleSource.AUTO,
-                    )
-                    val d = distance(atom.cartesian, other.cartesian)
-                    if (d > 0.0 && d >= rule.minAngstrom && d <= rule.maxAngstrom) result += Bond(atom.id, other.id, d, rule)
+        for (i in atoms.indices) {
+            val atom = atoms[i]
+            for (j in i + 1 until atoms.size) {
+                val other = atoms[j]
+                val key = listOf(atom.siteId, other.siteId).sorted().joinToString("\u0000")
+                // Per v0.2.3: a pair the user explicitly deleted is not redrawn via the fallback.
+                if (key in disabledPairs) continue
+                val rule = custom[key] ?: BondRule(
+                    atom.siteId, other.siteId, 0.1,
+                    PeriodicTable.covalentRadius(atom.element) + PeriodicTable.covalentRadius(other.element) + 0.45,
+                    BondRuleSource.AUTO,
+                )
+                // Find the closest periodic image of other relative to atom.
+                var bestD = Double.POSITIVE_INFINITY
+                var bestIdx = -1
+                for (k in offsets.indices) {
+                    val d = distance(atom.cartesian, other.cartesian + offsets[k])
+                    if (d < bestD) { bestD = d; bestIdx = k }
+                }
+                if (bestD > 0.0 && bestD >= rule.minAngstrom && bestD <= rule.maxAngstrom) {
+                    result += Bond(atom.id, other.id, bestD, rule, intOffsets[bestIdx])
                 }
             }
         }

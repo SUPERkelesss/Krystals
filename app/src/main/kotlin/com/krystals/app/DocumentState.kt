@@ -12,6 +12,7 @@ import com.krystals.core.CrystalStructure
 import com.krystals.core.Expansion
 import com.krystals.core.ParsedStructure
 import com.krystals.core.ViewerAppearance
+import com.krystals.renderer.LockedMeasurement
 import com.krystals.renderer.MeasurementMode
 import com.krystals.renderer.ViewerVisibility
 import java.util.UUID
@@ -39,10 +40,8 @@ class DocumentTab(
     var visibility by mutableStateOf(ViewerVisibility())
     var selectedAtomIds by mutableStateOf(emptyList<Long>())
     var measurementMode by mutableStateOf(MeasurementMode.NONE)
-    var measurementLocked by mutableStateOf(false)
-    // Per v0.2.3: a locked measurement survives switching modes / starting a new measurement.
-    var lockedMeasurementIds by mutableStateOf(emptyList<Long>())
-    var lockedMeasurementMode by mutableStateOf(MeasurementMode.NONE)
+    // Per v0.3.0: multiple measurements can be locked at once (mirrors the atom-info windows).
+    var lockedMeasurements by mutableStateOf(emptyList<LockedMeasurement>())
     var atomEditMode by mutableStateOf(AtomEditMode.NONE)
     var editingSiteId by mutableStateOf<String?>(null)
     var inspectedAtomId by mutableStateOf<Long?>(null)

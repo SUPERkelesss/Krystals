@@ -12,7 +12,9 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
@@ -56,7 +58,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.BrightnessAuto
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -64,6 +68,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.LightMode
@@ -92,6 +97,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -111,6 +117,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.layout.ContentScale
@@ -132,6 +139,7 @@ import com.krystals.core.EditCommand
 import com.krystals.core.PeriodicTable
 import com.krystals.renderer.CrystalViewport
 import com.krystals.renderer.CrystalImageExporter
+import com.krystals.renderer.LockedMeasurement
 import com.krystals.renderer.MeasurementMode
 import com.krystals.renderer.ViewerController
 import com.krystals.renderer.ViewerVisibility
@@ -195,6 +203,10 @@ fun KrystalsRoot(
     var presetOpen by remember { mutableStateOf(false) }
     var mpSearchOpen by remember { mutableStateOf(false) }
     var mpKeyDialogOpen by remember { mutableStateOf(false) }
+    // Per v0.3.1: MP and COD imports share an "import from online sources" entry that opens a
+    // picker; the picker routes to the COD search screen (no key) or the MP flow (key-gated).
+    var onlineSourceOpen by remember { mutableStateOf(false) }
+    var codSearchOpen by remember { mutableStateOf(false) }
 
     fun showMessage(message: String) { scope.launch { snackbar.showSnackbar(message) } }
 
@@ -295,9 +307,7 @@ fun KrystalsRoot(
                         onOpen = { openLauncher.launch(arrayOf("chemical/x-cif", "text/plain", "application/octet-stream")) },
                         onOpenPreset = { presetOpen = true },
                         onNew = viewModel::createNew,
-                        onMaterials = {
-                            if (MaterialsProject.hasKey(activity)) mpSearchOpen = true else mpKeyDialogOpen = true
-                        },
+                        onOnlineSource = { onlineSourceOpen = true },
                     )
                 } else {
                     ViewerScreen(
@@ -313,9 +323,7 @@ fun KrystalsRoot(
                             }.onFailure { showMessage(it.message ?: "Save failed") }
                         },
                         onNew = viewModel::createNew,
-                        onMaterials = {
-                            if (MaterialsProject.hasKey(activity)) mpSearchOpen = true else mpKeyDialogOpen = true
-                        },
+                        onOnlineSource = { onlineSourceOpen = true },
                         onExport = ::requestExport,
                         onExit = ::requestExit,
                         onClose = { index -> if (viewModel.tabs[index].dirty) closeRequest = index else viewModel.close(index) },
@@ -394,6 +402,20 @@ fun KrystalsRoot(
         onChangeKey = { mpSearchOpen = false; mpKeyDialogOpen = true },
         onMessage = ::showMessage,
     )
+    if (onlineSourceOpen) OnlineSourcePickerDialog(
+        onDismiss = { onlineSourceOpen = false },
+        onPickCod = { onlineSourceOpen = false; codSearchOpen = true },
+        onPickMp = {
+            onlineSourceOpen = false
+            if (MaterialsProject.hasKey(activity)) mpSearchOpen = true else mpKeyDialogOpen = true
+        },
+    )
+    if (codSearchOpen) CodSearchScreen(
+        context = activity,
+        viewModel = viewModel,
+        onBack = { codSearchOpen = false },
+        onMessage = ::showMessage,
+    )
     }
 }
 
@@ -402,7 +424,7 @@ private fun HomeScreen(
     onOpen: () -> Unit,
     onOpenPreset: () -> Unit,
     onNew: () -> Unit,
-    onMaterials: () -> Unit,
+    onOnlineSource: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
         Column(
@@ -413,13 +435,14 @@ private fun HomeScreen(
             AssetImage("main.png", Modifier.size(230.dp), ContentScale.Fit)
             Text("Krystals", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(28.dp))
-            Button(onClick = onOpen, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.FileOpen, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.open_file)) }
+            // Per v0.3.3: order matches the app menu — import local, preset library, online, new.
+            Button(onClick = onOpen, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.FileOpen, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.import_local)) }
             Spacer(Modifier.height(12.dp))
-            Button(onClick = onOpenPreset, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.FileOpen, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.open_preset_library)) }
+            Button(onClick = onOpenPreset, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.Inventory2, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.open_preset_library)) }
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = onOnlineSource, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.Science, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.import_online)) }
             Spacer(Modifier.height(12.dp))
             Button(onClick = onNew, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.new_file)) }
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = onMaterials, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.Science, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.materials_project)) }
         }
     }
 }
@@ -432,7 +455,7 @@ private fun ViewerScreen(
     onOpenPreset: () -> Unit,
     onSaveToPreset: () -> Unit,
     onNew: () -> Unit,
-    onMaterials: () -> Unit,
+    onOnlineSource: () -> Unit,
     onExport: (Bitmap) -> Unit,
     onExit: () -> Unit,
     onClose: (Int) -> Unit,
@@ -468,15 +491,15 @@ private fun ViewerScreen(
             title = { Text("Krystals", fontWeight = FontWeight.Bold, maxLines = 1) },
             navigationIcon = { Box { IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.Menu, null) }; DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_local)) }, leadingIcon = { Icon(Icons.Default.FileOpen, null) }, onClick = { menuOpen = false; onOpen() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.open_preset_library)) }, leadingIcon = { Icon(Icons.Default.FileOpen, null) }, onClick = { menuOpen = false; onOpenPreset() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.open_preset_library)) }, leadingIcon = { Icon(Icons.Default.Inventory2, null) }, onClick = { menuOpen = false; onOpenPreset() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.Science, null) }, onClick = { menuOpen = false; onOnlineSource() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.materials_project)) }, leadingIcon = { Icon(Icons.Default.Science, null) }, onClick = { menuOpen = false; onMaterials() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.save)) }, leadingIcon = { Icon(Icons.Default.Save, null) }, onClick = { menuOpen = false; onSave(tab) })
-                DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Save, null) }, onClick = { menuOpen = false; onSaveToPreset() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = { menuOpen = false; onSaveToPreset() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
                     menuOpen = false
                     sceneResult.getOrNull()?.let { snapshot ->
-                        onExport(CrystalImageExporter.render(snapshot, tab.appearance, controller, tab.visibility, tab.selectedAtomIds, tab.measurementMode, tab.measurementLocked, tab.inspectedAtomId, tab.lockedMeasurementIds, tab.lockedMeasurementMode, tab.lockedInspectedAtomIds))
+                        onExport(CrystalImageExporter.render(snapshot, tab.appearance, controller, tab.visibility, tab.selectedAtomIds, tab.measurementMode, tab.inspectedAtomId, tab.lockedMeasurements, tab.lockedInspectedAtomIds))
                     } ?: onMessage("Unable to export current crystal")
                 })
                 HorizontalDivider()
@@ -506,27 +529,17 @@ private fun ViewerScreen(
                     visibility = tab.visibility,
                     selectedAtomIds = tab.selectedAtomIds,
                     measurementMode = tab.measurementMode,
-                    measurementLocked = tab.measurementLocked,
-                    lockedMeasurementIds = tab.lockedMeasurementIds,
-                    lockedMeasurementMode = tab.lockedMeasurementMode,
-                    onMeasurementLockToggle = {
-                        // Per v0.2.3: if there is an active (unlocked) measurement, lock it into the
-                        // persistent slot and clear the active selection; if the active one is already
-                        // locked, tapping the locked box dismisses it.
-                        if (tab.measurementLocked) {
-                            tab.measurementLocked = false
-                            tab.selectedAtomIds = emptyList()
-                            tab.lockedMeasurementIds = emptyList()
-                            tab.lockedMeasurementMode = MeasurementMode.NONE
-                        } else if (tab.lockedMeasurementIds.isNotEmpty()) {
-                            // Tapping the locked measurement clears it.
-                            tab.lockedMeasurementIds = emptyList()
-                            tab.lockedMeasurementMode = MeasurementMode.NONE
-                        } else {
-                            // Lock the current active measurement.
-                            tab.lockedMeasurementIds = tab.selectedAtomIds
-                            tab.lockedMeasurementMode = tab.measurementMode
-                            tab.selectedAtomIds = emptyList()
+                    lockedMeasurements = tab.lockedMeasurements,
+                    onMeasurementLockToggle = { measurement, isLocked ->
+                        // Tapping an unlocked (active) measurement box locks it into the list and
+                        // clears the active selection; tapping a locked box removes just that one.
+                        if (isLocked && measurement != null) {
+                            tab.lockedMeasurements = tab.lockedMeasurements.filterNot { it == measurement }
+                        } else if (!isLocked) {
+                            if (tab.measurementMode != MeasurementMode.NONE && tab.selectedAtomIds.isNotEmpty()) {
+                                tab.lockedMeasurements = tab.lockedMeasurements + LockedMeasurement(tab.selectedAtomIds, tab.measurementMode)
+                                tab.selectedAtomIds = emptyList()
+                            }
                         }
                     },
                     inspectedAtomId = tab.inspectedAtomId,
@@ -547,7 +560,7 @@ private fun ViewerScreen(
                         }
                     },
                     onViewMoved = {
-                        if (tab.measurementMode != MeasurementMode.NONE && !tab.measurementLocked) tab.selectedAtomIds = emptyList()
+                        if (tab.measurementMode != MeasurementMode.NONE) tab.selectedAtomIds = emptyList()
                         // Moving the view dismisses the unlocked info window; locked ones persist.
                         tab.inspectedAtomId = null
                     },
@@ -569,15 +582,13 @@ private fun ViewerScreen(
                 )
             }.onFailure { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(it.message ?: "Unable to build scene", color = MaterialTheme.colorScheme.error) } }
 
-            // Per v0.2.4: group legend by (element, resolved color). Sites of the same element that
-            // share a color collapse into a single element row; sites whose color was overridden per-
-            // site split into their own rows labeled by site.label (e.g. C1, C2).
+            // Legend groups by (element, resolved color), sourced from the edited structure (not the
+            // rendered atoms) so it doesn't churn as visibility changes. Sites of the same element
+            // sharing a color collapse into one element row; per-site color overrides split into rows
+            // labeled by site.label (e.g. C1, C2).
             val legendEntries = remember(tab.structure, tab.visibility) {
-                val atoms = sceneResult.getOrNull()?.atoms ?: return@remember emptyList<LegendEntry>()
                 val visibleSites = tab.structure.sites.filterNot { it.id in tab.visibility.hiddenSites }
-                val siteById = visibleSites.associateBy { it.id }
-                atoms.mapNotNull { atom -> siteById[atom.siteId] }
-                    .distinctBy { it.id }
+                visibleSites
                     .groupBy { site -> site.element to PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides) }
                     .toSortedMap(compareBy({ it.first }, { it.second }))
                     .flatMap { (key, sites) ->
@@ -684,7 +695,7 @@ private fun ViewerScreen(
             tab.selectedAtomIds = emptyList(); measureOpen = false
         },
     )
-    if (displayOpen) DisplayPanel(tab, onDismiss = { displayOpen = false })
+    if (displayOpen) DisplayPanel(tab, viewModel, onDismiss = { displayOpen = false })
     if (infoOpen) InfoDialog(tab, onDismiss = { infoOpen = false })
     if (appearanceOpen) AppearanceDialog(tab, onDismiss = { appearanceOpen = false }) { viewModel.defaultAppearance = it }
 }
@@ -743,7 +754,7 @@ private fun ElementLegend(entries: List<LegendEntry>, expanded: Boolean, onToggl
 }
 
 @Composable
-private fun DisplayPanel(tab: DocumentTab, onDismiss: () -> Unit) {
+private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismiss: () -> Unit) {
     val sites = tab.structure.sites
     val siteIds = remember(tab.structure) { sites.map { it.id }.toSet() }
     // Per v0.2.3: per-site atom color overrides, edited in the ATOMS sub-menu.
@@ -775,13 +786,16 @@ private fun DisplayPanel(tab: DocumentTab, onDismiss: () -> Unit) {
             tonalElevation = 8.dp,
             modifier = panelModifier,
         ) {
-            Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
-                // Drag handle: a thin bar at the leading edge (top in portrait, left in landscape).
-                val handleModifier = if (landscape) {
-                    Modifier.fillMaxHeight().width(12.dp)
-                } else {
-                    Modifier.fillMaxWidth().height(12.dp)
-                }
+            // Per v0.3.3: in landscape the drag handle is a vertical bar on the left, so the panel
+            // content sits beside it in a Row (a Column with a fillMaxHeight first child would leave
+            // no height for the tabs/content — the cause of the blank landscape panel). The content
+            // itself is wrapped in a single Column so the lambda can be reused for both layouts.
+            val handleModifier = if (landscape) {
+                Modifier.fillMaxHeight().width(12.dp)
+            } else {
+                Modifier.fillMaxWidth().height(12.dp)
+            }
+            val handle = @Composable {
                 Box(
                     Modifier
                         .pointerInput(landscape) {
@@ -797,95 +811,120 @@ private fun DisplayPanel(tab: DocumentTab, onDismiss: () -> Unit) {
                         .then(handleModifier)
                         .background(MaterialTheme.colorScheme.outlineVariant),
                 )
-                Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    listOf(
-                        DisplayTab.ATOMS to localized("原子", "Atoms"),
-                        DisplayTab.BONDS to localized("化学键", "Bonds"),
-                        DisplayTab.POLYHEDRA to localized("多面体", "Polyhedra"),
-                    ).forEach { (kind, label) -> FilterChip(selected == kind, onClick = { selected = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
-                    Spacer(Modifier.weight(1f)); IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null) }
-                }
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
-                    when (selected) {
-                        DisplayTab.ATOMS -> {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(allSitesVisible, onCheckedChange = { checked ->
-                                    tab.visibility = tab.visibility.copy(hiddenSites = if (checked) emptySet() else siteIds)
-                                })
-                                Text(stringResource(R.string.select_all))
-                                Spacer(Modifier.width(8.dp))
-                                TextButton(onClick = { tab.visibility = tab.visibility.copy(hiddenSites = siteIds - tab.visibility.hiddenSites) }) { Text(localized("反选", "Invert")) }
-                            }
-                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                            // Per v0.2.4: one row per site = visibility checkbox + label + color swatch.
-                            // The swatch opens the per-site color picker (overrides siteArgbOverrides).
-                            sites.forEach { site ->
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                                    val visible = site.id !in tab.visibility.hiddenSites
-                                    Checkbox(visible, onCheckedChange = { checked ->
-                                        tab.visibility = tab.visibility.copy(hiddenSites = if (checked) tab.visibility.hiddenSites - site.id else tab.visibility.hiddenSites + site.id)
+            }
+            val content = @Composable {
+                Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
+                    Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        listOf(
+                            DisplayTab.ATOMS to localized("原子", "Atoms"),
+                            DisplayTab.BONDS to localized("化学键", "Bonds"),
+                            DisplayTab.POLYHEDRA to localized("多面体", "Polyhedra"),
+                        ).forEach { (kind, label) -> FilterChip(selected == kind, onClick = { selected = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
+                        Spacer(Modifier.weight(1f)); IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null) }
+                    }
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+                        when (selected) {
+                            DisplayTab.ATOMS -> {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(allSitesVisible, onCheckedChange = { checked ->
+                                        tab.visibility = tab.visibility.copy(hiddenSites = if (checked) emptySet() else siteIds)
                                     })
-                                    Text("${site.label} (${site.element})", modifier = Modifier.weight(1f))
-                                    val argb = PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides)
-                                    Box(
-                                        Modifier.size(22.dp).background(Color(argb), CircleShape).clickable { colorPickerTarget = site.id; colorPickerOpen = true }
-                                    )
+                                    Text(stringResource(R.string.select_all))
+                                    Spacer(Modifier.width(8.dp))
+                                    TextButton(onClick = { tab.visibility = tab.visibility.copy(hiddenSites = siteIds - tab.visibility.hiddenSites) }) { Text(localized("反选", "Invert")) }
+                                }
+                                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                                // Per v0.2.4: one row per site = visibility checkbox + label + color swatch.
+                                // The swatch opens the per-site color picker (overrides siteArgbOverrides).
+                                sites.forEach { site ->
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                                        val visible = site.id !in tab.visibility.hiddenSites
+                                        Checkbox(visible, onCheckedChange = { checked ->
+                                            tab.visibility = tab.visibility.copy(hiddenSites = if (checked) tab.visibility.hiddenSites - site.id else tab.visibility.hiddenSites + site.id)
+                                        })
+                                        Text("${site.label} (${site.element})", modifier = Modifier.weight(1f))
+                                        val argb = PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides)
+                                        Box(
+                                            Modifier.size(22.dp).background(Color(argb), CircleShape).clickable { colorPickerTarget = site.id; colorPickerOpen = true }
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        DisplayTab.BONDS -> {
-                            // Per v0.2.2: only list rules whose two sites still exist (others don't affect rendering).
-                            val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(allBondsVisible, onCheckedChange = { checked ->
-                                    tab.visibility = tab.visibility.copy(
-                                        showBonds = checked,
-                                        hiddenBondPairs = if (checked) emptySet() else visibleRules.map { it.key }.toSet(),
-                                    )
-                                })
-                                Text(stringResource(R.string.select_all))
-                                Spacer(Modifier.width(8.dp))
-                                TextButton(onClick = {
-                                    val allKeys = visibleRules.map { it.key }.toSet()
-                                    tab.visibility = tab.visibility.copy(showBonds = true, hiddenBondPairs = allKeys - tab.visibility.hiddenBondPairs)
-                                }) { Text(localized("反选", "Invert")) }
-                            }
-                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                            if (visibleRules.isEmpty()) {
-                                Text(localized("无化学键规则", "No bond rules"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
-                            } else visibleRules.forEach { rule ->
-                                val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
-                                val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
-                                val label = "$labelA—$labelB"
+                            DisplayTab.BONDS -> {
+                                // Per v0.2.2: only list rules whose two sites still exist (others don't affect rendering).
+                                val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    val visible = tab.visibility.showBonds && rule.key !in tab.visibility.hiddenBondPairs
-                                    Checkbox(visible, onCheckedChange = { checked ->
+                                    Checkbox(allBondsVisible, onCheckedChange = { checked ->
                                         tab.visibility = tab.visibility.copy(
-                                            showBonds = true,
-                                            hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - rule.key else tab.visibility.hiddenBondPairs + rule.key,
+                                            showBonds = checked,
+                                            hiddenBondPairs = if (checked) emptySet() else visibleRules.map { it.key }.toSet(),
                                         )
                                     })
-                                    Text(label)
+                                    Text(stringResource(R.string.select_all))
+                                    Spacer(Modifier.width(8.dp))
+                                    TextButton(onClick = {
+                                        val allKeys = visibleRules.map { it.key }.toSet()
+                                        tab.visibility = tab.visibility.copy(showBonds = true, hiddenBondPairs = allKeys - tab.visibility.hiddenBondPairs)
+                                    }) { Text(localized("反选", "Invert")) }
+                                }
+                                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                                if (visibleRules.isEmpty()) {
+                                    Text(localized("无化学键规则", "No bond rules"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                                } else visibleRules.forEach { rule ->
+                                    val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
+                                    val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
+                                    val label = "$labelA—$labelB"
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                        val visible = tab.visibility.showBonds && rule.key !in tab.visibility.hiddenBondPairs
+                                        Checkbox(visible, onCheckedChange = { checked ->
+                                            tab.visibility = tab.visibility.copy(
+                                                showBonds = true,
+                                                hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - rule.key else tab.visibility.hiddenBondPairs + rule.key,
+                                            )
+                                        })
+                                        Text(label, modifier = Modifier.weight(1f))
+                                        // Per v0.3.0/v0.3.2: per-rule "extend across cell" toggle (persisted on the
+                                        // rule). Cross-cell bonds (minimum-image bonds whose offsetB != 0) render
+                                        // only when this is checked; the bonded neighbour-cell atom image is drawn
+                                        // alongside. Polyhedra always use full coordination regardless of this toggle.
+                                        Text(stringResource(R.string.extend_across_cell), style = MaterialTheme.typography.bodySmall)
+                                        Spacer(Modifier.width(4.dp))
+                                        Checkbox(rule.extendAcrossCell, onCheckedChange = { extend ->
+                                            val updated = rule.copy(extendAcrossCell = extend)
+                                            viewModel.updateStructure(tab, CrystalEditor.apply(tab.structure, EditCommand.SetBondRule(updated)).structure)
+                                        })
+                                    }
                                 }
                             }
-                        }
-                        DisplayTab.POLYHEDRA -> {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(allPolyhedraEnabled, onCheckedChange = { checked ->
-                                    tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) siteIds else emptySet())
-                                })
-                                Text(stringResource(R.string.select_all))
-                                Spacer(Modifier.width(8.dp))
-                                TextButton(onClick = { tab.visibility = tab.visibility.copy(polyhedronSites = siteIds - tab.visibility.polyhedronSites) }) { Text(localized("反选", "Invert")) }
+                            DisplayTab.POLYHEDRA -> {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(allPolyhedraEnabled, onCheckedChange = { checked ->
+                                        tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) siteIds else emptySet())
+                                    })
+                                    Text(stringResource(R.string.select_all))
+                                    Spacer(Modifier.width(8.dp))
+                                    TextButton(onClick = { tab.visibility = tab.visibility.copy(polyhedronSites = siteIds - tab.visibility.polyhedronSites) }) { Text(localized("反选", "Invert")) }
+                                }
+                                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                                sites.forEach { site -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val enabled = site.id in tab.visibility.polyhedronSites
+                                    Checkbox(enabled, onCheckedChange = { checked -> tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) tab.visibility.polyhedronSites + site.id else tab.visibility.polyhedronSites - site.id) })
+                                    Text(site.label)
+                                } }
                             }
-                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                            sites.forEach { site -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                val enabled = site.id in tab.visibility.polyhedronSites
-                                Checkbox(enabled, onCheckedChange = { checked -> tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) tab.visibility.polyhedronSites + site.id else tab.visibility.polyhedronSites - site.id) })
-                                Text(site.label)
-                            } }
                         }
                     }
+                }
+            }
+            if (landscape) {
+                Row(Modifier.fillMaxSize()) {
+                    handle()
+                    Column(Modifier.weight(1f)) { content() }
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    handle()
+                    content()
                 }
             }
         }
@@ -1180,6 +1219,7 @@ private fun MpSearchScreen(
     var fuzzySearch by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<MpSearchResult>?>(null) }
     var searching by remember { mutableStateOf(false) }
+    var downloadingId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     // Full-screen surface so the screen covers the whole viewport (status bar area
     // included via the Scaffold insets already applied above) instead of a padded column.
@@ -1197,17 +1237,17 @@ private fun MpSearchScreen(
                 OutlinedTextField(query, { query = it }, label = { Text(localized("搜索", "Search")) }, modifier = Modifier.weight(1f), singleLine = true)
                 Spacer(Modifier.width(8.dp))
                 Button(onClick = {
-                    if (query.isBlank()) return@Button
+                    if (query.isBlank() || searching) return@Button
                     searching = true
                     results = null
-                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    val result = MaterialsProject.search(context, query, fuzzySearch)
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        searching = false
-                        result.onSuccess { results = it }.onFailure { onMessage(it.message ?: "Search failed") }
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        val result = MaterialsProject.search(context, query, fuzzySearch)
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            searching = false
+                            result.onSuccess { results = it }.onFailure { onMessage(it.message ?: "Search failed") }
+                        }
                     }
-                }
-            }) { Text(localized("搜索", "Search")) }
+                }, enabled = !searching) { Text(localized("搜索", "Search")) }
             }
             // Per v0.2.4: exact match by default; opt-in fuzzy search with `*` wildcards.
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1224,18 +1264,26 @@ private fun MpSearchScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
             )
             Spacer(Modifier.height(12.dp))
+            // Per v0.3.3: snapshot `results` into a local val so the LazyColumn's item lambda never
+            // re-reads a null `results` during a Compose snapshot-apply (which threw NPE on the 2nd
+            // search when `results = null` invalidated the list mid-recomposition).
+            val current = results
             when {
                 searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索中…", "Searching…")) }
-                results == null -> {}
-                results!!.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
+                current == null -> {}
+                current.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                    items(results!!) { item ->
+                    items(current) { item ->
                         Card(
+                            enabled = downloadingId == null,
                             onClick = {
+                                if (downloadingId != null) return@Card
+                                downloadingId = item.materialId
                                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                     val target = File(context.cacheDir, "${item.materialId}.cif")
                                     val result = MaterialsProject.downloadCif(context, item.materialId, target)
                                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        downloadingId = null
                                         result.onSuccess { parsed ->
                                             viewModel.add(parsed, "${item.materialId}.cif", Uri.fromFile(target), isNew = false)
                                             onBack()
@@ -1248,10 +1296,204 @@ private fun MpSearchScreen(
                             Column(Modifier.padding(12.dp)) {
                                 Text(item.materialId, fontWeight = FontWeight.Bold)
                                 Text("${item.formula}  ${item.crystalSystem}  ${item.spaceGroup}  ${item.nsites} sites")
+                                if (downloadingId == item.materialId) {
+                                    Text(localized("下载中…", "Downloading…"), style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodSearchScreen(
+    context: Context,
+    viewModel: KrystalsViewModel,
+    onBack: () -> Unit,
+    onMessage: (String) -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    // Per v0.3.1: COD supports three search modes — formula (default), element, text. Formula is
+    // auto-converted to COD's space-separated form (SiO2 → "Si O2"); element takes a list (Si O);
+    // text matches mineral/chemical names and titles.
+    var mode by remember { mutableStateOf(CrystallographyOpenDatabase.SearchMode.FORMULA) }
+    // Per v0.3.3: element-search cap on the number of distinct elements in returned structures
+    // (COD's nel2 parameter). Range 1..8, default 8 (no effective limit).
+    var maxElements by remember { mutableStateOf(8) }
+    var results by remember { mutableStateOf<List<CodSearchResult>?>(null) }
+    var searching by remember { mutableStateOf(false) }
+    var downloadingId by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
+    ) {
+        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
+                Text(localized("COD 搜索", "COD search"), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(query, { query = it }, label = { Text(localized("搜索", "Search")) }, modifier = Modifier.weight(1f), singleLine = true)
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = {
+                    if (query.isBlank() || searching) return@Button
+                    searching = true
+                    results = null
+                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        val result = CrystallographyOpenDatabase.search(query, mode, if (mode == CrystallographyOpenDatabase.SearchMode.ELEMENT) maxElements else null)
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            searching = false
+                            result.onSuccess { results = it }.onFailure { onMessage(it.message ?: "Search failed") }
+                        }
+                    }
+                }, enabled = !searching) { Text(localized("搜索", "Search")) }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                val formulaLabel = localized("化学式", "Formula")
+                val elementLabel = localized("元素", "Element")
+                val textLabel = localized("文本", "Text")
+                listOf(
+                    CrystallographyOpenDatabase.SearchMode.FORMULA to formulaLabel,
+                    CrystallographyOpenDatabase.SearchMode.ELEMENT to elementLabel,
+                    CrystallographyOpenDatabase.SearchMode.TEXT to textLabel,
+                ).forEach { (m, label) ->
+                    FilterChip(
+                        selected = mode == m,
+                        onClick = { mode = m },
+                        label = { Text(label) },
+                        modifier = Modifier.padding(horizontal = 3.dp),
+                    )
+                }
+            }
+            // Per v0.3.3: element mode exposes a "max element count" cap (COD nel2). Slider + text
+            // field mirror ExpansionCluster's integer-input pattern (range 1..8, default 8).
+            if (mode == CrystallographyOpenDatabase.SearchMode.ELEMENT) {
+                var elementsText by remember(maxElements) { mutableStateOf(maxElements.toString()) }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(localized("最大元素数量", "Max elements"), fontWeight = FontWeight.Medium, modifier = Modifier.padding(end = 8.dp))
+                    OutlinedTextField(
+                        elementsText,
+                        { input -> elementsText = input; input.toIntOrNull()?.let { n -> if (n in 1..8) maxElements = n } },
+                        singleLine = true,
+                        modifier = Modifier.width(64.dp),
+                    )
+                    Slider(
+                        value = maxElements.toFloat(),
+                        onValueChange = { v -> val n = v.toInt().coerceIn(1, 8); maxElements = n; elementsText = n.toString() },
+                        valueRange = 1f..8f,
+                        steps = 6,
+                        modifier = Modifier.weight(1f).padding(start = 8.dp),
+                    )
+                }
+            }
+            Text(
+                localized(
+                    "化学式如 SiO2（自动按 Hill 顺序转为 O2 Si）。元素如 Si O。文本如 quartz，匹配矿物名/化学名/标题。",
+                    "Formula e.g. SiO2 (auto-converted to Hill order: O2 Si). Element e.g. Si O. Text e.g. quartz, matches mineral/chemical names and titles.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+            )
+            Spacer(Modifier.height(12.dp))
+            // Per v0.3.3: snapshot `results` into a local val so the LazyColumn's item lambda never
+            // re-reads a null `results` during a Compose snapshot-apply (which threw NPE on the 2nd
+            // search when `results = null` invalidated the list mid-recomposition).
+            val current = results
+            when {
+                searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索中…", "Searching…")) }
+                current == null -> {}
+                current.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
+                else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                    items(current) { item ->
+                        Card(
+                            enabled = downloadingId == null,
+                            onClick = {
+                                if (downloadingId != null) return@Card
+                                downloadingId = item.fileId
+                                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                    val target = File(context.cacheDir, "cod-${item.fileId}.cif")
+                                    val result = CrystallographyOpenDatabase.downloadCif(item.fileId, target)
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        downloadingId = null
+                                        result.onSuccess { parsed ->
+                                            viewModel.add(parsed, "cod-${item.fileId}.cif", Uri.fromFile(target), isNew = false)
+                                            onBack()
+                                        }.onFailure { onMessage(it.message ?: "Download failed") }
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(item.fileId, fontWeight = FontWeight.Bold)
+                                Text("${item.formula}  ${item.spaceGroup}${if (item.sgNumber.isNotBlank()) " #${item.sgNumber}" else ""}  ${item.name}${if (item.nel > 0) "  ${item.nel} elements" else ""}")
+                                if (downloadingId == item.fileId) {
+                                    Text(localized("下载中…", "Downloading…"), style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OnlineSourcePickerDialog(
+    onDismiss: () -> Unit,
+    onPickCod: () -> Unit,
+    onPickMp: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.import_online)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // Per v0.3.3: the two sources are presented as labelled cards with an icon and a
+                // one-line description, rather than bare text buttons.
+                OnlineSourceCard(
+                    icon = Icons.Default.Science,
+                    title = stringResource(R.string.import_cod),
+                    subtitle = localized("开放晶体学数据库，无需密钥", "Open database, no API key needed"),
+                    onClick = onPickCod,
+                )
+                OnlineSourceCard(
+                    icon = Icons.Default.CloudDownload,
+                    title = stringResource(R.string.materials_project),
+                    subtitle = localized("Materials Project，需 API Key", "Materials Project, requires an API key"),
+                    onClick = onPickMp,
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+@Composable
+private fun OnlineSourceCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+            Column(Modifier.padding(start = 12.dp)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

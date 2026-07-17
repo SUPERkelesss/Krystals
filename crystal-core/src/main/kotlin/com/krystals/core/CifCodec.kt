@@ -215,7 +215,8 @@ object CifCodec {
             val siteB = sites.firstOrNull { it.label == labelB }?.id ?: labelB
             val min = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_min_distance")) ?: return@mapNotNull null
             val max = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_max_distance")) ?: return@mapNotNull null
-            runCatching { BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM) }.getOrNull()
+            val extend = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_extend"))?.let { it >= 0.5 } ?: false
+            runCatching { BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extend) }.getOrNull()
         }
         val vestaRules = if (vestaLoop == null) emptyList() else (0 until vestaLoop.rowCount).mapNotNull { row ->
             val labelA = vestaLoop.firstValue(row, "_vesta_bond_site_a") ?: return@mapNotNull null
@@ -267,11 +268,11 @@ object CifCodec {
             append(" ${quoteIfNeeded(site.label)} ${quoteIfNeeded(site.element)} ${format(site.fractional.x)} ${format(site.fractional.y)} ${format(site.fractional.z)} ${format(site.occupancy)}\n")
         }
         if (rules.isNotEmpty()) {
-            append("loop_\n _krystals_bond_rule_site_a\n _krystals_bond_rule_site_b\n _krystals_bond_rule_min_distance\n _krystals_bond_rule_max_distance\n")
+            append("loop_\n _krystals_bond_rule_site_a\n _krystals_bond_rule_site_b\n _krystals_bond_rule_min_distance\n _krystals_bond_rule_max_distance\n _krystals_bond_rule_extend\n")
             rules.sortedBy { it.key }.forEach { rule ->
                 val labelA = structure.sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
                 val labelB = structure.sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
-                append(" ${quoteIfNeeded(labelA)} ${quoteIfNeeded(labelB)} ${format(rule.minAngstrom)} ${format(rule.maxAngstrom)}\n")
+                append(" ${quoteIfNeeded(labelA)} ${quoteIfNeeded(labelB)} ${format(rule.minAngstrom)} ${format(rule.maxAngstrom)} ${if (rule.extendAcrossCell) 1 else 0}\n")
             }
         }
         if (structure.elementArgbOverrides.isNotEmpty()) {

@@ -10,8 +10,9 @@ class SampleCifTest {
     fun allBundledSamplesParseExpandAndRoundTrip() {
         val directory = sequenceOf(File("../res/cifs_example"), File("res/cifs_example"))
             .firstOrNull { it.isDirectory } ?: error("Sample CIF directory not found")
-        val files = directory.listFiles { file -> file.extension.equals("cif", true) }.orEmpty().sortedBy { it.name }
-        assertTrue(files.size >= 30, "Expected bundled CIF corpus")
+        // Walk recursively — the corpus is organized into category subdirectories.
+        val files = directory.walkTopDown().filter { it.isFile && it.extension.equals("cif", true) }.toList().sortedBy { it.name }
+        assertTrue(files.size >= 30, "Expected bundled CIF corpus, found ${files.size}")
         files.forEach { file ->
             val source = file.readText()
             val document = CifCodec.parse(source)

@@ -87,6 +87,9 @@ data class BondRule(
     val minAngstrom: Double,
     val maxAngstrom: Double,
     val source: BondRuleSource = BondRuleSource.CUSTOM,
+    // Per v0.3.0: when true, bonds of this rule are detected across unit-cell boundaries (between
+    // an atom and its periodic image / a neighbour cell). Default false so only in-cell bonds draw.
+    val extendAcrossCell: Boolean = false,
 ) {
     init {
         require(minAngstrom >= 0.0 && maxAngstrom >= minAngstrom)
@@ -94,7 +97,16 @@ data class BondRule(
     val key: String get() = listOf(siteA, siteB).sorted().joinToString("\u0000")
 }
 
-data class Bond(val atomA: Long, val atomB: Long, val distance: Double, val rule: BondRule)
+data class Bond(
+    val atomA: Long,
+    val atomB: Long,
+    val distance: Double,
+    val rule: BondRule,
+    // Per v0.3.2: B's periodic-image offset relative to A under the minimum-image convention
+    // (e.g. Int3(1,1,1) means B's image in the +1,+1,+1 neighbour cell is the bonded one). Runtime
+    // only — not persisted to CIF (bonds are recomputed from rules on load).
+    val offsetB: Int3 = Int3(0, 0, 0),
+)
 
 data class CrystalStructure(
     val blockName: String,
