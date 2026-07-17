@@ -48,6 +48,54 @@
 
 ---
 
+## 架构
+
+Krystals 采用三模块分层架构，依赖自上而下：`app` → `renderer` → `crystal-core`。`crystal-core` 为纯 JVM 模块（无 Android 依赖），`renderer` 通过 `api` 依赖暴露 core，`app` 同时依赖两者并装配 UI。
+
+```mermaid
+flowchart TB
+    subgraph app["app · Android 应用"]
+        UI["KrystalsApp<br/>Compose UI"]
+        VM["DocumentState<br/>ViewModel / 多标签"]
+        Edit["EditorPanels<br/>结构编辑器"]
+        Repo["FileRepository<br/>CIF 读写 / PNG 导出"]
+        Act["ActivationManager<br/>付费激活"]
+    end
+    subgraph renderer["renderer · 渲染库"]
+        VP["CrystalViewport<br/>Canvas 视口"]
+        Exp["CrystalImageExporter<br/>高清位图导出"]
+    end
+    subgraph core["crystal-core · 纯 JVM 核心"]
+        Codec["CifCodec<br/>无损 CIF 解析/回写"]
+        Engine["CrystalEngine<br/>对称展开 / 成键"]
+        Editor["CrystalEditor<br/>EditCommand 不可变编辑"]
+        SG["SpaceGroupCatalog<br/>230 空间群"]
+    end
+
+    UI --> VP
+    UI --> Edit
+    UI --> VM
+    Repo -->|"parseStructure"| Codec
+    Edit -->|"EditCommand"| Editor
+    Editor --> Engine
+    Engine -->|"buildScene → SceneSnapshot"| VP
+    Engine -->|"buildScene"| Exp
+    Repo -->|"write 回写"| Codec
+    Engine --> SG
+
+    app -.->|依赖| renderer
+    renderer -.->|api 依赖| core
+    app -.->|依赖| core
+```
+
+- **`crystal-core`**：CIF 1.1 多块解析/无损回写、晶体学数学、对称操作展开（230 空间群）、化学键推断、结构编辑命令。
+- **`renderer`**：基于 Compose Canvas 的正交投影视口，支持原子拾取、测量、多面体、PNG 导出。
+- **`app`**：装配 Compose UI、Storage Access Framework 文件读写、多标签状态、编辑器、主题/语言与付费激活。
+
+数据流：CIF 文件 → `CifCodec.parseStructure` 得到 `CrystalStructure` → UI 经 `EditCommand` 修改工作结构 → `CrystalEngine.buildScene` 生成 `SceneSnapshot` → `CrystalViewport` 渲染 / `CrystalImageExporter` 导出 → `CifCodec.write` 将工作结构回写并保留无关内容。
+
+---
+
 ### 构建安装包
 
 所需环境：
