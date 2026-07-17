@@ -302,7 +302,10 @@ fun CrystalViewport(
                     val a = byId[bond.atomA] ?: return@forEach
                     val b = byId[bond.atomB] ?: return@forEach
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
-                    val crossCell = b.atom.isExternalShell
+                    // Per v0.3.43: a bond to a boundary image is drawn by default (it completes the
+                    // visible cell edges/faces); only a bond to a genuine external shell atom is gated
+                    // on extendAcrossCell.
+                    val externalBond = b.atom.isExternalShell
                     // Polyhedron vertex collection is decoupled from bond-line rendering: every bond
                     // (in-cell AND cross-cell) registers its vertices so polyhedra keep full
                     // coordination, with cross-cell vertices extending outside the primary cell.
@@ -312,12 +315,12 @@ fun CrystalViewport(
                     bondAdjacency.getOrPut(b.atom.id) { mutableSetOf() } += a.atom.id
                     // Bond-line rendering: an external-shell bond only draws when its rule opts in via
                     // extendAcrossCell. Boundary-image bonds are drawn by default.
-                    if (crossCell && !bond.rule.extendAcrossCell) return@forEach
+                    if (externalBond && !bond.rule.extendAcrossCell) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(1.5f, 16f)
                     add(BondRenderable(a, b, width))
                     // An external-shell atom sits outside the primary cell, so its ball must be drawn
                     // too (primary/boundary atoms are drawn above).
-                    if (crossCell && b.atom.id in visibleExternalShellAtomIds) {
+                    if (externalBond && b.atom.id in visibleExternalShellAtomIds) {
                         add(AtomRenderable(b, b.atom.id in selectedAtomIds))
                     }
                 }
@@ -538,10 +541,15 @@ private fun polyhedronFaceRenderables(
         val camNormal = rotate(normal, yaw, pitch)
         val screenVerts = faceVerts.map { it.point }
         val faceDepth = faceVerts.map { it.depth }.average()
+        val nearestDepth = faceVerts.minOf { it.depth }
         val vertexIds = faceVerts.map { it.atom.id }
         // Per v0.3.2: always cull back faces (camera looks down -Z).
         if (camNormal.z > 0.0) {
-            result += PolyhedronFaceRenderable(baseColor, screenVerts, vertexIds, faceDepth, camNormal)
+            // Per v0.3.43: sort the face by its NEAREST vertex depth (smallest rotated-Z = closest to
+            // camera). Using the face-centre average let a large face whose centre sat behind a front
+            // atom but whose near edge was in front of it draw on top of that atom. The nearest vertex
+            // guarantees the face only paints over atoms it actually occludes.
+            result += PolyhedronFaceRenderable(baseColor, screenVerts, vertexIds, nearestDepth, camNormal)
         }
         // Per v0.3.41: for flat coordinations, also emit the reversed face so the polygon is visible
         // from the centre-atom side. Rendered after (so it paints over) with lower alpha to look like
@@ -550,7 +558,7 @@ private fun polyhedronFaceRenderables(
             val reversedCamNormal = rotate(normal * -1.0, yaw, pitch)
             if (reversedCamNormal.z > 0.0) {
                 val backColor = baseColor.copy(alpha = (baseColor.alpha * 0.4f).coerceIn(0f, 1f))
-                result += PolyhedronFaceRenderable(backColor, screenVerts.reversed(), vertexIds.reversed(), faceDepth, reversedCamNormal)
+                result += PolyhedronFaceRenderable(backColor, screenVerts.reversed(), vertexIds.reversed(), nearestDepth, reversedCamNormal)
             }
         }
     }

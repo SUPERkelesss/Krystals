@@ -820,7 +820,8 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
     var selected by remember { mutableStateOf(DisplayTab.ATOMS) }
     // Per v0.2.3: resizable panel — drag the handle to change how much of the screen the panel
     // occupies. Portrait: bottom sheet height fraction; landscape: right sheet width fraction.
-    var panelRatio by remember { mutableStateOf(0.30f) }
+    // Per v0.3.43: default area raised to 0.4.
+    var panelRatio by remember { mutableStateOf(0.40f) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
         val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
@@ -906,6 +907,10 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                             DisplayTab.BONDS -> {
                                 // Per v0.2.2: only list rules whose two sites still exist (others don't affect rendering).
                                 val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
+                                val allExtend = visibleRules.isNotEmpty() && visibleRules.all { it.extendAcrossCell }
+                                // Per v0.3.43: display select-all/invert and extend select-all/invert on one
+                                // row, mirroring the ATOMS/POLYHEDRA style (Checkbox + 全选 + 反选), placed
+                                // side by side.
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(allBondsVisible, onCheckedChange = { checked ->
                                         tab.visibility = tab.visibility.copy(
@@ -914,37 +919,28 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                         )
                                     })
                                     Text(stringResource(R.string.select_all))
-                                    Spacer(Modifier.width(8.dp))
+                                    Spacer(Modifier.width(4.dp))
                                     TextButton(onClick = {
                                         val allKeys = visibleRules.map { it.key }.toSet()
                                         tab.visibility = tab.visibility.copy(showBonds = true, hiddenBondPairs = allKeys - tab.visibility.hiddenBondPairs)
                                     }) { Text(localized("反选", "Invert")) }
-                                }
-                                // Per v0.3.42: select-all / invert for the "extend across cell" column,
-                                // so the user can bulk-toggle periodic-image bond visibility.
-                                if (visibleRules.isNotEmpty()) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(stringResource(R.string.extend_across_cell), style = MaterialTheme.typography.bodySmall)
-                                        Spacer(Modifier.width(8.dp))
-                                        val allExtend = visibleRules.all { it.extendAcrossCell }
-                                        val visibleKeys = visibleRules.map { it.key }.toSet()
-                                        TextButton(onClick = {
-                                            val target = !allExtend
+                                    if (visibleRules.isNotEmpty()) {
+                                        Spacer(Modifier.width(12.dp))
+                                        Checkbox(allExtend, onCheckedChange = { checked ->
                                             var working = tab.structure
                                             visibleRules.forEach { rule ->
-                                                if (rule.extendAcrossCell != target && rule.key in visibleKeys) {
-                                                    working = CrystalEditor.apply(working, EditCommand.SetBondRule(rule.copy(extendAcrossCell = target))).structure
+                                                if (rule.extendAcrossCell != checked) {
+                                                    working = CrystalEditor.apply(working, EditCommand.SetBondRule(rule.copy(extendAcrossCell = checked))).structure
                                                 }
                                             }
                                             viewModel.updateStructure(tab, working)
-                                        }) { Text(if (allExtend) localized("全部取消", "Clear all") else stringResource(R.string.select_all)) }
+                                        })
+                                        Text(stringResource(R.string.extend_across_cell), style = MaterialTheme.typography.bodySmall)
                                         Spacer(Modifier.width(4.dp))
                                         TextButton(onClick = {
                                             var working = tab.structure
                                             visibleRules.forEach { rule ->
-                                                if (rule.key in visibleKeys) {
-                                                    working = CrystalEditor.apply(working, EditCommand.SetBondRule(rule.copy(extendAcrossCell = !rule.extendAcrossCell))).structure
-                                                }
+                                                working = CrystalEditor.apply(working, EditCommand.SetBondRule(rule.copy(extendAcrossCell = !rule.extendAcrossCell))).structure
                                             }
                                             viewModel.updateStructure(tab, working)
                                         }) { Text(localized("反选", "Invert")) }

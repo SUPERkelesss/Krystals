@@ -47,7 +47,12 @@ fun convexHullFaces(center: Vec3, points: List<Vec3>): List<List<Vec3>> {
             }
         }
     }
-    if (triangles.isEmpty()) return emptyList()
+    if (triangles.isEmpty()) {
+        // Per v0.3.43: degenerate (fully planar) coordination. Every ligand is coplanar, so no
+        // triangle has all other points strictly on one side — the hull enumerator above returns
+        // nothing. Build the single polygon face directly: order the points around their centroid.
+        return planarPolygonFaces(center, points)
+    }
 
     // 2) Group coplanar triangles into faces and extract the outer boundary of each face. This
     // handles any triangulation of the face — including cases where two triangles of a square share
@@ -134,3 +139,40 @@ fun convexHullFaces(center: Vec3, points: List<Vec3>): List<List<Vec3>> {
     }
     return result
 }
+
+/**
+ * Per v0.3.43: fall-back for a fully planar coordination (every ligand coplanar), where the hull
+ * triangle enumerator finds no supporting triangle. Orders the points CCW around their centroid in
+ * the ligand plane so the renderer can draw the polygon (and its reversed twin for double-sided
+ * rendering). Returns an empty list when the points are degenerate (collinear / < 3).
+ */
+private fun planarPolygonFaces(center: Vec3, points: List<Vec3>): List<List<Vec3>> {
+    if (points.size < 3) return emptyList()
+    val p0 = points[0]
+    // Find three non-collinear points to establish the plane basis.
+    var basisIdx = -1
+    var normal = Vec3.ZERO
+    for (i in 1 until points.size) {
+        val e1 = points[i] - p0
+        if (e1.lengthSquared() < 1e-18) continue
+        for (j in i + 1 until points.size) {
+            val e2 = points[j] - p0
+            val n = e1.cross(e2)
+            if (n.lengthSquared() > 1e-18) { basisIdx = i; normal = n; break }
+        }
+        if (basisIdx >= 0) break
+    }
+    if (basisIdx < 0) return emptyList() // all points collinear
+    val len = normal.length()
+    if (normal.dot(p0 - center) > 0) normal = normal * -1.0 // outward = away from centre
+    val n = normal / len
+    val u = (points[basisIdx] - p0).normalized()
+    val v = n.cross(u).normalized()
+    val centroid = points.reduce { acc, vec -> acc + vec } / points.size.toDouble()
+    val ordered = points.map { vec ->
+        val d = vec - centroid
+        Pair(vec, atan2(d.dot(v), d.dot(u)))
+    }.sortedBy { it.second }.map { it.first }
+    return listOf(ordered)
+}
+

@@ -47,8 +47,54 @@ object CrystalImageExporter {
         override val depth = (a.z + b.z) / 2.0
     }
 
-    private data class PolyhedronPrimitive(val center: Point, val vertices: List<Point>, val adjacency: Map<Long, Set<Long>>) : RenderPrimitive {
-        override val depth = center.z
+    private data class PolyhedronPrimitive(val center: Point, val vertices: List<Point>, val adjacency: Map<Long, Set<Long>>, val depthOverride: Double? = null) : RenderPrimitive {
+        override val depth = depthOverride ?: center.z
+    }
+
+    private data class PolyhedronFacePrimitive(
+        val center: Point,
+        val faceVerts: List<Point>,
+        val normal: Vec3,
+        val alphaScale: Float,
+        override val depth: Double,
+    ) : RenderPrimitive
+
+    private fun drawPolyhedronFacePrimitives(
+        center: Point,
+        vertices: List<Point>,
+        adjacency: Map<Long, Set<Long>>,
+        appearance: ViewerAppearance,
+        elementArgbOverrides: Map<String, Long>,
+        siteArgbOverrides: Map<String, Long>,
+        yaw: Float,
+        pitch: Float,
+    ): List<PolyhedronFacePrimitive> {
+        if (vertices.size < 3) return emptyList()
+        val hullFaces = convexHullFaces(center.cartesian, vertices.map { it.cartesian })
+        val faces = hullFaces.map { poly -> poly.map { p -> vertices.first { it.cartesian == p } } }
+        val allCoplanar = vertices.size >= 3 && run {
+            val v0 = vertices[0].cartesian
+            val n = (vertices[1].cartesian - v0).cross(vertices[2].cartesian - v0)
+            if (n.lengthSquared() < 1e-12) return@run false
+            vertices.drop(3).all { abs(n.dot(it.cartesian - v0)) < 1e-6 }
+        }
+        val result = mutableListOf<PolyhedronFacePrimitive>()
+        faces.forEach { faceVerts ->
+            if (faceVerts.size < 3) return@forEach
+            val va = faceVerts[0]; val vb = faceVerts[1]; val vc = faceVerts[2]
+            val cross = (vb.cartesian - va.cartesian).cross(vc.cartesian - va.cartesian)
+            val toCenter = center.cartesian - va.cartesian
+            var outward = cross
+            if (outward.dot(toCenter) > 0) outward = outward * -1.0
+            val len = outward.length()
+            if (len < 1e-12) return@forEach
+            val normal = outward / len
+            val ordered = if (cross.dot(normal) < 0) faceVerts.reversed() else faceVerts
+            val nearestDepth = ordered.minOf { it.z }
+            result += PolyhedronFacePrimitive(center, ordered, normal, 1.0f, nearestDepth)
+            if (allCoplanar) result += PolyhedronFacePrimitive(center, ordered.reversed(), normal * -1.0, 0.4f, nearestDepth)
+        }
+        return result
     }
 
     fun render(
@@ -117,7 +163,9 @@ object CrystalImageExporter {
                     val a = byId[bond.atomA] ?: return@forEach
                     val b = byId[bond.atomB] ?: return@forEach
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
-                    val crossCell = b.isExternalShell
+                    // Per v0.3.43: a bond to a boundary image draws by default; only a bond to a
+                    // genuine external shell atom is gated on extendAcrossCell.
+                    val externalBond = b.isExternalShell
                     // Polyhedron vertices: every bond registers its vertices (in-cell and cross-cell)
                     // so polyhedra keep full coordination; cross-cell vertices extend outside the cell.
                     neighbors.getOrPut(a.atomId) { mutableListOf() } += b
@@ -126,10 +174,10 @@ object CrystalImageExporter {
                     bondAdjacency.getOrPut(b.atomId) { mutableSetOf() } += a.atomId
                     // Bond-line rendering: an external-shell bond draws only when its rule opts in via
                     // extendAcrossCell. Boundary-image bonds are drawn by default.
-                    if (crossCell && !bond.rule.extendAcrossCell) return@forEach
+                    if (externalBond && !bond.rule.extendAcrossCell) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(1.5f, 16f)
                     add(BondPrimitive(a, b, width))
-                    if (crossCell && b.atomId in visibleExternalShellAtomIds) {
+                    if (externalBond && b.atomId in visibleExternalShellAtomIds) {
                         add(AtomPrimitive(b, b.atomId in selectedAtomIds))
                     }
                 }
@@ -139,7 +187,11 @@ object CrystalImageExporter {
                     (!it.isShell || it.isBoundaryImage) && it.siteId in visibility.polyhedronSites
                 }.forEach { center ->
                     val vertices = neighbors[center.atomId].orEmpty()
-                    if (vertices.size >= 3) add(PolyhedronPrimitive(center, vertices, bondAdjacency))
+                    if (vertices.size >= 3) {
+                        // Per v0.3.43: draw each face as its own primitive sorted by the face's nearest
+                        // vertex depth (see drawPolyhedron), instead of one block at the centre depth.
+                        drawPolyhedronFacePrimitives(center, vertices, bondAdjacency, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.yaw, controller.pitch).forEach { add(it) }
+                    }
                 }
             }
         }.sortedBy { it.depth }
@@ -149,6 +201,7 @@ object CrystalImageExporter {
                 is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, selectedAtomIds, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides)
                 is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites)
                 is PolyhedronPrimitive -> drawPolyhedron(canvas, primitive.center, primitive.vertices, primitive.adjacency, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.yaw, controller.pitch)
+                is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.yaw, controller.pitch)
             }
         }
         // Per v0.3.0: draw locked (persistent) + active measurement/info windows.
@@ -365,6 +418,56 @@ object CrystalImageExporter {
             // Per v0.3.41: for flat coordinations, also emit the reversed face so the polygon is
             // visible from the centre-atom side, drawn translucent (back side).
             if (allCoplanar) emit(ordered.reversed(), normal * -1.0, alphaScale = 0.4f)
+        }
+    }
+
+    private fun drawPolyhedronFacePrimitive(
+        canvas: Canvas,
+        face: PolyhedronFacePrimitive,
+        appearance: ViewerAppearance,
+        elementArgbOverrides: Map<String, Long>,
+        siteArgbOverrides: Map<String, Long>,
+        yaw: Float,
+        pitch: Float,
+    ) {
+        val verts = face.faceVerts
+        if (verts.size < 3) return
+        val baseArgb = PeriodicTable.resolveSiteArgb(face.center.siteId, face.center.element, siteArgbOverrides, elementArgbOverrides).toInt()
+        val baseColor = Color.argb((appearance.polyhedronOpacity.coerceIn(0f, 1f) * 255).toInt(), Color.red(baseArgb), Color.green(baseArgb), Color.blue(baseArgb))
+        val cam = rotate(face.normal, yaw, pitch)
+        if (cam.z <= 0.0) return // back face culled
+        val factor = if (appearance.polyhedronReflectionEnabled) {
+            val azimuth = appearance.lightAzimuth / 180.0 * PI
+            val elevation = appearance.lightElevation / 180.0 * PI
+            val light = Vec3(cos(azimuth) * cos(elevation), sin(azimuth) * cos(elevation), sin(elevation))
+            0.5 + 0.5 * cam.dot(light).coerceIn(0.0, 1.0)
+        } else 1.0
+        var fill = if (appearance.polyhedronReflectionEnabled) Color.argb(
+            Color.alpha(baseColor),
+            (Color.red(baseColor) * factor).toInt().coerceIn(0, 255),
+            (Color.green(baseColor) * factor).toInt().coerceIn(0, 255),
+            (Color.blue(baseColor) * factor).toInt().coerceIn(0, 255),
+        ) else baseColor
+        if (face.alphaScale < 1.0f) {
+            fill = Color.argb((Color.alpha(fill) * face.alphaScale).toInt().coerceIn(0, 255), Color.red(fill), Color.green(fill), Color.blue(fill))
+        }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val path = android.graphics.Path().apply {
+            moveTo(verts[0].x, verts[0].y)
+            for (i in 1 until verts.size) lineTo(verts[i].x, verts[i].y)
+            close()
+        }
+        paint.style = Paint.Style.FILL
+        paint.color = fill
+        canvas.drawPath(path, paint)
+        paint.color = Color.argb((0.35f * 255).toInt(), 255, 255, 255)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 1.2f
+        val drawn = mutableSetOf<List<Long>>()
+        for (i in verts.indices) {
+            val a = verts[i]
+            val b = verts[(i + 1) % verts.size]
+            if (drawn.add(listOf(a.atomId, b.atomId).sorted())) canvas.drawLine(a.x, a.y, b.x, b.y, paint)
         }
     }
 
