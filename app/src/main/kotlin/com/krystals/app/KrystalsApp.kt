@@ -194,15 +194,20 @@ fun KrystalsRoot(
     var sponsorLaunchCount by remember { mutableStateOf(0) }
     var aboutOpen by remember { mutableStateOf(false) }
     // Per v0.2.2: prompt for sponsorship on the 5th, 20th, 50th, and every 50th launch thereafter.
+    // Per v0.4.0: once the device holds a valid activation code the automatic prompt is suppressed.
     LaunchedEffect(Unit) {
         val count = preferences.getInt("launch_count", 0) + 1
         preferences.edit().putInt("launch_count", count).apply()
         val prompt = count == 5 || count == 20 || count == 50 || (count > 50 && count % 50 == 0)
-        if (prompt) { sponsorLaunchCount = count; sponsorOpen = true }
+        if (prompt && !ActivationManager.isActivated(activity)) { sponsorLaunchCount = count; sponsorOpen = true }
     }
     var presetOpen by remember { mutableStateOf(false) }
     var mpSearchOpen by remember { mutableStateOf(false) }
     var mpKeyDialogOpen by remember { mutableStateOf(false) }
+    // Per v0.4.0: activation-code dialog (reached from the sponsor dialog) and the MP "premium
+    // content" gate shown when MP is picked without an active code.
+    var activationOpen by remember { mutableStateOf(false) }
+    var mpPremiumOpen by remember { mutableStateOf(false) }
     // Per v0.3.1: MP and COD imports share an "import from online sources" entry that opens a
     // picker; the picker routes to the COD search screen (no key) or the MP flow (key-gated).
     var onlineSourceOpen by remember { mutableStateOf(false) }
@@ -379,7 +384,7 @@ fun KrystalsRoot(
         onDismiss = { helpOpen = false },
         onConfirm = { helpOpen = false; openUrl("https://www.kelesss.art") },
     )
-    if (sponsorOpen) SponsorDialog(onDismiss = { sponsorOpen = false }, launchCount = sponsorLaunchCount, onSponsor = { openUrl("https://ifdian.net/a/krystals/plan"); sponsorOpen = false })
+    if (sponsorOpen) SponsorDialog(onDismiss = { sponsorOpen = false }, launchCount = sponsorLaunchCount, onSponsor = { openUrl("https://ifdian.net/a/krystals/plan"); sponsorOpen = false }, onAlreadySponsored = { sponsorOpen = false; activationOpen = true })
     if (aboutOpen) AboutScreen(onBack = { aboutOpen = false })
     if (presetOpen) PresetLibraryDialog(
         context = activity,
@@ -395,6 +400,16 @@ fun KrystalsRoot(
         onConfirmed = { mpKeyDialogOpen = false; mpSearchOpen = true },
         onMessage = ::showMessage,
     )
+    if (activationOpen) ActivationDialog(
+        context = activity,
+        onDismiss = { activationOpen = false },
+        onConfirmed = { activationOpen = false },
+        onMessage = ::showMessage,
+    )
+    if (mpPremiumOpen) MpPremiumDialog(
+        onDismiss = { mpPremiumOpen = false },
+        onSponsor = { mpPremiumOpen = false; sponsorOpen = true },
+    )
     if (mpSearchOpen) MpSearchScreen(
         context = activity,
         viewModel = viewModel,
@@ -407,7 +422,13 @@ fun KrystalsRoot(
         onPickCod = { onlineSourceOpen = false; codSearchOpen = true },
         onPickMp = {
             onlineSourceOpen = false
-            if (MaterialsProject.hasKey(activity)) mpSearchOpen = true else mpKeyDialogOpen = true
+            // Per v0.4.0: Materials Project import is sponsor-gated. Without a valid activation
+            // code, show the premium-content dialog instead of the API-key flow.
+            when {
+                !ActivationManager.isActivated(activity) -> mpPremiumOpen = true
+                MaterialsProject.hasKey(activity) -> mpSearchOpen = true
+                else -> mpKeyDialogOpen = true
+            }
         },
     )
     if (codSearchOpen) CodSearchScreen(
@@ -1512,18 +1533,75 @@ private fun HelpDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
 }
 
 @Composable
-private fun SponsorDialog(onDismiss: () -> Unit, launchCount: Int = 0, onSponsor: () -> Unit = {}) {
+private fun SponsorDialog(onDismiss: () -> Unit, launchCount: Int = 0, onSponsor: () -> Unit = {}, onAlreadySponsored: () -> Unit = {}) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.sponsor_title)) },
         text = {
-            Text(
-                if (launchCount > 0) localized("Krystals 已经为您启动了 $launchCount 次啦！如果想要支持开发，请多多赞助作者 kelesss 哦！\n\n支付一点大米让 kelesss 猫猫努力工作的说……", "Krystals has been launched $launchCount times! If you'd like to support development, please sponsor kelesss!\n\nToss a little rice to keep the kelesss kitty working hard…")
-                else localized("支付一点大米让kelesss猫猫努力工作的说……", "Toss a little rice to keep the kelesss kitty working hard…")
-            )
+            Column {
+                Text(
+                    if (launchCount > 0) localized("Krystals 已经为您启动了 $launchCount 次啦！如果想要支持开发，请多多赞助作者 kelesss 哦！\n\n支付一点大米让 kelesss 猫猫努力工作的说……", "Krystals has been launched $launchCount times! If you'd like to support development, please sponsor kelesss!\n\nToss a little rice to keep the kelesss kitty working hard…")
+                    else localized("支付一点大米让kelesss猫猫努力工作的说……", "Toss a little rice to keep the kelesss kitty working hard…")
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(localized("· 赞助后可永久关闭赞助提醒，并可以接入materials project检索。未赞助不影响绝大部分功能的使用。", "· Sponsoring permanently dismisses this prompt and unlocks Materials Project search. Not sponsoring does not affect most features."), style = MaterialTheme.typography.bodySmall)
+            }
         },
         confirmButton = { TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(localized("狠心拒绝", "Maybe later")) } },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onAlreadySponsored) { Text(localized("我已经赞助！", "I've sponsored!")) }
+                TextButton(onClick = onDismiss) { Text(localized("狠心拒绝", "Maybe later")) }
+            }
+        },
+    )
+}
+
+@Composable
+private fun ActivationDialog(
+    context: Context,
+    onDismiss: () -> Unit,
+    onConfirmed: () -> Unit,
+    onMessage: (String) -> Unit,
+) {
+    var code by remember { mutableStateOf(ActivationManager.getActivationCode(context) ?: "") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(localized("输入激活码", "Enter activation code")) },
+        text = {
+            Column {
+                Text(localized("赞助后请输入您收到的 16 位激活码以永久关闭赞助提醒并解锁 Materials Project 检索。", "Enter the 16-char activation code you received after sponsoring to dismiss this prompt permanently and unlock Materials Project search."), style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(code, { code = it.uppercase() }, label = { Text(localized("激活码", "Activation code")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = code.isNotBlank(),
+                onClick = {
+                    if (ActivationManager.activate(context, code)) {
+                        onMessage(localized("激活成功！感谢赞助！", "Activated! Thank you for sponsoring!"))
+                        onConfirmed()
+                    } else {
+                        onMessage(localized("激活码无效", "Invalid activation code"))
+                    }
+                },
+            ) { Text(stringResource(R.string.confirm)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+@Composable
+private fun MpPremiumDialog(onDismiss: () -> Unit, onSponsor: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(localized("高级内容", "Premium content")) },
+        text = {
+            Text(localized("【高级内容！】 materials project中导入晶体需要获取apikey，属于高级内容，使用COD数据库完全可以解决大部分问题。\n · 如果需要使用，请赞助一点点以支持开发！", "【Premium!】 Importing crystals from Materials Project requires an API key and is a premium feature — the COD database handles most needs.\n · To use it, please sponsor a little to support development!"))
+        },
+        confirmButton = { TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(localized("再考虑一下…", "Maybe later…")) } },
     )
 }
 
@@ -1572,6 +1650,8 @@ private fun AboutScreen(onBack: () -> Unit) {
             Text(localized("我自己。", "Myself."), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(32.dp))
             Text(localized("© 2026 made with ♥ by kelesss", "© 2026 made with ♥ by kelesss"), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            Text(localized("软件使用 ChatGPT Codex 和 Kimi Code 辅助构建。", "Built with assistance from ChatGPT Codex and Kimi Code."), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

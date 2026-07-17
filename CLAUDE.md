@@ -26,6 +26,7 @@ Use `gradlew`/`gradlew.bat` from the repository root. The bootstrap script sets 
 | Run Android instrumented tests | `.\gradlew.bat :app:connectedAndroidTest` |
 | Lint | `.\gradlew.bat lint` |
 | Clean | `.\gradlew.bat clean` |
+| Generate paid-module activation codes (1000) | `.\gradlew.bat :app:generateActivationCodes` |
 
 The debug APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 
@@ -57,6 +58,7 @@ The core module contains no Android dependencies.
 - `EditorPanels.kt`: the structure editor with tabs for basic info, atoms, bonds, and supercell expansion. Edits flow through `CrystalEditor.apply` and update the tab's working structure.
 - `FileRepository.kt`: reads/writes text via `ContentResolver` and exports PNGs to `Pictures/Krystals` using `MediaStore`.
 - `Localization.kt`: simple bilingual helper (`localized(zh, en)`) resolved from the current configuration locale.
+- `ActivationManager.kt`: paid-module activation. Verifies a 16-char activation code by computing `sha256(BuildConfig.ACTIVATION_SALT + code)` and checking membership in `BuildConfig.ACTIVATION_HASHES` (a comma-joined list baked in at compile time). Both fields are injected from the gitignored `activation-secrets.gradle.kts`; when that file is absent (clean clone from github) both are empty and `isActivated()` always returns false, so the build still succeeds with paid features locked. The activated code itself is persisted in `SharedPreferences("krystals")` under `activation_code` and re-validated on every launch (a single code is reusable indefinitely). Activation is reached from the sponsor dialog's "I've sponsored!" button; once active it suppresses the automatic sponsor prompt and unlocks the Materials Project search gate (`onPickMp` shows `MpPremiumDialog` instead of the API-key flow when not activated).
 
 ### Data flow
 
