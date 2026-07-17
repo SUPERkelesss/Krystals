@@ -1,7 +1,5 @@
 
 
-[中文版文档](README_cn.md)
-
 # Krystals
 
 <img src="img/banner.png" alt="banner" />
@@ -11,8 +9,10 @@
     View crystals on mobile as conveniently as with VESTA!
     <br />
     <a href="https://github.com/SUPERkelesss/Krystals/releases"> <strong> Download releases </strong> </a> ·
-    <a href="https://github.com/SUPERkelesss/Krystals/issues"> Report a bug </a>
+    <a href="https://github.com/SUPERkelesss/Krystals/issues"> Report a bug </a> · 
+    <a href="README_cn.md"> 中文版文档 </a> 
   </p>
+
 
 
 ---
@@ -50,9 +50,7 @@ The main screen offers four ways to import CIF files:
 
 ---
 
-## Architecture
-
-Krystals adopts a three-module layered architecture, with dependencies flowing top-down: `app` → `renderer` → `crystal-core`. `crystal-core` is a pure JVM module (no Android dependencies); `renderer` exposes core via an `api` dependency; `app` depends on both and assembles the UI.
+## Architecture Graph
 
 ```mermaid
 flowchart TB
@@ -90,12 +88,6 @@ flowchart TB
     app -.->|depends on| core
 ```
 
-- **`crystal-core`**: multi-block CIF 1.1 parsing / lossless write-back, crystallographic math, symmetry-operation expansion (230 space groups), bond inference, structure-editing commands.
-- **`renderer`**: Compose Canvas-based orthographic viewport, supporting atom picking, measurements, polyhedra, and PNG export.
-- **`app`**: assembles the Compose UI, Storage Access Framework file I/O, multi-tab state, editors, theme/language and paid activation.
-
-Data flow: CIF file → `CifCodec.parseStructure` yields a `CrystalStructure` → the UI mutates the working structure via `EditCommand` → `CrystalEngine.buildScene` produces a `SceneSnapshot` → `CrystalViewport` renders it / `CrystalImageExporter` exports it → `CifCodec.write` writes the working structure back while preserving unrelated content.
-
 ---
 
 ### Building the package
@@ -116,7 +108,7 @@ The debug APK is located at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Contributors
 
-None yet… come and be one of them!
+None yet…
 
 ## License
 

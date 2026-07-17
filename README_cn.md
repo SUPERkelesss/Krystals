@@ -48,9 +48,7 @@
 
 ---
 
-## 架构
-
-Krystals 采用三模块分层架构，依赖自上而下：`app` → `renderer` → `crystal-core`。`crystal-core` 为纯 JVM 模块（无 Android 依赖），`renderer` 通过 `api` 依赖暴露 core，`app` 同时依赖两者并装配 UI。
+## 架构图
 
 ```mermaid
 flowchart TB
@@ -87,12 +85,6 @@ flowchart TB
     renderer -.->|api 依赖| core
     app -.->|依赖| core
 ```
-
-- **`crystal-core`**：CIF 1.1 多块解析/无损回写、晶体学数学、对称操作展开（230 空间群）、化学键推断、结构编辑命令。
-- **`renderer`**：基于 Compose Canvas 的正交投影视口，支持原子拾取、测量、多面体、PNG 导出。
-- **`app`**：装配 Compose UI、Storage Access Framework 文件读写、多标签状态、编辑器、主题/语言与付费激活。
-
-数据流：CIF 文件 → `CifCodec.parseStructure` 得到 `CrystalStructure` → UI 经 `EditCommand` 修改工作结构 → `CrystalEngine.buildScene` 生成 `SceneSnapshot` → `CrystalViewport` 渲染 / `CrystalImageExporter` 导出 → `CifCodec.write` 将工作结构回写并保留无关内容。
 
 ---
 

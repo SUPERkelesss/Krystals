@@ -1572,8 +1572,8 @@ private fun SponsorDialog(onDismiss: () -> Unit, launchCount: Int = 0, onSponsor
         text = {
             Column {
                 Text(
-                    if (launchCount > 0) localized("Krystals 已经为您启动了 $launchCount 次啦！如果想要支持开发，请多多赞助作者 kelesss 哦！\n\n支付一点大米让 kelesss 猫猫努力工作的说……", "Krystals has been launched $launchCount times! If you'd like to support development, please sponsor kelesss!\n\nToss a little rice to keep the kelesss kitty working hard…")
-                    else localized("支付一点大米让kelesss猫猫努力工作的说……", "Toss a little rice to keep the kelesss kitty working hard…")
+                    if (launchCount > 0) localized("Krystals 已经为您启动了 $launchCount 次啦！如果想要支持开发，请多多赞助作者 kelesss 哦！\n\n支付一点大米让 kelesss 猫猫努力工作的说……", "Krystals has been launched $launchCount times! If you'd like to support development, please sponsor kelesss!\n\nToss a little money to keep kelesss working hard…")
+                    else localized("支付一点大米让kelesss猫猫努力工作的说……ο(=•ω＜=)ρ⌒☆", "Toss a little money to keep kelesss working hard…")
                 )
                 Spacer(Modifier.height(12.dp))
                 Text(localized("· 赞助后可永久关闭赞助提醒，并可以接入materials project检索。未赞助不影响绝大部分功能的使用。", "· Sponsoring permanently dismisses this prompt and unlocks Materials Project search. Not sponsoring does not affect most features."), style = MaterialTheme.typography.bodySmall)
@@ -1582,7 +1582,7 @@ private fun SponsorDialog(onDismiss: () -> Unit, launchCount: Int = 0, onSponsor
         confirmButton = {
             Row {
                 TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) }
-                TextButton(onClick = onAlreadySponsored) { Text(localized("我已经赞助！", "I've sponsored!")) }
+                TextButton(onClick = onAlreadySponsored) { Text(localized("我已赞助", "I've sponsored!")) }
                 TextButton(onClick = onDismiss) { Text(localized("狠心拒绝", "Maybe later")) }
             }
         },
@@ -1658,7 +1658,7 @@ private fun AboutScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             Text("${stringResource(R.string.version)} ${com.krystals.app.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(24.dp))
-            Text(localized("Krystals 是由 凯楽斯kelesss 和AI辅助开发的一款 Android 平台轻量级晶体结构查看和编辑工具。", "Krystals is a lightweight Android CIF crystal structure viewer and editor, developed by kelesss with AI assistance."), style = MaterialTheme.typography.bodyLarge, textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = MaterialTheme.colorScheme.onBackground)
+            Text(localized("Krystals 是由 凯楽斯kelesss 与 AI辅助开发的一款 Android 平台轻量级晶体结构查看和编辑工具。", "Krystals is a lightweight Android CIF crystal structure viewer and editor, developed by kelesss with AI assistance."), style = MaterialTheme.typography.bodyLarge, textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(24.dp))
             Text(localized("关于作者", "About the author"), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.padding(bottom = 8.dp))
             // Per v0.2.3: links in one horizontal row, separated by " | " (dropped Bilibili live + Zhihu).
