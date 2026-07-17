@@ -1565,6 +1565,10 @@ private fun ActivationDialog(
     onMessage: (String) -> Unit,
 ) {
     var code by remember { mutableStateOf(ActivationManager.getActivationCode(context) ?: "") }
+    // Pre-resolve the bilingual toast strings in the @Composable body; `localized` is itself a
+    // @Composable function, so it cannot be called inside the non-composable onClick lambda.
+    val activationSuccessText = localized("激活成功！感谢赞助！", "Activated! Thank you for sponsoring!")
+    val activationInvalidText = localized("激活码无效", "Invalid activation code")
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(localized("输入激活码", "Enter activation code")) },
@@ -1580,10 +1584,10 @@ private fun ActivationDialog(
                 enabled = code.isNotBlank(),
                 onClick = {
                     if (ActivationManager.activate(context, code)) {
-                        onMessage(localized("激活成功！感谢赞助！", "Activated! Thank you for sponsoring!"))
+                        onMessage(activationSuccessText)
                         onConfirmed()
                     } else {
-                        onMessage(localized("激活码无效", "Invalid activation code"))
+                        onMessage(activationInvalidText)
                     }
                 },
             ) { Text(stringResource(R.string.confirm)) }
