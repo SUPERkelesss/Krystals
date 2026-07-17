@@ -136,7 +136,7 @@ object CrystalImageExporter {
             }
             if (appearance.polyhedronEnabled && visibility.polyhedronSites.isNotEmpty()) {
                 points.filter {
-                    !it.isShell && it.siteId in visibility.polyhedronSites
+                    (!it.isShell || it.isBoundaryImage) && it.siteId in visibility.polyhedronSites
                 }.forEach { center ->
                     val vertices = neighbors[center.atomId].orEmpty()
                     if (vertices.size >= 3) add(PolyhedronPrimitive(center, vertices, bondAdjacency))
@@ -319,9 +319,10 @@ object CrystalImageExporter {
             val va = faceVerts[0]; val vb = faceVerts[1]; val vc = faceVerts[2]
             val cross = (vb.cartesian - va.cartesian).cross(vc.cartesian - va.cartesian)
             val toCenter = center.cartesian - va.cartesian
-            // outward points away from the centre atom.
+            // Per v0.3.42: toCenter points toward the centre atom, so outward (away from centre)
+            // has a NEGATIVE dot with toCenter. Flip only when dot > 0 (was inverted before).
             var outward = cross
-            if (outward.dot(toCenter) < 0) outward = outward * -1.0
+            if (outward.dot(toCenter) > 0) outward = outward * -1.0
             val len = outward.length()
             if (len < 1e-12) return@forEach
             val normal = outward / len
@@ -329,13 +330,17 @@ object CrystalImageExporter {
             // disagrees, reverse the order so the emitted face matches the outward normal.
             val ordered = if (cross.dot(normal) < 0) faceVerts.reversed() else faceVerts
 
-            fun emit(verts: List<Point>, dir: Vec3) {
+            fun emit(verts: List<Point>, dir: Vec3, alphaScale: Float = 1.0f) {
                 val factor = if (appearance.polyhedronReflectionEnabled) faceShade(dir) else {
                     val cam = rotate(dir, yaw, pitch)
                     if (cam.z <= 0.0) -1.0 else 1.0
                 }
                 if (factor < 0) return
-                val fill = if (appearance.polyhedronReflectionEnabled) shade(baseColor, factor) else baseColor
+                val srcFill = if (appearance.polyhedronReflectionEnabled) shade(baseColor, factor) else baseColor
+                val fill = if (alphaScale < 1.0f) Color.argb(
+                    (Color.alpha(srcFill) * alphaScale).toInt().coerceIn(0, 255),
+                    Color.red(srcFill), Color.green(srcFill), Color.blue(srcFill),
+                ) else srcFill
                 val path = android.graphics.Path().apply {
                     moveTo(verts[0].x, verts[0].y)
                     for (i in 1 until verts.size) lineTo(verts[i].x, verts[i].y)
@@ -358,8 +363,8 @@ object CrystalImageExporter {
 
             emit(ordered, normal)
             // Per v0.3.41: for flat coordinations, also emit the reversed face so the polygon is
-            // visible from the centre-atom side.
-            if (allCoplanar) emit(ordered.reversed(), normal * -1.0)
+            // visible from the centre-atom side, drawn translucent (back side).
+            if (allCoplanar) emit(ordered.reversed(), normal * -1.0, alphaScale = 0.4f)
         }
     }
 
