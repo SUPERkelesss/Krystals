@@ -450,22 +450,28 @@ private fun HomeScreen(
     onOnlineSource: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
-        Column(
-            Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 28.dp).verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            AssetImage("main.png", Modifier.size(230.dp), ContentScale.Fit)
-            Text("Krystals", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(28.dp))
-            // Per v0.3.3: order matches the app menu — import local, preset library, online, new.
-            Button(onClick = onOpen, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.FileOpen, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.import_local)) }
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = onOpenPreset, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.Inventory2, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.open_preset_library)) }
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = onOnlineSource, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.Science, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.import_online)) }
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = onNew, modifier = Modifier.fillMaxWidth().height(52.dp)) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.new_file)) }
+        // Per v0.4.3: in landscape the four import buttons span the full (very wide) screen and
+        // look stretched; cap their width to half the screen there. Portrait keeps fillMaxWidth.
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val landscape = maxWidth > maxHeight
+            val buttonWidth = if (landscape) Modifier.fillMaxWidth(0.5f) else Modifier.fillMaxWidth()
+            Column(
+                Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 28.dp).verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                AssetImage("main.png", Modifier.size(230.dp), ContentScale.Fit)
+                Text("Krystals", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(28.dp))
+                // Per v0.3.3: order matches the app menu — import local, preset library, online, new.
+                Button(onClick = onOpen, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.FileOpen, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.import_local)) }
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onOpenPreset, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.Inventory2, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.open_preset_library)) }
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onOnlineSource, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.Science, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.import_online)) }
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onNew, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.new_file)) }
+            }
         }
     }
 }
