@@ -531,20 +531,19 @@ private fun polyhedronFaceRenderables(
         if (len < 1e-12) return@forEach
         val normal = worldNormal / len
         val camNormal = rotate(normal, yaw, pitch)
+        val screenVerts = faceVerts.map { it.point }
+        val faceDepth = faceVerts.map { it.depth }.average()
+        val vertexIds = faceVerts.map { it.atom.id }
         // Per v0.3.2: always cull back faces (camera looks down -Z).
         if (camNormal.z > 0.0) {
-            val screenVerts = faceVerts.map { it.point }
-            val faceDepth = faceVerts.map { it.depth }.average()
-            result += PolyhedronFaceRenderable(baseColor, screenVerts, faceVerts.map { it.atom.id }, faceDepth, camNormal)
+            result += PolyhedronFaceRenderable(baseColor, screenVerts, vertexIds, faceDepth, camNormal)
         }
         // Per v0.3.41: for flat coordinations, also emit the reversed face so the polygon is visible
         // from the centre-atom side.
         if (allCoplanar) {
             val reversedCamNormal = rotate(normal * -1.0, yaw, pitch)
             if (reversedCamNormal.z > 0.0) {
-                val reversedScreenVerts = faceVerts.map { it.point }.reversed()
-                val reversedIds = faceVerts.map { it.atom.id }.reversed()
-                result += PolyhedronFaceRenderable(baseColor, reversedScreenVerts, reversedIds, faceDepth, reversedCamNormal)
+                result += PolyhedronFaceRenderable(baseColor, screenVerts.reversed(), vertexIds.reversed(), faceDepth, reversedCamNormal)
             }
         }
     }
