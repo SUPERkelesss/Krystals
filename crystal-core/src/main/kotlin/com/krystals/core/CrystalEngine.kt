@@ -167,7 +167,15 @@ object CrystalEngine {
                     )
                     val d = distance(a.cartesian, b.cartesian)
                     if (d > 0.0 && d >= rule.minAngstrom && d <= rule.maxAngstrom) {
-                        result += Bond(a.id, b.id, d, rule, Int3(0, 0, 0))
+                        // Per v0.3.43: orient the bond so the shell atom (when exactly one endpoint is a
+                        // shell atom) is atomB. The renderer keys cross-cell visibility on atomB being an
+                        // external shell; boundary-image↔primary bonds stay drawn by default.
+                        val (atomA, atomB) = when {
+                            a.isShell && !b.isShell -> b to a
+                            b.isShell && !a.isShell -> a to b
+                            else -> a to b
+                        }
+                        result += Bond(atomA.id, atomB.id, d, rule, Int3(0, 0, 0))
                     }
                 }
             }
