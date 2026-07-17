@@ -1,7 +1,10 @@
+.claude/
 .todos/
 .gradle/
 .idea/
 local.properties
+CLAUDE.md
+
 # Release signing secrets — never commit.
 keystore.properties
 keystores.properties
@@ -13,6 +16,7 @@ captures/
 .cxx/
 .tooling/
 app/release/
+
 # Activation code secrets — never commit (paid module).
 activation-codes.txt
 activation-secrets.gradle.kts
