@@ -92,6 +92,11 @@ data class ExpandedAtom(
 
 enum class BondRuleSource { CUSTOM, EXPLICIT, AUTO }
 
+// Per v0.4.1: radius source for bond-rule generation. The three values correspond to the first
+// three columns of elements.ini (covalent / van der Waals / ionic). IONIC is the default used by
+// ensureAutoBondRules and the "自动应用半径" (auto-apply radii) button in the bond editor.
+enum class RadiusSource { IONIC, COVALENT, VDW }
+
 data class BondRule(
     val siteA: String,
     val siteB: String,
@@ -238,11 +243,109 @@ object PeriodicTable {
         return match.value.takeIf { it in symbols } ?: "X"
     }
     fun defaultRadius(symbol: String) = (covalentRadius(symbol) * 0.42).coerceIn(0.22, 0.85)
-    fun resolveArgb(symbol: String, overrides: Map<String, Long> = emptyMap()) = overrides[symbol] ?: vestaArgb(symbol)
+
+    // Per v0.4.1: three radius tables sourced from .todos/elements.ini columns 2–4 (covalent / vdW /
+    // ionic, in Å). The auto-apply-radii button cycles between them; the default bond-rule generator
+    // uses IONIC. Elements absent here (D, XX placeholder, and 96+ actinides) fall back to
+    // [covalentRadius]'s default so bond generation never silently drops a pair.
+    private val iniCovalentRadii = mapOf(
+        "H" to 0.46, "He" to 1.22, "Li" to 1.57, "Be" to 1.12, "B" to 0.81, "C" to 0.77,
+        "N" to 0.74, "O" to 0.74, "F" to 0.72, "Ne" to 1.60, "Na" to 1.91, "Mg" to 1.60,
+        "Al" to 1.43, "Si" to 1.18, "P" to 1.10, "S" to 1.04, "Cl" to 0.99, "Ar" to 1.92,
+        "K" to 2.35, "Ca" to 1.97, "Sc" to 1.64, "Ti" to 1.47, "V" to 1.35, "Cr" to 1.29,
+        "Mn" to 1.37, "Fe" to 1.26, "Co" to 1.25, "Ni" to 1.25, "Cu" to 1.28, "Zn" to 1.37,
+        "Ga" to 1.53, "Ge" to 1.22, "As" to 1.21, "Se" to 1.04, "Br" to 1.14, "Kr" to 1.98,
+        "Rb" to 2.50, "Sr" to 2.15, "Y" to 1.82, "Zr" to 1.60, "Nb" to 1.47, "Mo" to 1.40,
+        "Tc" to 1.35, "Ru" to 1.34, "Rh" to 1.34, "Pd" to 1.37, "Ag" to 1.44, "Cd" to 1.52,
+        "In" to 1.67, "Sn" to 1.58, "Sb" to 1.41, "Te" to 1.37, "I" to 1.33, "Xe" to 2.18,
+        "Cs" to 2.72, "Ba" to 2.24, "La" to 1.88, "Ce" to 1.82, "Pr" to 1.82, "Nd" to 1.82,
+        "Pm" to 1.81, "Sm" to 1.81, "Eu" to 2.06, "Gd" to 1.79, "Tb" to 1.77, "Dy" to 1.77,
+        "Ho" to 1.76, "Er" to 1.75, "Tm" to 1.00, "Yb" to 1.94, "Lu" to 1.72, "Hf" to 1.59,
+        "Ta" to 1.47, "W" to 1.41, "Re" to 1.37, "Os" to 1.35, "Ir" to 1.36, "Pt" to 1.39,
+        "Au" to 1.44, "Hg" to 1.55, "Tl" to 1.71, "Pb" to 1.75, "Bi" to 1.82, "Po" to 1.77,
+        "At" to 0.62, "Rn" to 0.80, "Fr" to 1.00, "Ra" to 2.35, "Ac" to 2.03, "Th" to 1.80,
+        "Pa" to 1.63, "U" to 1.56, "Np" to 1.56, "Pu" to 1.64, "Am" to 1.73,
+    )
+    private val vdwRadii = mapOf(
+        "H" to 1.20, "He" to 1.40, "Li" to 1.40, "Be" to 1.40, "B" to 1.40, "C" to 1.70,
+        "N" to 1.55, "O" to 1.52, "F" to 1.47, "Ne" to 1.54, "Na" to 1.54, "Mg" to 1.54,
+        "Al" to 1.54, "Si" to 2.10, "P" to 1.80, "S" to 1.80, "Cl" to 1.75, "Ar" to 1.88,
+        "K" to 1.88, "Ca" to 1.88, "Sc" to 1.88, "Ti" to 1.88, "V" to 1.88, "Cr" to 1.88,
+        "Mn" to 1.88, "Fe" to 1.88, "Co" to 1.88, "Ni" to 1.88, "Cu" to 1.88, "Zn" to 1.88,
+        "Ga" to 1.88, "Ge" to 1.88, "As" to 1.85, "Se" to 1.90, "Br" to 1.85, "Kr" to 2.02,
+        "Rb" to 2.02, "Sr" to 2.02, "Y" to 2.02, "Zr" to 2.02, "Nb" to 2.02, "Mo" to 2.02,
+        "Tc" to 2.02, "Ru" to 2.02, "Rh" to 2.02, "Pd" to 2.02, "Ag" to 2.02, "Cd" to 2.02,
+        "In" to 2.02, "Sn" to 2.02, "Sb" to 2.00, "Te" to 2.06, "I" to 1.98, "Xe" to 2.16,
+        "Cs" to 2.16, "Ba" to 2.16, "La" to 2.16, "Ce" to 2.16, "Pr" to 2.16, "Nd" to 2.16,
+        "Pm" to 2.16, "Sm" to 2.16, "Eu" to 2.16, "Gd" to 2.16, "Tb" to 2.16, "Dy" to 2.16,
+        "Ho" to 2.16, "Er" to 2.16, "Tm" to 2.16, "Yb" to 2.16, "Lu" to 2.16, "Hf" to 2.16,
+        "Ta" to 2.16, "W" to 2.16, "Re" to 2.16, "Os" to 2.16, "Ir" to 2.16, "Pt" to 2.16,
+        "Au" to 2.16, "Hg" to 2.16, "Tl" to 2.16, "Pb" to 2.16, "Bi" to 2.16, "Po" to 2.16,
+        "At" to 2.16, "Rn" to 2.16, "Fr" to 2.16, "Ra" to 2.16, "Ac" to 2.16, "Th" to 2.16,
+        "Pa" to 2.16, "U" to 2.16, "Np" to 2.16, "Pu" to 2.16, "Am" to 2.16,
+    )
+    private val ionicRadii = mapOf(
+        "H" to 0.200, "He" to 1.220, "Li" to 0.590, "Be" to 0.270, "B" to 0.110, "C" to 0.150,
+        "N" to 1.460, "O" to 1.400, "F" to 1.330, "Ne" to 1.600, "Na" to 1.020, "Mg" to 0.720,
+        "Al" to 0.390, "Si" to 0.260, "P" to 0.170, "S" to 1.840, "Cl" to 1.810, "Ar" to 1.920,
+        "K" to 1.510, "Ca" to 1.120, "Sc" to 0.745, "Ti" to 0.605, "V" to 0.580, "Cr" to 0.615,
+        "Mn" to 0.830, "Fe" to 0.780, "Co" to 0.745, "Ni" to 0.690, "Cu" to 0.730, "Zn" to 0.740,
+        "Ga" to 0.620, "Ge" to 0.530, "As" to 0.335, "Se" to 1.980, "Br" to 1.960, "Kr" to 1.980,
+        "Rb" to 1.610, "Sr" to 1.260, "Y" to 1.019, "Zr" to 0.720, "Nb" to 0.640, "Mo" to 0.590,
+        "Tc" to 0.560, "Ru" to 0.620, "Rh" to 0.665, "Pd" to 0.860, "Ag" to 1.150, "Cd" to 0.950,
+        "In" to 0.800, "Sn" to 0.690, "Sb" to 0.760, "Te" to 2.210, "I" to 2.200, "Xe" to 0.480,
+        "Cs" to 1.740, "Ba" to 1.420, "La" to 1.160, "Ce" to 0.970, "Pr" to 1.126, "Nd" to 1.109,
+        "Pm" to 1.093, "Sm" to 1.270, "Eu" to 1.066, "Gd" to 1.053, "Tb" to 1.040, "Dy" to 1.027,
+        "Ho" to 1.015, "Er" to 1.004, "Tm" to 0.994, "Yb" to 0.985, "Lu" to 0.977, "Hf" to 0.710,
+        "Ta" to 0.640, "W" to 0.600, "Re" to 0.530, "Os" to 0.630, "Ir" to 0.625, "Pt" to 0.625,
+        "Au" to 1.370, "Hg" to 1.020, "Tl" to 0.885, "Pb" to 1.190, "Bi" to 1.030, "Po" to 0.940,
+        "At" to 0.620, "Rn" to 0.800, "Fr" to 1.800, "Ra" to 1.480, "Ac" to 1.120, "Th" to 1.050,
+        "Pa" to 0.780, "U" to 0.730, "Np" to 0.750, "Pu" to 0.860, "Am" to 0.975,
+    )
+
+    /** Radius for bond-rule generation under [source]; falls back to [covalentRadius] when the
+     *  element is absent from the chosen elements.ini column (D, XX placeholder, 96+ actinides). */
+    fun radius(symbol: String, source: RadiusSource): Double = when (source) {
+        RadiusSource.IONIC -> ionicRadii[symbol] ?: covalentRadius(symbol)
+        RadiusSource.COVALENT -> iniCovalentRadii[symbol] ?: covalentRadius(symbol)
+        RadiusSource.VDW -> vdwRadii[symbol] ?: covalentRadius(symbol)
+    }
+
+    fun resolveArgb(symbol: String, overrides: Map<String, Long> = emptyMap()) = overrides[symbol] ?: elementArgb(symbol)
     // Per v0.2.3: per-site color override (key = site id), falling back to the element override
     // then the VESTA palette. Same-element sites share a color by default unless individually set.
     fun resolveSiteArgb(siteId: String, element: String, siteOverrides: Map<String, Long> = emptyMap(), elementOverrides: Map<String, Long> = emptyMap()): Long =
-        siteOverrides[siteId] ?: elementOverrides[element] ?: vestaArgb(element)
+        siteOverrides[siteId] ?: elementOverrides[element] ?: elementArgb(element)
+
+    // Per v0.4.1: default element color from elements.ini's last three columns (RGB). Elements not
+    // covered there (D, XX, and 96+ actinides) fall back to the VESTA palette below.
+    private val elementColors = mapOf(
+        "H" to 0xFFFFCCCCL, "He" to 0xFFFCE9CFL, "Li" to 0xFF86E074L, "Be" to 0xFF5FD87BL,
+        "B" to 0xFF20A20FL, "C" to 0xFF814929L, "N" to 0xFFB0BAE6L, "O" to 0xFFFF0300L,
+        "F" to 0xFFB0BAE6L, "Ne" to 0xFFFF38B5L, "Na" to 0xFFFADD3DL, "Mg" to 0xFFFC7C16L,
+        "Al" to 0xFF81B3D6L, "Si" to 0xFF1B3BFAL, "P" to 0xFFC19CC3L, "S" to 0xFFFFFA00L,
+        "Cl" to 0xFF32FC03L, "Ar" to 0xFFCFFEC5L, "K" to 0xFFA122F7L, "Ca" to 0xFF5B96BEL,
+        "Sc" to 0xFFB663ACL, "Ti" to 0xFF78CAFFL, "V" to 0xFFE61A00L, "Cr" to 0xFF00009EL,
+        "Mn" to 0xFFA9099EL, "Fe" to 0xFFB57200L, "Co" to 0xFF0000AFL, "Ni" to 0xFFB8BCBEL,
+        "Cu" to 0xFF2247DDL, "Zn" to 0xFF8F9082L, "Ga" to 0xFF9FE474L, "Ge" to 0xFF7E6FA6L,
+        "As" to 0xFF75D057L, "Se" to 0xFF9AEF10L, "Br" to 0xFF7F3103L, "Kr" to 0xFFFAC1F3L,
+        "Rb" to 0xFFFF0099L, "Sr" to 0xFF00FF27L, "Y" to 0xFF67988EL, "Zr" to 0xFF00FF00L,
+        "Nb" to 0xFF4CB376L, "Mo" to 0xFFB486B0L, "Tc" to 0xFFCDAFCBL, "Ru" to 0xFFCFB8AEL,
+        "Rh" to 0xFFCED2ABL, "Pd" to 0xFFC2C4B9L, "Ag" to 0xFFB8BCBEL, "Cd" to 0xFFF31FDCL,
+        "In" to 0xFFD781BBL, "Sn" to 0xFF9B8FBAL, "Sb" to 0xFFD88350L, "Te" to 0xFFADA252L,
+        "I" to 0xFF8F1F8BL, "Xe" to 0xFF9BA1F8L, "Cs" to 0xFF0FFFB9L, "Ba" to 0xFF1EF02DL,
+        "La" to 0xFF5AC449L, "Ce" to 0xFFD1FD06L, "Pr" to 0xFFFDE206L, "Nd" to 0xFFFC8E07L,
+        "Pm" to 0xFF0000F5L, "Sm" to 0xFFFD067DL, "Eu" to 0xFFFB08D5L, "Gd" to 0xFFC004FFL,
+        "Tb" to 0xFF7104FEL, "Dy" to 0xFF3106FDL, "Ho" to 0xFF0742FBL, "Er" to 0xFF49733BL,
+        "Tm" to 0xFF0000E0L, "Yb" to 0xFF27FDF4L, "Lu" to 0xFF26FDB5L, "Hf" to 0xFFB4B459L,
+        "Ta" to 0xFFB79B56L, "W" to 0xFF8E8A80L, "Re" to 0xFFB3B18EL, "Os" to 0xFFC9B179L,
+        "Ir" to 0xFFC9CF73L, "Pt" to 0xFFCCC6BFL, "Au" to 0xFFFEB338L, "Hg" to 0xFFD3B8CCL,
+        "Tl" to 0xFF96896DL, "Pb" to 0xFF53535BL, "Bi" to 0xFFD230F8L, "Po" to 0xFF0000FFL,
+        "At" to 0xFF0000FFL, "Rn" to 0xFFFFFF00L, "Fr" to 0xFF000000L, "Ra" to 0xFF6EAA59L,
+        "Ac" to 0xFF649E73L, "Th" to 0xFF26FE78L, "Pa" to 0xFF29FB35L, "U" to 0xFF7AA2AAL,
+        "Np" to 0xFF4D4D4DL, "Pu" to 0xFF4D4D4DL, "Am" to 0xFF4D4D4DL,
+    )
+    fun elementArgb(symbol: String): Long = elementColors[symbol] ?: vestaArgb(symbol)
     fun vestaArgb(symbol: String): Long = when (symbol) {
         "H" -> 0xFFF4F4F4; "C" -> 0xFF505050; "N" -> 0xFF3050F8; "O" -> 0xFFFF0D0D
         "F", "Cl" -> 0xFF90E050; "Br" -> 0xFFA62929; "I" -> 0xFF940094; "S" -> 0xFFFFFF30
