@@ -214,9 +214,24 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Uni
         Spacer(Modifier.height(10.dp))
         DropdownField(localized("晶系", "Crystal system"), systemLabels.getValue(system), systems.map { systemLabels.getValue(it) }) { selectedLabel ->
             val selected = systemLabels.entries.first { it.value == selectedLabel }.key
-            system = selected; pointGroup = SpaceGroupCatalog.all.first { it.crystalSystem == selected }.pointGroup
+            // Per v0.3.5: cascading the crystal system resets the point group to that system's first
+            // and applies the first space group of the new (system, point group), so cell/sg stay
+            // consistent instead of leaving the old space group under a new system.
+            system = selected
+            val newPointGroup = SpaceGroupCatalog.all.first { it.crystalSystem == selected }.pointGroup
+            pointGroup = newPointGroup
+            val newSymbol = SpaceGroupCatalog.all.first { it.crystalSystem == selected && it.pointGroup == newPointGroup }.symbol
+            runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetSpaceGroup(newSymbol)).structure }
+                .onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid space group") }
         }
-        DropdownField(localized("点群", "Point group"), pointGroup, points) { pointGroup = it }
+        DropdownField(localized("点群", "Point group"), pointGroup, points) { picked ->
+            // Per v0.3.5: changing the point group applies the first space group of the new point
+            // group so the displayed space group follows the point group selection.
+            pointGroup = picked
+            val newSymbol = SpaceGroupCatalog.all.first { it.crystalSystem == system && it.pointGroup == picked }.symbol
+            runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetSpaceGroup(newSymbol)).structure }
+                .onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid space group") }
+        }
         DropdownField(localized("空间群", "Space group"), tab.structure.spaceGroupName, groups.map { "${it.number}  ${it.symbol}" }) { selection ->
             val symbol = selection.substringAfter("  ")
             runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetSpaceGroup(symbol)).structure }.onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid space group") }

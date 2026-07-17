@@ -106,9 +106,14 @@ object CrystallographyOpenDatabase {
                 splitElements(trimmed).forEachIndexed { i, el ->
                     builder.addQueryParameter("el${i + 1}", el)
                 }
-                // Per v0.3.3: nel2 caps the number of distinct elements in returned structures, so
-                // the user can limit an element search to binaries/ternaries etc. Default 8 (all).
-                builder.addQueryParameter("nel2", maxElements?.coerceIn(1, 8)?.toString() ?: "8")
+                // Per v0.3.5: cap the number of distinct elements in returned structures via COD's
+                // `strictmin`/`strictmax` (SQL: `nel BETWEEN strictmin AND strictmax`). The previous
+                // code used `nel2`, but `nel1`/`nel2` are "NOT these elements" symbol slots, not a
+                // count, so `nel2=N` was silently ignored. strictmin/strictmax is always sent as a
+                // range so maxElements=N means "at most N elements".
+                val max = maxElements?.coerceIn(1, 8) ?: 8
+                builder.addQueryParameter("strictmin", "1")
+                builder.addQueryParameter("strictmax", max.toString())
             }
             SearchMode.TEXT -> builder.addQueryParameter("text", trimmed)
         }

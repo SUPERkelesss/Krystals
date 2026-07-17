@@ -6,6 +6,7 @@ import android.util.Log
 import com.krystals.core.CifCodec
 import com.krystals.core.CrystalEditor
 import com.krystals.core.ParsedStructure
+import com.krystals.core.SymmetryOperation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
@@ -26,6 +27,8 @@ data class MpSearchResult(
 
 object MaterialsProject {
     private const val BASE_HOST = "api.materialsproject.org"
+    private const val LEGACY_CIF_HOST = "legacy.materialsproject.org"
+    private const val LEGACY_CIF_PATH = "rest/v1/materials"
     private const val PREFS_KEY = "mp_api_key"
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -68,6 +71,13 @@ object MaterialsProject {
         .header("Accept", "application/json")
         // The MP gateway rejects requests with OkHttp's default User-Agent (HTTP 403 Forbidden).
         // Send an explicit UA so the request is accepted.
+        .header("User-Agent", "Krystals/${com.krystals.app.BuildConfig.VERSION_NAME} (Android; materialsproject.org)")
+        .build()
+
+    /** Legacy REST request (no API key) for the public CIF endpoint. CDN requires a UA too. */
+    private fun legacyCifRequest(url: HttpUrl): Request = Request.Builder()
+        .url(url)
+        .header("Accept", "application/json, chemical/x-cif, text/plain, */*")
         .header("User-Agent", "Krystals/${com.krystals.app.BuildConfig.VERSION_NAME} (Android; materialsproject.org)")
         .build()
 
@@ -133,51 +143,142 @@ object MaterialsProject {
 
     suspend fun downloadCif(context: Context, materialId: String, target: File): Result<ParsedStructure> = withContext(Dispatchers.IO) {
         val key = getKey(context) ?: return@withContext Result.failure(IllegalStateException("API key not set"))
-        // Fetch the conventional-standard structure + real space group from the summary endpoint.
-        // The new API's `structure` field is the full conventional cell (all symmetry-equivalent
-        // atoms already expanded, e.g. mp-aaaffcsd SiO2 → 48 sites matching nsites), and `symmetry`
-        // carries the real space-group number/symbol. We write the sites verbatim with an identity
-        // symmetry operation (P1 'x,y,z') so CrystalEngine expands 1:1 — no doubling — while the
-        // real space-group label is preserved for display. (The legacy CIF endpoint was abandoned:
-        // it rejects the new letter-format mp-ids with HTTP 400 and, for the old numeric ids it
-        // still accepts, returns a P1-expanded CIF with no real symmetry operations.)
-        val url = summaryUrl("material_ids", materialId, "_fields", "material_id,structure,symmetry")
-        val request = apiRequest(key, url)
         runCatching {
-            client.newCall(request).execute().use { response ->
-                val body = response.body?.string() ?: ""
-                if (!response.isSuccessful) {
-                    Log.w("MP", "downloadCif failed: HTTP ${response.code} id=$materialId body=${body.take(300)}")
-                    error("HTTP ${response.code}: ${body.take(200)}")
-                }
-                val data = JSONObject(body).optJSONArray("data")
-                val item = data?.optJSONObject(0) ?: error("No material found for $materialId")
-                val cif = buildCif(materialId, item)
+            // Per v0.3.5: the next-gen `summary.structure` field is the primitive cell (e.g. NaCl
+            // mp-22862 → 2-atom rhombohedral cell), NOT the conventional cell. Writing it verbatim
+            // with the real space-group label produces a "2-atom Fm-3m" contradiction. The legacy
+            // CIF endpoint returns the conventional standardized cell but only for old numeric
+            // mp-ids; new letter-format ids get HTTP 400 there. So: try legacy first (conventional,
+            // no key needed); on failure fall back to next-gen primitive, written as P1 so the cell
+            // and space group stay self-consistent.
+            val realSpaceGroup = fetchRealSpaceGroup(key, materialId)
+            val parsed = tryLegacyCif(materialId, target)?.let { legacy ->
+                // Legacy returns the full conventional cell with all sites listed and a P1 header.
+                // Restore the real space-group label for display, but keep an EXPLICIT identity op
+                // list so CrystalStructure.effectiveSymmetryOperations does not fall back to the full
+                // op set of the real space group (which would re-expand the already-complete cell).
+                val corrected = legacy.structure.copy(
+                    spaceGroupName = realSpaceGroup?.symbol ?: legacy.structure.spaceGroupName,
+                    spaceGroupNumber = realSpaceGroup?.number ?: legacy.structure.spaceGroupNumber,
+                    symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+                )
+                ensureBondRules(corrected, materialId, "legacy").also { legacy.structure = it }
+                legacy
+            } ?: run {
+                // New letter-format id (or legacy unavailable): use the primitive cell from next-gen,
+                // written as P1 so there is no primitive-cell-vs-Fm-3m-label contradiction.
+                val cif = buildCif(materialId, fetchNextgenStructure(key, materialId), asPrimitiveP1 = true)
                 target.parentFile?.mkdirs()
                 target.writeText(cif, Charsets.UTF_8)
-                val parsed = CifCodec.parseStructure(cif)
-                Log.d("MP", "downloadCif ok: $materialId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroupName}")
-                // A freshly downloaded MP structure has no bond rules, so synthesize them.
-                if (parsed.structure.bondRules.isEmpty()) {
-                    parsed.copy(structure = CrystalEditor.ensureAutoBondRules(parsed.structure).structure)
-                } else parsed
+                val p = CifCodec.parseStructure(cif)
+                ensureBondRules(p.structure, materialId, "primitive").also { p.structure = it }
+                p
             }
+            Log.d("MP", "downloadCif ok: $materialId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroupName}")
+            parsed
         }
     }
 
+    /** Real space-group (number/symbol) reported by next-gen for [materialId], or null on failure. */
+    private fun fetchRealSpaceGroup(key: String, materialId: String): SpaceGroupRef? {
+        val url = summaryUrl("material_ids", materialId, "_fields", "material_id,symmetry")
+        return runCatching {
+            client.newCall(apiRequest(key, url)).execute().use { response ->
+                if (!response.isSuccessful) return@use null
+                val body = response.body?.string().orEmpty()
+                val item = JSONObject(body).optJSONArray("data")?.optJSONObject(0) ?: return@use null
+                val sym = item.optJSONObject("symmetry") ?: return@use null
+                val number = sym.optInt("number", 0).takeIf { it > 0 }
+                val symbol = sym.optString("symbol").takeIf { it.isNotBlank() }
+                if (number != null || symbol != null) SpaceGroupRef(number, symbol) else null
+            }
+        }.onFailure { Log.w("MP", "fetchRealSpaceGroup failed for $materialId", it) }.getOrNull()
+    }
+
+    /** Fetch a next-gen summary item including the primitive `structure`. Throws on HTTP/parse error. */
+    private fun fetchNextgenStructure(key: String, materialId: String): JSONObject {
+        val url = summaryUrl("material_ids", materialId, "_fields", "material_id,structure,symmetry")
+        client.newCall(apiRequest(key, url)).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                Log.w("MP", "fetchNextgenStructure failed: HTTP ${response.code} id=$materialId body=${body.take(300)}")
+                error("HTTP ${response.code}: ${body.take(200)}")
+            }
+            val data = JSONObject(body).optJSONArray("data")
+            return data?.optJSONObject(0) ?: error("No material found for $materialId")
+        }
+    }
+
+    private fun legacyCifUrl(materialId: String): HttpUrl {
+        val builder = HttpUrl.Builder().scheme("https").host(LEGACY_CIF_HOST)
+        LEGACY_CIF_PATH.split("/").filter { it.isNotEmpty() }.forEach { builder.addPathSegment(it) }
+        builder.addPathSegment(materialId)
+        builder.addPathSegment("cif")
+        return builder.build()
+    }
+
     /**
-     * Build a self-contained CIF from a summary-endpoint material object. The sites are written
-     * verbatim (already the full conventional cell) with an identity symmetry operation so the
-     * structure round-trips 1:1 through CrystalEngine; the real space-group number/symbol are
-     * recorded as scalars for display and crystal-system inference.
+     * Try the legacy public CIF endpoint. Returns the parsed conventional cell (written as P1 by
+     * legacy CifWriter, with the real space-group label restored later by the caller) and writes
+     * the CIF to [target], or null if legacy is unavailable for this id (HTTP 4xx/non-CIF). Legacy
+     * serves only old numeric mp-ids; new letter-format ids are rejected here so the caller falls
+     * back to primitive.
      */
-    private fun buildCif(materialId: String, item: JSONObject): String {
+    private fun tryLegacyCif(materialId: String, target: File): ParsedStructure? {
+        val request = legacyCifRequest(legacyCifUrl(materialId))
+        return runCatching {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.d("MP", "legacy CIF unavailable for $materialId: HTTP ${response.code}")
+                    return@use null
+                }
+                val body = response.body?.string().orEmpty()
+                // The legacy endpoint sometimes returns JSON `{"cif": "...", ...}` and sometimes raw
+                // CIF text; accept either. Reject anything that is not a valid CIF.
+                val cifText = runCatching {
+                    val obj = JSONObject(body)
+                    obj.optString("cif").takeIf { it.isNotBlank() } ?: body
+                }.getOrDefault(body)
+                if (!cifText.contains(Regex("(?im)^\\s*data_")) || !cifText.contains("_cell_length_a")) {
+                    Log.d("MP", "legacy CIF for $materialId was not a valid CIF; falling back to primitive")
+                    return@use null
+                }
+                target.parentFile?.mkdirs()
+                target.writeText(cifText, Charsets.UTF_8)
+                CifCodec.parseStructure(cifText)
+            }
+        }.onFailure { Log.w("MP", "tryLegacyCif failed for $materialId", it) }.getOrNull()
+    }
+
+    /** Synthesize bond rules for a freshly downloaded structure (MP CIFs carry none). */
+    private fun ensureBondRules(structure: com.krystals.core.CrystalStructure, materialId: String, how: String): com.krystals.core.CrystalStructure {
+        Log.d("MP", "downloadCif ok ($how): $materialId -> ${structure.sites.size} sites, sg=${structure.spaceGroupName}")
+        return if (structure.bondRules.isEmpty()) {
+            CrystalEditor.ensureAutoBondRules(structure).structure
+        } else structure
+    }
+
+    private data class SpaceGroupRef(val number: Int?, val symbol: String?)
+
+    /**
+     * Build a self-contained CIF from a summary-endpoint material object. Per v0.3.5 the next-gen
+     * `structure` field is the primitive cell, so it must be written as P1 ([asPrimitiveP1]=true)
+     * to keep the cell and space group self-consistent — the real space-group label is NOT applied,
+     * because the primitive coordinates are not in the conventional setting that label implies.
+     * Sites are written verbatim with an identity symmetry operation so CrystalEngine does not
+     * re-expand them.
+     */
+    private fun buildCif(materialId: String, item: JSONObject, asPrimitiveP1: Boolean = false): String {
         val structure = item.optJSONObject("structure") ?: error("Material $materialId has no structure")
         val lattice = structure.optJSONObject("lattice") ?: error("Material $materialId has no lattice")
         val sites = structure.optJSONArray("sites") ?: JSONArray()
         val symmetry = item.optJSONObject("symmetry")
-        val sgNumber = symmetry?.optInt("number", 0)?.takeIf { it > 0 }
-        val sgSymbol = symmetry?.optString("symbol")?.takeIf { it.isNotBlank() } ?: "P1"
+        // When writing the primitive cell as P1, force the label to P1/1 regardless of the real
+        // symmetry so there is no primitive-cell-vs-real-space-group contradiction.
+        val realNumber = symmetry?.optInt("number", 0)?.takeIf { it > 0 }
+        val realSymbol = symmetry?.optString("symbol")?.takeIf { it.isNotBlank() }
+        val sgNumber = if (asPrimitiveP1) 1 else realNumber
+        val sgSymbol = if (asPrimitiveP1) "P1" else (realSymbol ?: "P1")
 
         fun fmt(v: Double): String = "%.8f".format(java.util.Locale.US, v).trimEnd('0').trimEnd('.').ifBlank { "0" }
         val sb = StringBuilder()
@@ -190,8 +291,8 @@ object MaterialsProject {
         sb.append("_cell_angle_alpha   ").append(fmt(lattice.optDouble("alpha"))).append('\n')
         sb.append("_cell_angle_beta   ").append(fmt(lattice.optDouble("beta"))).append('\n')
         sb.append("_cell_angle_gamma   ").append(fmt(lattice.optDouble("gamma"))).append('\n')
-        // Identity operation only: the sites are already the full conventional cell, so no further
-        // symmetry expansion is wanted (a non-identity loop would double the atoms).
+        // Identity operation only: the sites are written verbatim (primitive cell for the fallback
+        // path, already listed in full), so no further symmetry expansion is wanted.
         sb.append("loop_\n _space_group_symop_id\n _space_group_symop_operation_xyz\n  1 'x, y, z'\n")
         sb.append("loop_\n _atom_site_label\n _atom_site_type_symbol\n _atom_site_fract_x\n _atom_site_fract_y\n _atom_site_fract_z\n _atom_site_occupancy\n")
         val labelCount = HashMap<String, Int>()
