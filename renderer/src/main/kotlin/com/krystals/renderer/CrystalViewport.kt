@@ -86,6 +86,10 @@ private data class PolyhedronFaceRenderable(
     val vertexIds: List<Long>,
     val faceDepth: Double,
     val normalCam: Vec3,
+    // Per v0.3.44: when true the face is back-facing and only its outline is drawn (no fill), at
+    // [outlineAlpha], so the polyhedron's back edges are still visible as faint lines.
+    val outlineOnly: Boolean = false,
+    val outlineAlpha: Float = 0.35f,
 ) : Renderable {
     override val depth = faceDepth
 }
@@ -550,6 +554,10 @@ private fun polyhedronFaceRenderables(
             // atom but whose near edge was in front of it draw on top of that atom. The nearest vertex
             // guarantees the face only paints over atoms it actually occludes.
             result += PolyhedronFaceRenderable(baseColor, screenVerts, vertexIds, nearestDepth, camNormal)
+        } else {
+            // Per v0.3.44: back face — emit an outline-only renderable so the polyhedron's back edges
+            // are still visible as faint lines (no fill).
+            result += PolyhedronFaceRenderable(baseColor, screenVerts, vertexIds, nearestDepth, camNormal, outlineOnly = true, outlineAlpha = 0.18f)
         }
         // Per v0.3.41: for flat coordinations, also emit the reversed face so the polygon is visible
         // from the centre-atom side. Rendered after (so it paints over) with lower alpha to look like
@@ -567,34 +575,39 @@ private fun polyhedronFaceRenderables(
 
 private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appearance: ViewerAppearance) {
     if (face.screenVerts.size < 3) return
-    val fill = if (appearance.polyhedronReflectionEnabled) {
-        // Screen-space Lambert: light direction in camera space (matches atom highlight which is
-        // fixed relative to the screen). +Z toward viewer, so faces pointing at the light brighten.
-        val azimuth = appearance.lightAzimuth / 180.0 * PI
-        val elevation = appearance.lightElevation / 180.0 * PI
-        val light = Vec3(cos(azimuth) * cos(elevation), sin(azimuth) * cos(elevation), sin(elevation))
-        val dot = face.normalCam.dot(light).coerceIn(0.0, 1.0) // back faces already culled/handled
-        val factor = 0.5 + 0.5 * dot
-        face.baseColor.copy(
-            red = (face.baseColor.red * factor).toFloat().coerceIn(0f, 1f),
-            green = (face.baseColor.green * factor).toFloat().coerceIn(0f, 1f),
-            blue = (face.baseColor.blue * factor).toFloat().coerceIn(0f, 1f),
-        )
-    } else face.baseColor
-    val path = Path().apply {
-        moveTo(face.screenVerts[0].x, face.screenVerts[0].y)
-        for (i in 1 until face.screenVerts.size) lineTo(face.screenVerts[i].x, face.screenVerts[i].y)
-        close()
+    // Per v0.3.44: back faces are emitted outline-only — skip the fill and just draw the edges at
+    // a lower alpha so the polyhedron's back silhouette is faintly visible.
+    if (!face.outlineOnly) {
+        val fill = if (appearance.polyhedronReflectionEnabled) {
+            // Screen-space Lambert: light direction in camera space (matches atom highlight which is
+            // fixed relative to the screen). +Z toward viewer, so faces pointing at the light brighten.
+            val azimuth = appearance.lightAzimuth / 180.0 * PI
+            val elevation = appearance.lightElevation / 180.0 * PI
+            val light = Vec3(cos(azimuth) * cos(elevation), sin(azimuth) * cos(elevation), sin(elevation))
+            val dot = face.normalCam.dot(light).coerceIn(0.0, 1.0) // back faces already culled/handled
+            val factor = 0.5 + 0.5 * dot
+            face.baseColor.copy(
+                red = (face.baseColor.red * factor).toFloat().coerceIn(0f, 1f),
+                green = (face.baseColor.green * factor).toFloat().coerceIn(0f, 1f),
+                blue = (face.baseColor.blue * factor).toFloat().coerceIn(0f, 1f),
+            )
+        } else face.baseColor
+        val path = Path().apply {
+            moveTo(face.screenVerts[0].x, face.screenVerts[0].y)
+            for (i in 1 until face.screenVerts.size) lineTo(face.screenVerts[i].x, face.screenVerts[i].y)
+            close()
+        }
+        drawPath(path, fill)
     }
-    drawPath(path, fill)
     // Outline polygon edges, deduplicated across adjacent faces via the caller's shared set is not
     // possible here (per-face), so dedupe within the face by sorted endpoint pair.
+    val outlineColor = Color.White.copy(alpha = face.outlineAlpha)
     val drawn = mutableSetOf<List<Long>>()
     for (i in face.screenVerts.indices) {
         val a = face.vertexIds[i]
         val b = face.vertexIds[(i + 1) % face.vertexIds.size]
         if (drawn.add(listOf(a, b).sorted())) {
-            drawLine(Color.White.copy(alpha = 0.35f), face.screenVerts[i], face.screenVerts[(i + 1) % face.screenVerts.size], 1.2f)
+            drawLine(outlineColor, face.screenVerts[i], face.screenVerts[(i + 1) % face.screenVerts.size], 1.2f)
         }
     }
 }

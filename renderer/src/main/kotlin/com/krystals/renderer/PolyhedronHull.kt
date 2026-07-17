@@ -54,47 +54,57 @@ fun convexHullFaces(center: Vec3, points: List<Vec3>): List<List<Vec3>> {
         return planarPolygonFaces(center, points)
     }
 
-    // 2) Group coplanar triangles into faces and extract the outer boundary of each face. This
-    // handles any triangulation of the face — including cases where two triangles of a square share
-    // a diagonal rather than a boundary edge — because the boundary edges are exactly the edges
-    // that belong to only one triangle in the group.
+    // 2) Group coplanar triangles into faces and extract the outer boundary of each face.
+    // Per v0.3.44: the boundary is the 2D convex hull of the group's vertices in the face plane
+    // (extractBoundaryPolygons), so it no longer depends on the triangulation being minimal — a quad
+    // split into 2 triangles OR enumerated as all C(4,3) triangles both yield one ordered quad.
     val used = BooleanArray(triangles.size)
     val coplanarEps = 1e-6
     val result = mutableListOf<List<Vec3>>()
 
     fun extractBoundaryPolygons(group: List<Face>): List<List<Int>> {
-        val edgeCounts = mutableMapOf<List<Int>, Int>()
-        for (tri in group) {
-            val idxs = tri.indices
-            for (e in 0..2) {
-                val key = listOf(idxs[e], idxs[(e + 1) % 3]).sorted()
-                edgeCounts[key] = (edgeCounts[key] ?: 0) + 1
-            }
+        // Per v0.3.44: the previous edge-count logic assumed a *minimal* triangulation (a quad split
+        // into 2 triangles sharing a diagonal). But the enumerator above produces C(n,3) triangles
+        // for n coplanar vertices, so every edge ended up with count 2 and the boundary came back
+        // empty — quadrilateral (and larger) faces silently disappeared.
+        //
+        // Instead, collect every vertex that appears in the group, project into the face plane, and
+        // take the 2D convex hull ordered CCW about the outward normal. Works for any triangulation.
+        val indices = group.flatMap { it.indices }.toSet().sorted()
+        if (indices.size < 3) return emptyList()
+        // Build a 2D basis in the face plane.
+        val p0 = points[indices[0]]
+        var u: Vec3? = null
+        for (i in 1 until indices.size) {
+            val e = points[indices[i]] - p0
+            if (e.lengthSquared() > 1e-18) { u = e.normalized(); break }
         }
-        val boundaryEdges = edgeCounts.filter { it.value == 1 }.keys
-        val adj = mutableMapOf<Int, MutableList<Int>>()
-        for ((a, b) in boundaryEdges) {
-            adj.getOrPut(a) { mutableListOf() } += b
-            adj.getOrPut(b) { mutableListOf() } += a
+        if (u == null) return emptyList()
+        val v = group.first().normal.cross(u).normalized()
+        data class P2(val idx: Int, val x: Double, val y: Double)
+        val pts = indices.map { idx ->
+            val d = points[idx] - p0
+            P2(idx, d.dot(u), d.dot(v))
         }
-        val visited = mutableSetOf<Int>()
-        val polygons = mutableListOf<List<Int>>()
-        for (start in adj.keys.sorted()) {
-            if (start in visited) continue
-            val poly = mutableListOf<Int>()
-            var current = start
-            var prev = -1
-            do {
-                poly += current
-                visited += current
-                val neighbors = adj[current] ?: break
-                val next = neighbors.firstOrNull { it != prev } ?: break
-                prev = current
-                current = next
-            } while (current != start && current in adj)
-            if (poly.size >= 3) polygons += poly
+        // Andrew's monotone-chain 2D convex hull (n <= 8 is trivial). Returns indices CCW.
+        val sorted = pts.sortedWith(compareBy({ it.x }, { it.y }))
+        if (sorted.size < 3) return emptyList()
+        fun cross(o: P2, a: P2, b: P2) = (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+        val lower = mutableListOf<P2>()
+        for (p in sorted) {
+            while (lower.size >= 2 && cross(lower[lower.size - 2], lower[lower.size - 1], p) <= 0) lower.removeAt(lower.size - 1)
+            lower += p
         }
-        return polygons
+        val upper = mutableListOf<P2>()
+        for (p in sorted.asReversed()) {
+            while (upper.size >= 2 && cross(upper[upper.size - 2], upper[upper.size - 1], p) <= 0) upper.removeAt(upper.size - 1)
+            upper += p
+        }
+        val hull = (lower.dropLast(1) + upper.dropLast(1))
+        // The 2D basis (u, v=n×u) is right-handed about the outward normal, so monotone chain's CCW
+        // hull matches the outward-CCW ordering the renderer expects.
+        if (hull.size < 3) return emptyList()
+        return listOf(hull.map { it.idx })
     }
 
     for (t in triangles.indices) {

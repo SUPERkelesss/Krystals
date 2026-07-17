@@ -224,5 +224,35 @@ class CoreTest {
         })
     }
 
+    @Test fun csClBoundaryImageBondsOrientShellAsAtomB() {
+        // Per v0.3.43/v0.3.44: a primary-to-boundary-image bond must keep the shell atom as atomB so
+        // the renderer (which keys cross-cell visibility on atomB) draws boundary-image bonds by
+        // default. With a Cs-Cl rule, every Cs centre (primary or boundary image) bonds to the body-
+        // centred Cl; the bond endpoint that is a shell atom must be atomB.
+        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
+        val structure = CrystalStructure(
+            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
+            listOf(
+                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
+                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
+            ),
+            bondRules = listOf(BondRule("Cs", "Cl", 0.1, 4.0)),
+        )
+        val scene = CrystalEngine.buildScene(structure)
+        val atomById = scene.atoms.associateBy { it.id }
+        // Every bond has at most one shell endpoint, and when it has one that endpoint is atomB.
+        assertTrue(scene.bonds.all { bond ->
+            val a = atomById.getValue(bond.atomA)
+            val b = atomById.getValue(bond.atomB)
+            !(a.isShell && b.isShell) && (!b.isShell || !a.isShell)
+        })
+        // There is at least one primary↔boundary-image bond (the renderer should draw by default).
+        assertTrue(scene.bonds.any { bond ->
+            val a = atomById.getValue(bond.atomA)
+            val b = atomById.getValue(bond.atomB)
+            !a.isShell && b.isBoundaryImage
+        })
+    }
+
     private fun atomById(scene: SceneSnapshot, id: Long): ExpandedAtom = scene.atoms.first { it.id == id }
 }
