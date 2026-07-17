@@ -145,4 +145,82 @@ class CoreTest {
         assertEquals(1, parsed.structure.bondRules.size)
         assertEquals(1.2, parsed.structure.bondRules.single().maxAngstrom, 1e-8)
     }
+
+    @Test fun csClCornerGeneratesBoundaryImages() {
+        // Per v0.3.41: a corner atom (Cs at 0,0,0) in a 1×1×1 expansion should generate boundary
+        // images at the other 7 corners of the unit cube. These are visible by default and can
+        // act as bond centres, so all 8 Cs vertices are rendered.
+        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
+        val structure = CrystalStructure(
+            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
+            listOf(
+                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
+                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
+            ),
+        )
+        val scene = CrystalEngine.buildScene(structure)
+        val csAtoms = scene.atoms.filter { it.siteId == "Cs" }
+        val clAtoms = scene.atoms.filter { it.siteId == "Cl" }
+
+        assertEquals(8, csAtoms.size, "expected 1 primary Cs + 7 boundary-image Cs")
+        assertEquals(1, clAtoms.count { !it.isShell }, "expected exactly one primary Cl")
+        assertEquals(7, scene.atoms.count { it.isBoundaryImage && it.siteId == "Cs" })
+        assertTrue(scene.atoms.none { it.isBoundaryImage && it.siteId == "Cl" })
+
+        // Bonds whose atomB is not an external shell atom are drawn by default. Every Cs centre
+        // (primary or boundary) bonds to the primary Cl, giving 8 visible Cs-Cl bonds.
+        val atomById = scene.atoms.associateBy { it.id }
+        val drawnBonds = scene.bonds.count { bond -> atomById.getValue(bond.atomB).let { !it.isExternalShell } }
+        assertEquals(8, drawnBonds)
+
+        // All 8 Cs atoms (primary + boundary images) participate in at least one bond.
+        assertTrue(csAtoms.all { cs -> scene.bonds.any { it.atomA == cs.id || it.atomB == cs.id } })
+    }
+
+    @Test fun csClExternalShellIsHiddenWithoutExtendAcrossCell() {
+        // Per v0.3.41: external shell atoms are kept for coordination/polyhedra but hidden unless
+        // the bond rule opts in to "extend across cell".
+        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
+        val structure = CrystalStructure(
+            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
+            listOf(
+                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
+                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
+            ),
+            bondRules = listOf(BondRule("Cs", "Cl", 0.1, 4.0)),
+        )
+        val scene = CrystalEngine.buildScene(structure)
+        val externalShell = scene.atoms.filter { it.isExternalShell }
+
+        assertTrue(externalShell.isNotEmpty())
+        assertTrue(externalShell.all { it.siteId == "Cl" })
+        assertTrue(scene.atoms.none { it.isExternalShell && it.isBoundaryImage })
+        // Every external-shell atom is referenced by at least one bond (so it is kept in the
+        // snapshot), but no bond to it is drawn because extendAcrossCell is false.
+        assertTrue(externalShell.all { ex -> scene.bonds.any { it.atomA == ex.id || it.atomB == ex.id } })
+        assertTrue(scene.bonds.none { bond -> atomById(scene, bond.atomB).isExternalShell })
+    }
+
+    @Test fun csClExtendAcrossCellRevealsExternalShell() {
+        // Per v0.3.41: when the bond rule extends across the cell, every external-shell ligand
+        // becomes visible.
+        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
+        val structure = CrystalStructure(
+            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
+            listOf(
+                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
+                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
+            ),
+            bondRules = listOf(BondRule("Cs", "Cl", 0.1, 4.0, extendAcrossCell = true)),
+        )
+        val scene = CrystalEngine.buildScene(structure)
+        val externalShell = scene.atoms.filter { it.isExternalShell }
+
+        assertTrue(externalShell.isNotEmpty())
+        assertTrue(externalShell.all { ex ->
+            scene.bonds.any { bond -> bond.atomB == ex.id && bond.rule.extendAcrossCell }
+        })
+    }
+
+    private fun atomById(scene: SceneSnapshot, id: Long): ExpandedAtom = scene.atoms.first { it.id == id }
 }

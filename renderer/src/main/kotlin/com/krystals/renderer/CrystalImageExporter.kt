@@ -31,7 +31,9 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 object CrystalImageExporter {
-    private data class Point(val atomId: Long, val element: String, val siteId: String, val siteLabel: String, val x: Float, val y: Float, val z: Double, val radius: Float, val occupancy: Double, val fractional: Vec3, val cartesian: Vec3, val cellOffset: Int3, val isShell: Boolean)
+    private data class Point(val atomId: Long, val element: String, val siteId: String, val siteLabel: String, val x: Float, val y: Float, val z: Double, val radius: Float, val occupancy: Double, val fractional: Vec3, val cartesian: Vec3, val cellOffset: Int3, val isShell: Boolean, val isBoundaryImage: Boolean = false) {
+        val isExternalShell: Boolean get() = isShell && !isBoundaryImage
+    }
 
     private sealed interface RenderPrimitive {
         val depth: Double
@@ -66,21 +68,22 @@ object CrystalImageExporter {
         val canvas = Canvas(bitmap)
         canvas.drawColor(appearance.backgroundArgb.toInt())
         if (snapshot.atoms.isEmpty()) return bitmap
-        // Per v0.3.4: shell atoms are hidden by default and only become visible when a cross-cell
-        // bond whose rule opts in to "extend across cell" references them.
-        val visibleShellAtomIds = mutableSetOf<Long>()
+        // Per v0.3.41: boundary images are displayed by default; only external shell atoms remain
+        // hidden unless a bond rule opts in to "extend across cell".
+        val visibleExternalShellAtomIds = mutableSetOf<Long>()
         if (visibility.showBonds) {
             snapshot.bonds.forEach { bond ->
                 if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
                 val b = snapshot.atoms.firstOrNull { it.id == bond.atomB } ?: return@forEach
-                if (b.isShell && bond.rule.extendAcrossCell && b.siteId !in visibility.hiddenSites) {
-                    visibleShellAtomIds += b.id
+                if (b.isExternalShell && bond.rule.extendAcrossCell && b.siteId !in visibility.hiddenSites) {
+                    visibleExternalShellAtomIds += b.id
                 }
             }
         }
         val visible = snapshot.atoms.filter {
             (!it.isShell && it.siteId !in visibility.hiddenSites) ||
-                (it.isShell && it.id in visibleShellAtomIds)
+                (it.isBoundaryImage && it.siteId !in visibility.hiddenSites) ||
+                (it.isExternalShell && it.id in visibleExternalShellAtomIds)
         }
         val center = Vec3(
             (snapshot.atoms.minOf { it.cartesian.x } + snapshot.atoms.maxOf { it.cartesian.x }) / 2,
@@ -100,7 +103,7 @@ object CrystalImageExporter {
         val points = snapshot.atoms.map { atom ->
             val rotated = rotate(atom.cartesian - center, controller.yaw, controller.pitch)
             val (x, y) = screen(rotated)
-            Point(atom.id, atom.element, atom.siteId, atom.siteLabel, x, y, rotated.z, (PeriodicTable.defaultRadius(atom.element).toFloat() * scale).coerceIn(4.5f, 42f), atom.occupancy, atom.fractional, atom.cartesian, atom.cellOffset, atom.isShell)
+            Point(atom.id, atom.element, atom.siteId, atom.siteLabel, x, y, rotated.z, (PeriodicTable.defaultRadius(atom.element).toFloat() * scale).coerceIn(4.5f, 42f), atom.occupancy, atom.fractional, atom.cartesian, atom.cellOffset, atom.isShell, atom.isBoundaryImage)
         }
         val visiblePointIds = visible.map { it.id }.toSet()
         val visiblePoints = points.filter { it.atomId in visiblePointIds }
@@ -114,19 +117,19 @@ object CrystalImageExporter {
                     val a = byId[bond.atomA] ?: return@forEach
                     val b = byId[bond.atomB] ?: return@forEach
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
-                    val crossCell = b.isShell
+                    val crossCell = b.isExternalShell
                     // Polyhedron vertices: every bond registers its vertices (in-cell and cross-cell)
                     // so polyhedra keep full coordination; cross-cell vertices extend outside the cell.
                     neighbors.getOrPut(a.atomId) { mutableListOf() } += b
                     neighbors.getOrPut(b.atomId) { mutableListOf() } += a
                     bondAdjacency.getOrPut(a.atomId) { mutableSetOf() } += b.atomId
                     bondAdjacency.getOrPut(b.atomId) { mutableSetOf() } += a.atomId
-                    // Bond-line rendering: a cross-cell bond draws only when its rule opts in via
-                    // extendAcrossCell. Unchecked => no bond line leaves the primary cell.
+                    // Bond-line rendering: an external-shell bond draws only when its rule opts in via
+                    // extendAcrossCell. Boundary-image bonds are drawn by default.
                     if (crossCell && !bond.rule.extendAcrossCell) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(1.5f, 16f)
                     add(BondPrimitive(a, b, width))
-                    if (crossCell && b.atomId in visibleShellAtomIds) {
+                    if (crossCell && b.atomId in visibleExternalShellAtomIds) {
                         add(AtomPrimitive(b, b.atomId in selectedAtomIds))
                     }
                 }
@@ -219,16 +222,16 @@ object CrystalImageExporter {
         val lightY = sin(azimuth) * cos(elevation)
         val lightOnPerp = (lightX * perpX + lightY * perpY).toDouble()
 
-        val start = Point(0L, a.element, a.siteId, a.siteLabel, startX, startY, a.z, a.radius, a.occupancy, a.fractional, a.cartesian, a.cellOffset, a.isShell)
-        val end = Point(0L, b.element, b.siteId, b.siteLabel, endX, endY, b.z, b.radius, b.occupancy, b.fractional, b.cartesian, b.cellOffset, b.isShell)
+        val start = Point(0L, a.element, a.siteId, a.siteLabel, startX, startY, a.z, a.radius, a.occupancy, a.fractional, a.cartesian, a.cellOffset, a.isShell, a.isBoundaryImage)
+        val end = Point(0L, b.element, b.siteId, b.siteLabel, endX, endY, b.z, b.radius, b.occupancy, b.fractional, b.cartesian, b.cellOffset, b.isShell, b.isBoundaryImage)
         if (appearance.bondColorMode == BondColorMode.UNICOLOR) {
             val base = appearance.uniformBondArgb.toInt()
             drawBondCylinder(canvas, start, end, width, perpX, perpY, lightOnPerp, base, opacity, appearance.bondReflectionEnabled)
         } else {
             val mx = (startX + endX) / 2f
             val my = (startY + endY) / 2f
-            val midA = Point(0L, a.element, a.siteId, a.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, a.occupancy, a.fractional, a.cartesian, a.cellOffset, a.isShell)
-            val midB = Point(0L, b.element, b.siteId, b.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, b.occupancy, b.fractional, b.cartesian, b.cellOffset, b.isShell)
+            val midA = Point(0L, a.element, a.siteId, a.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, a.occupancy, a.fractional, a.cartesian, a.cellOffset, a.isShell, a.isBoundaryImage)
+            val midB = Point(0L, b.element, b.siteId, b.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, b.occupancy, b.fractional, b.cartesian, b.cellOffset, b.isShell, b.isBoundaryImage)
             drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, PeriodicTable.resolveSiteArgb(a.siteId, a.element, siteArgbOverrides, elementArgbOverrides).toInt(), opacity, appearance.bondReflectionEnabled)
             drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, PeriodicTable.resolveSiteArgb(b.siteId, b.element, siteArgbOverrides, elementArgbOverrides).toInt(), opacity, appearance.bondReflectionEnabled)
         }
@@ -275,7 +278,6 @@ object CrystalImageExporter {
         val baseArgb = PeriodicTable.resolveSiteArgb(center.siteId, center.element, siteArgbOverrides, elementArgbOverrides).toInt()
         val baseColor = Color.argb((appearance.polyhedronOpacity.coerceIn(0f, 1f) * 255).toInt(), Color.red(baseArgb), Color.green(baseArgb), Color.blue(baseArgb))
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        val vertexIds = vertices.map { it.atomId }
         // Per v0.3.0: lighting is screen-space — rotate the world outward normal into camera space
         // (same rotate() as atoms) so polyhedron shading tracks the view like atom highlights.
         // Per v0.3.2: back faces are always culled (not just nearly-opaque) so translucent back
@@ -295,101 +297,69 @@ object CrystalImageExporter {
             (Color.blue(base) * factor).toInt().coerceIn(0, 255),
         )
 
-        // Special case: when every ligand is mutually bonded AND coplanar (e.g. a square-planar
-        // AB4 unit), the polyhedron is flat — draw a single n-gon rather than decomposing into
-        // triangles. The coplanar check prevents mutually-bonded non-coplanar ligands such as a
-        // tetrahedron from being collapsed into one incorrect face.
-        val areCoplanar = vertices.size >= 3 && run {
+        // Per v0.3.41: always use convexHullFaces so coplanar ligands produce a single correctly-
+        // ordered polygon (triangle, quad, etc.) instead of the allMutuallyAdjacent shortcut.
+        val hullFaces = convexHullFaces(center.cartesian, vertices.map { it.cartesian })
+        val faces = hullFaces.map { poly -> poly.map { p -> vertices.first { it.cartesian == p } } }
+
+        // For a flat coordination (e.g. trigonal-planar CO3 or square-planar) the polyhedron is a
+        // single polygon. Back-face culling would hide it when viewed from the centre-atom side, so
+        // emit each face twice — once with the outward normal and once with the reversed normal.
+        val allCoplanar = vertices.size >= 3 && run {
             val v0 = vertices[0].cartesian
             val n = (vertices[1].cartesian - v0).cross(vertices[2].cartesian - v0)
             if (n.lengthSquared() < 1e-12) return@run false
             vertices.drop(3).all { abs(n.dot(it.cartesian - v0)) < 1e-6 }
         }
-        val allMutuallyAdjacent = areCoplanar && vertices.size in 3..6 && vertices.indices.all { i ->
-            (vertices.indices - i).all { j -> adjacency[vertexIds[i]]?.contains(vertexIds[j]) == true }
-        }
-        if (allMutuallyAdjacent) {
-            val screenCenterX = vertices.map { it.x }.average().toFloat()
-            val screenCenterY = vertices.map { it.y }.average().toFloat()
-            val ordered = vertices.sortedBy { v -> atan2((v.y - screenCenterY).toDouble(), (v.x - screenCenterX).toDouble()) }
-            val normal = (ordered[1].cartesian - ordered[0].cartesian).cross(ordered[2].cartesian - ordered[0].cartesian)
-            val toCenter = center.cartesian - ordered[0].cartesian
-            val directed = if (normal.dot(toCenter) > 0) ordered.reversed() else ordered
-            var outward = (ordered[1].cartesian - ordered[0].cartesian).cross(ordered[2].cartesian - ordered[0].cartesian)
-            if (outward.dot(toCenter) < 0) outward = outward * -1.0
-            val len = outward.length(); if (len < 1e-12) return
-            val factor = if (appearance.polyhedronReflectionEnabled) faceShade(outward / len) else {
-                // Lighting off: still cull back faces so translucent polyhedra don't paint over
-                // front atoms. Compute the camera-space normal directly.
-                val cam = rotate(outward / len, yaw, pitch)
-                if (cam.z <= 0.0) return else 1.0
-            }
-            if (factor < 0) return // culled
-            val fill = if (appearance.polyhedronReflectionEnabled) shade(baseColor, factor) else baseColor
-            val path = android.graphics.Path().apply {
-                moveTo(directed[0].x, directed[0].y)
-                for (i in 1 until directed.size) lineTo(directed[i].x, directed[i].y)
-                close()
-            }
-            paint.style = Paint.Style.FILL
-            paint.color = fill
-            canvas.drawPath(path, paint)
-            paint.color = Color.argb((0.35f * 255).toInt(), 255, 255, 255)
-            paint.style = Paint.Style.STROKE
-            paint.strokeWidth = 1.2f
-            for (i in directed.indices) {
-                val a = directed[i]
-                val b = directed[(i + 1) % directed.size]
-                canvas.drawLine(a.x, a.y, b.x, b.y, paint)
-            }
-            return
-        }
 
         val drawn = mutableSetOf<List<Long>>()
-        // Per v0.2.3: hull faces are polygonal (coplanar triangles merged).
-        val hullFaces = convexHullFaces(center.cartesian, vertices.map { it.cartesian })
-        val faces = hullFaces.map { poly -> poly.map { p -> vertices.first { it.cartesian == p } } }
-
         paint.style = Paint.Style.FILL
         faces.forEach { faceVerts ->
-            if (faceVerts.isEmpty()) return@forEach
-            val va = faceVerts.first()
-            val vb = faceVerts[1]
-            val vc = faceVerts[(2).coerceAtMost(faceVerts.lastIndex)]
-            val normal = (vb.cartesian - va.cartesian).cross(vc.cartesian - va.cartesian)
+            if (faceVerts.size < 3) return@forEach
+            val va = faceVerts[0]; val vb = faceVerts[1]; val vc = faceVerts[2]
+            val cross = (vb.cartesian - va.cartesian).cross(vc.cartesian - va.cartesian)
             val toCenter = center.cartesian - va.cartesian
-            val ordered = if (normal.dot(toCenter) > 0) faceVerts.reversed() else faceVerts
-            var outward = (vb.cartesian - va.cartesian).cross(vc.cartesian - va.cartesian)
+            // outward points away from the centre atom.
+            var outward = cross
             if (outward.dot(toCenter) < 0) outward = outward * -1.0
             val len = outward.length()
-            val factor = if (appearance.polyhedronReflectionEnabled && len > 1e-12) faceShade(outward / len) else {
-                // Lighting off: still cull back faces so translucent polyhedra don't paint over
-                // front atoms.
-                if (len > 1e-12) {
-                    val cam = rotate(outward / len, yaw, pitch)
-                    if (cam.z <= 0.0) return@forEach else 1.0
-                } else 1.0
+            if (len < 1e-12) return@forEach
+            val normal = outward / len
+            // convexHullFaces orders vertices CCW around the outward normal; if the cross product
+            // disagrees, reverse the order so the emitted face matches the outward normal.
+            val ordered = if (cross.dot(normal) < 0) faceVerts.reversed() else faceVerts
+
+            fun emit(verts: List<Point>, dir: Vec3) {
+                val factor = if (appearance.polyhedronReflectionEnabled) faceShade(dir) else {
+                    val cam = rotate(dir, yaw, pitch)
+                    if (cam.z <= 0.0) -1.0 else 1.0
+                }
+                if (factor < 0) return
+                val fill = if (appearance.polyhedronReflectionEnabled) shade(baseColor, factor) else baseColor
+                val path = android.graphics.Path().apply {
+                    moveTo(verts[0].x, verts[0].y)
+                    for (i in 1 until verts.size) lineTo(verts[i].x, verts[i].y)
+                    close()
+                }
+                paint.style = Paint.Style.FILL
+                paint.color = fill
+                canvas.drawPath(path, paint)
+                paint.color = Color.argb((0.35f * 255).toInt(), 255, 255, 255)
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = 1.2f
+                for (i in verts.indices) {
+                    val a = verts[i]
+                    val b = verts[(i + 1) % verts.size]
+                    val key = listOf(a.atomId, b.atomId).sorted()
+                    if (drawn.add(key)) canvas.drawLine(a.x, a.y, b.x, b.y, paint)
+                }
+                paint.style = Paint.Style.FILL
             }
-            if (factor < 0) return@forEach // back face culled
-            val fill = if (appearance.polyhedronReflectionEnabled) shade(baseColor, factor) else baseColor
-            val path = android.graphics.Path().apply {
-                moveTo(ordered[0].x, ordered[0].y)
-                for (i in 1 until ordered.size) lineTo(ordered[i].x, ordered[i].y)
-                close()
-            }
-            paint.color = fill
-            canvas.drawPath(path, paint)
-            // Outline polygon edges, deduplicated.
-            paint.color = Color.argb((0.35f * 255).toInt(), 255, 255, 255)
-            paint.style = Paint.Style.STROKE
-            paint.strokeWidth = 1.2f
-            for (i in ordered.indices) {
-                val a = ordered[i]
-                val b = ordered[(i + 1) % ordered.size]
-                val key = listOf(a.atomId, b.atomId).sorted()
-                if (drawn.add(key)) canvas.drawLine(a.x, a.y, b.x, b.y, paint)
-            }
-            paint.style = Paint.Style.FILL
+
+            emit(ordered, normal)
+            // Per v0.3.41: for flat coordinations, also emit the reversed face so the polygon is
+            // visible from the centre-atom side.
+            if (allCoplanar) emit(ordered.reversed(), normal * -1.0)
         }
     }
 
@@ -452,8 +422,8 @@ object CrystalImageExporter {
             // 3D cylinder shaft, lit the same way bonds are.
             val shaftEndX = tipX - unitX * headLen
             val shaftEndY = tipY - unitY * headLen
-            val shaftA = Point(0L, "", "", "", origin.x, origin.y, 0.0, 0f, 0.0, Vec3.ZERO, Vec3.ZERO, Int3(0, 0, 0), false)
-            val shaftB = Point(0L, "", "", "", shaftEndX, shaftEndY, 0.0, 0f, 0.0, Vec3.ZERO, Vec3.ZERO, Int3(0, 0, 0), false)
+            val shaftA = Point(0L, "", "", "", origin.x, origin.y, 0.0, 0f, 0.0, Vec3.ZERO, Vec3.ZERO, Int3(0, 0, 0), false, false)
+            val shaftB = Point(0L, "", "", "", shaftEndX, shaftEndY, 0.0, 0f, 0.0, Vec3.ZERO, Vec3.ZERO, Int3(0, 0, 0), false, false)
             drawBondCylinder(canvas, shaftA, shaftB, halfWidth * 2f, perpX, perpY, lightOnPerp, color, 1f, appearance.bondReflectionEnabled)
             // Conical arrowhead with the same lit gradient.
             val baseX = shaftEndX

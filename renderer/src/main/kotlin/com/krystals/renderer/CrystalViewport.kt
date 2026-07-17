@@ -267,24 +267,25 @@ fun CrystalViewport(
         }
         val byId = projected.associateBy { it.atom.id }
 
-        // Per v0.3.4: shell atoms are hidden by default. They become visible only when a cross-cell
-        // bond whose rule opts in to "extend across cell" references them. Determine that set first
-        // so the atom list and pick list match.
-        val visibleShellAtomIds = mutableSetOf<Long>()
+        // Per v0.3.41: boundary images (shell atoms on the primary box faces) are displayed by default
+        // to complete the visible cell; only genuine external shell atoms remain hidden unless a bond
+        // rule opts in to "extend across cell".
+        val visibleExternalShellAtomIds = mutableSetOf<Long>()
         if (visibility.showBonds) {
             snapshot.bonds.forEach { bond ->
                 if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
                 val b = byId[bond.atomB] ?: return@forEach
-                if (b.atom.isShell && bond.rule.extendAcrossCell && b.atom.siteId !in visibility.hiddenSites) {
-                    visibleShellAtomIds += b.atom.id
+                if (b.atom.isExternalShell && bond.rule.extendAcrossCell && b.atom.siteId !in visibility.hiddenSites) {
+                    visibleExternalShellAtomIds += b.atom.id
                 }
             }
         }
-        // Primary atoms are always visible unless hidden by site; shell atoms are visible only when
-        // referenced by an extending cross-cell bond.
+        // Primary atoms and boundary images are always visible unless hidden by site; external shell
+        // atoms are visible only when referenced by an extending cross-cell bond.
         val visibleProjected = projected.filter {
             (!it.atom.isShell && it.atom.siteId !in visibility.hiddenSites) ||
-                (it.atom.isShell && it.atom.id in visibleShellAtomIds)
+                (it.atom.isBoundaryImage && it.atom.siteId !in visibility.hiddenSites) ||
+                (it.atom.isExternalShell && it.atom.id in visibleExternalShellAtomIds)
         }
         if (visibleProjected.isEmpty()) {
             drawEmptyMessage()
@@ -302,7 +303,7 @@ fun CrystalViewport(
                     val a = byId[bond.atomA] ?: return@forEach
                     val b = byId[bond.atomB] ?: return@forEach
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
-                    val crossCell = b.atom.isShell
+                    val crossCell = b.atom.isExternalShell
                     // Polyhedron vertex collection is decoupled from bond-line rendering: every bond
                     // (in-cell AND cross-cell) registers its vertices so polyhedra keep full
                     // coordination, with cross-cell vertices extending outside the primary cell.
@@ -310,15 +311,14 @@ fun CrystalViewport(
                     neighbors.getOrPut(b.atom.id) { mutableListOf() } += a
                     bondAdjacency.getOrPut(a.atom.id) { mutableSetOf() } += b.atom.id
                     bondAdjacency.getOrPut(b.atom.id) { mutableSetOf() } += a.atom.id
-                    // Bond-line rendering: a cross-cell bond only draws when its rule opts in via
-                    // extendAcrossCell. Unchecked => no bond line leaves the primary cell, while the
-                    // polyhedron vertex above is still collected.
+                    // Bond-line rendering: an external-shell bond only draws when its rule opts in via
+                    // extendAcrossCell. Boundary-image bonds are drawn by default.
                     if (crossCell && !bond.rule.extendAcrossCell) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(1.5f, 16f)
                     add(BondRenderable(a, b, width))
-                    // A cross-cell bond's neighbour atom sits outside the primary cell, so its ball
-                    // must be drawn too (primary atoms are drawn above).
-                    if (crossCell && b.atom.id in visibleShellAtomIds) {
+                    // An external-shell atom sits outside the primary cell, so its ball must be drawn
+                    // too (primary/boundary atoms are drawn above).
+                    if (crossCell && b.atom.id in visibleExternalShellAtomIds) {
                         add(AtomRenderable(b, b.atom.id in selectedAtomIds))
                     }
                 }
@@ -501,26 +501,22 @@ private fun polyhedronFaceRenderables(
     pitch: Float,
 ): List<PolyhedronFaceRenderable> {
     if (vertices.size < 3) return emptyList()
-    val vertexIds = vertices.map { it.atom.id }
     val byCartesian = vertices.associateBy { it.atom.cartesian }
 
-    // Flat special case: every ligand mutually bonded AND coplanar (e.g. square-planar AB4) →
-    // single n-gon. The coplanar check is required so mutually-bonded non-coplanar ligands such as
-    // the four vertices of a tetrahedron still produce four triangular faces via convexHullFaces.
-    val areCoplanar = vertices.size >= 3 && run {
+    // Per v0.3.41: always use convexHullFaces so coplanar ligands produce a single correctly-ordered
+    // polygon (triangle, quad, etc.) instead of being handled by the allMutuallyAdjacent shortcut.
+    val hullPolygons: List<List<ProjectedAtom>> =
+        convexHullFaces(center.atom.cartesian, vertices.map { it.atom.cartesian })
+            .mapNotNull { poly -> poly.map { p -> byCartesian[p] ?: return@mapNotNull null } }
+
+    // For a flat coordination (e.g. trigonal-planar CO3 or square-planar) the polyhedron is really a
+    // single polygon. Back-face culling would hide it when viewed from the centre-atom side, so emit
+    // each face twice — once with the outward normal and once with the reversed normal.
+    val allCoplanar = vertices.size >= 3 && run {
         val v0 = vertices[0].atom.cartesian
         val n = (vertices[1].atom.cartesian - v0).cross(vertices[2].atom.cartesian - v0)
         if (n.lengthSquared() < 1e-12) return@run false
         vertices.drop(3).all { abs(n.dot(it.atom.cartesian - v0)) < 1e-6 }
-    }
-    val allMutuallyAdjacent = areCoplanar && vertices.size in 3..6 && vertices.indices.all { i ->
-        (vertices.indices - i).all { j -> adjacency[vertexIds[i]]?.contains(vertexIds[j]) == true }
-    }
-    val hullPolygons: List<List<ProjectedAtom>> = if (allMutuallyAdjacent) {
-        listOf(vertices)
-    } else {
-        convexHullFaces(center.atom.cartesian, vertices.map { it.atom.cartesian })
-            .mapNotNull { poly -> poly.map { p -> byCartesian[p] ?: return@mapNotNull null } }
     }
 
     val result = mutableListOf<PolyhedronFaceRenderable>()
@@ -533,14 +529,24 @@ private fun polyhedronFaceRenderables(
         if (worldNormal.dot(toCenter) < 0) worldNormal = worldNormal * -1.0
         val len = worldNormal.length()
         if (len < 1e-12) return@forEach
-        val camNormal = rotate(worldNormal / len, yaw, pitch)
-        // Per v0.3.2: always cull back faces (camera looks down -Z, so a back face has camNormal.z
-        // <= 0). Previously only nearly-opaque polyhedra culled, which let translucent back faces
-        // paint over front atoms.
-        if (camNormal.z <= 0.0) return@forEach
-        val screenVerts = faceVerts.map { it.point }
-        val faceDepth = faceVerts.map { it.depth }.average()
-        result += PolyhedronFaceRenderable(baseColor, screenVerts, faceVerts.map { it.atom.id }, faceDepth, camNormal)
+        val normal = worldNormal / len
+        val camNormal = rotate(normal, yaw, pitch)
+        // Per v0.3.2: always cull back faces (camera looks down -Z).
+        if (camNormal.z > 0.0) {
+            val screenVerts = faceVerts.map { it.point }
+            val faceDepth = faceVerts.map { it.depth }.average()
+            result += PolyhedronFaceRenderable(baseColor, screenVerts, faceVerts.map { it.atom.id }, faceDepth, camNormal)
+        }
+        // Per v0.3.41: for flat coordinations, also emit the reversed face so the polygon is visible
+        // from the centre-atom side.
+        if (allCoplanar) {
+            val reversedCamNormal = rotate(normal * -1.0, yaw, pitch)
+            if (reversedCamNormal.z > 0.0) {
+                val reversedScreenVerts = faceVerts.map { it.point }.reversed()
+                val reversedIds = faceVerts.map { it.atom.id }.reversed()
+                result += PolyhedronFaceRenderable(baseColor, reversedScreenVerts, reversedIds, faceDepth, reversedCamNormal)
+            }
+        }
     }
     return result
 }

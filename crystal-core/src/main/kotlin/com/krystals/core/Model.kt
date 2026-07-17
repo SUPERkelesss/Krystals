@@ -81,7 +81,14 @@ data class ExpandedAtom(
     // compute cross-cell bonds and complete coordination polyhedra. Shell atoms are hidden unless
     // a bond rule explicitly extends across the cell boundary.
     val isShell: Boolean = false,
-)
+    // Per v0.3.41: true for shell atoms that lie on the face of the primary expansion region.
+    // Boundary images are displayed by default (they complete the visible unit-cell edges/faces),
+    // whereas external shell atoms remain hidden unless extendAcrossCell is set.
+    val isBoundaryImage: Boolean = false,
+) {
+    /** True for shell atoms that are not boundary images, i.e. genuine external neighbours. */
+    val isExternalShell: Boolean get() = isShell && !isBoundaryImage
+}
 
 enum class BondRuleSource { CUSTOM, EXPLICIT, AUTO }
 
