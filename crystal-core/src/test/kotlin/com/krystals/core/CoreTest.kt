@@ -52,21 +52,25 @@ class CoreTest {
         assertEquals(90.0, angleDegrees(Vec3(1.0, 0.0, 0.0), Vec3.ZERO, Vec3(0.0, 1.0, 0.0)), 1e-8)
     }
 
-    @Test fun originAtomIsShownAtAllEightCellCorners() {
+    @Test fun originAtomGeneratesPrimaryAndShellCells() {
+        // Per v0.3.4: a single atom at the origin is placed in the primary cell, and the 26
+        // surrounding neighbour cells are considered during bonding. Shell atoms that do not bond
+        // to any primary atom are discarded to keep the snapshot small.
         val structure = CrystalStructure(
             "corners", UnitCell.DEFAULT, "P1", 1, listOf(SymmetryOperation.IDENTITY),
             listOf(AtomSite("origin", "A1", "C", Vec3.ZERO)),
         )
         val scene = CrystalEngine.buildScene(structure)
-        assertEquals(8, scene.atoms.size)
-        assertEquals(8, scene.atoms.map { it.fractional }.toSet().size)
+        assertEquals(1, scene.atoms.size)
+        assertEquals(1, scene.atoms.count { !it.isShell })
+        assertEquals(0, scene.atoms.count { it.isShell })
     }
 
-    @Test fun minimumImageBondsCrossCellCorners() {
-        // Per v0.3.2: a corner bond (0,0,0)-(0.75,0.75,0.75) is closest through a periodic image of
-        // the second atom, not the in-cell vector. inferBonds must find it via the minimum-image
-        // convention: B(0.75,0.75,0.75) shifted by (-1,-1,-1) → (-0.25,-0.25,-0.25), distance
-        // sqrt(3)*0.25 ≈ 0.433 from A(0,0,0). offsetB records the shift applied to B.
+    @Test fun crossCellBondsUseShellAtoms() {
+        // Per v0.3.4: a corner bond (0,0,0)-(0.75,0.75,0.75) is found by materialising B's image
+        // in the (-1,-1,-1) shell cell, not via a minimum-image offset. The in-cell distance
+        // sqrt(3)*0.75 ≈ 1.299 > 0.9 is ignored; the shell-atom distance sqrt(3)*0.25 ≈ 0.433 < 0.9
+        // produces a bond whose atomB is the shell image and whose offsetB is zero.
         val structure = CrystalStructure(
             "corner", UnitCell.DEFAULT, "P1", 1, listOf(SymmetryOperation.IDENTITY),
             listOf(
@@ -76,12 +80,12 @@ class CoreTest {
             bondRules = listOf(BondRule("a", "b", 0.1, 0.9)),
         )
         val scene = CrystalEngine.buildScene(structure)
-        // In-cell distance sqrt(3)*0.75 ≈ 1.299 > 0.9 → not bonded; minimum-image distance
-        // sqrt(3)*0.25 ≈ 0.433 < 0.9 → bonded via B's (-1,-1,-1) image.
         assertEquals(1, scene.bonds.size)
         val bond = scene.bonds.single()
-        assertEquals(Int3(-1, -1, -1), bond.offsetB)
+        assertEquals(Int3(0, 0, 0), bond.offsetB)
         assertEquals(0.433, bond.distance, 0.01)
+        val bAtom = scene.atoms.first { it.id == bond.atomB }
+        assertTrue(bAtom.isShell)
     }
 
     @Test fun catalogContainsAllSpaceGroups() {

@@ -883,10 +883,11 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                             )
                                         })
                                         Text(label, modifier = Modifier.weight(1f))
-                                        // Per v0.3.0/v0.3.2: per-rule "extend across cell" toggle (persisted on the
-                                        // rule). Cross-cell bonds (minimum-image bonds whose offsetB != 0) render
-                                        // only when this is checked; the bonded neighbour-cell atom image is drawn
-                                        // alongside. Polyhedra always use full coordination regardless of this toggle.
+                                        // Per v0.3.4: per-rule "extend across cell" toggle (persisted on the
+                                        // rule). Cross-cell bonds (bonds to a shell atom in a neighbour cell)
+                                        // render only when this is checked; the bonded neighbour-cell atom is
+                                        // drawn alongside. Polyhedra always use full coordination regardless of
+                                        // this toggle.
                                         Text(stringResource(R.string.extend_across_cell), style = MaterialTheme.typography.bodySmall)
                                         Spacer(Modifier.width(4.dp))
                                         Checkbox(rule.extendAcrossCell, onCheckedChange = { extend ->

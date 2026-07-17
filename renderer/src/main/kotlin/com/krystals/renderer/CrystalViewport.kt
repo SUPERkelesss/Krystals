@@ -34,7 +34,6 @@ import com.krystals.core.LineStyle
 import com.krystals.core.PeriodicTable
 import com.krystals.core.SceneSnapshot
 import com.krystals.core.UnitCell
-import com.krystals.core.Int3
 import com.krystals.core.Vec3
 import com.krystals.core.ViewerAppearance
 import com.krystals.core.angleDegrees
@@ -244,7 +243,6 @@ fun CrystalViewport(
             return@Canvas
         }
 
-        val visibleAtoms = snapshot.atoms.filterNot { it.siteId in visibility.hiddenSites }
         val center = boundingCenter(snapshot.atoms.map { it.cartesian })
         // Per v0.3.0: project ALL atoms (not just visible) so bonds/polyhedra survive hiding an
         // atom — the bond endpoint / polyhedron vertex lookup (byId) needs the hidden atoms too.
@@ -267,39 +265,34 @@ fun CrystalViewport(
             val radius = (PeriodicTable.defaultRadius(atom.element).toFloat() * scale).coerceIn(4.5f, 42f)
             ProjectedAtom(atom, project(v), v.z, radius)
         }
-        // Only visible atoms are rendered / pickable; bonds and polyhedra still see the full set.
-        val visibleProjected = projected.filter { it.atom.siteId !in visibility.hiddenSites }
+        val byId = projected.associateBy { it.atom.id }
+
+        // Per v0.3.4: shell atoms are hidden by default. They become visible only when a cross-cell
+        // bond whose rule opts in to "extend across cell" references them. Determine that set first
+        // so the atom list and pick list match.
+        val visibleShellAtomIds = mutableSetOf<Long>()
+        if (visibility.showBonds) {
+            snapshot.bonds.forEach { bond ->
+                if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
+                val b = byId[bond.atomB] ?: return@forEach
+                if (b.atom.isShell && bond.rule.extendAcrossCell && b.atom.siteId !in visibility.hiddenSites) {
+                    visibleShellAtomIds += b.atom.id
+                }
+            }
+        }
+        // Primary atoms are always visible unless hidden by site; shell atoms are visible only when
+        // referenced by an extending cross-cell bond.
+        val visibleProjected = projected.filter {
+            (!it.atom.isShell && it.atom.siteId !in visibility.hiddenSites) ||
+                (it.atom.isShell && it.atom.id in visibleShellAtomIds)
+        }
         if (visibleProjected.isEmpty()) {
             drawEmptyMessage()
             controller.projectedAtoms = emptyList()
         } else {
             controller.projectedAtoms = visibleProjected
         }
-        val byId = projected.associateBy { it.atom.id }
-        // Per v0.3.2: lattice vectors for offsetting a bonded atom's image across cell boundaries
-        // (minimum-image bonds). Used to project a neighbour-cell image of an atom for cross-cell
-        // bonds and polyhedron vertices that lie outside the primary cell.
-        val cell = snapshot.structure.cell
-        val la = cell.matrix.a
-        val lb = cell.matrix.b
-        val lc = cell.matrix.c
-        fun offsetVec(offset: Int3) = la * offset.x.toDouble() + lb * offset.y.toDouble() + lc * offset.z.toDouble()
-        // Project a periodic image of an existing atom (same id/element/radius, projected at its
-        // translated position). Cached by (atomId, offset) so repeated cross-cell bonds to the same
-        // neighbour image share one ProjectedAtom.
-        val imageCache = HashMap<Pair<Long, Int3>, ProjectedAtom>()
-        fun imageOf(base: ProjectedAtom, offset: Int3): ProjectedAtom {
-            if (offset.x == 0 && offset.y == 0 && offset.z == 0) return base
-            return imageCache.getOrPut(base.atom.id to offset) {
-                // Copy the atom with its translated cartesian so convex-hull / normal computation
-                // in polyhedronFaceRenderables (which reads atom.cartesian) uses the image position,
-                // not the in-cell one. id/siteId are unchanged (adjacency is by site).
-                val translated = base.atom.cartesian + offsetVec(offset)
-                val imgAtom = base.atom.copy(cartesian = translated)
-                val v = rotate(translated - center, controller.yaw, controller.pitch)
-                ProjectedAtom(imgAtom, project(v), v.z, base.radius)
-            }
-        }
+
         val neighbors = mutableMapOf<Long, MutableList<ProjectedAtom>>()
         val bondAdjacency = mutableMapOf<Long, MutableSet<Long>>()
         val renderables = buildList<Renderable> {
@@ -307,31 +300,25 @@ fun CrystalViewport(
             if (visibility.showBonds) {
                 snapshot.bonds.forEach { bond ->
                     val a = byId[bond.atomA] ?: return@forEach
-                    val bBase = byId[bond.atomB] ?: return@forEach
+                    val b = byId[bond.atomB] ?: return@forEach
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
-                    val crossCell = bond.offsetB.x != 0 || bond.offsetB.y != 0 || bond.offsetB.z != 0
-                    // B's bonded image under the minimum-image convention (nearest periodic image).
-                    val b = imageOf(bBase, bond.offsetB)
-                    // A's bonded image from B's perspective: the same physical bond viewed from B
-                    // uses A's image in the negated offset cell, so a polyhedron centred on B also
-                    // gets A's correct (possibly cross-cell) vertex.
-                    val aFromB = if (crossCell) imageOf(a, Int3(-bond.offsetB.x, -bond.offsetB.y, -bond.offsetB.z)) else a
+                    val crossCell = b.atom.isShell
                     // Polyhedron vertex collection is decoupled from bond-line rendering: every bond
                     // (in-cell AND cross-cell) registers its vertices so polyhedra keep full
                     // coordination, with cross-cell vertices extending outside the primary cell.
                     neighbors.getOrPut(a.atom.id) { mutableListOf() } += b
-                    neighbors.getOrPut(bBase.atom.id) { mutableListOf() } += aFromB
-                    bondAdjacency.getOrPut(a.atom.id) { mutableSetOf() } += bBase.atom.id
-                    bondAdjacency.getOrPut(bBase.atom.id) { mutableSetOf() } += a.atom.id
-                    // Bond-line rendering: a cross-cell bond (offsetB != 0) only draws when its rule
-                    // opts in via extendAcrossCell. Unchecked => no bond line leaves the primary
-                    // cell, while the polyhedron vertex above is still collected.
+                    neighbors.getOrPut(b.atom.id) { mutableListOf() } += a
+                    bondAdjacency.getOrPut(a.atom.id) { mutableSetOf() } += b.atom.id
+                    bondAdjacency.getOrPut(b.atom.id) { mutableSetOf() } += a.atom.id
+                    // Bond-line rendering: a cross-cell bond only draws when its rule opts in via
+                    // extendAcrossCell. Unchecked => no bond line leaves the primary cell, while the
+                    // polyhedron vertex above is still collected.
                     if (crossCell && !bond.rule.extendAcrossCell) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(1.5f, 16f)
                     add(BondRenderable(a, b, width))
-                    // A cross-cell bond's neighbour image sits outside the primary cell, so its atom
-                    // ball must be drawn too (only in-cell visible atoms are drawn above).
-                    if (crossCell && bBase.atom.siteId !in visibility.hiddenSites) {
+                    // A cross-cell bond's neighbour atom sits outside the primary cell, so its ball
+                    // must be drawn too (primary atoms are drawn above).
+                    if (crossCell && b.atom.id in visibleShellAtomIds) {
                         add(AtomRenderable(b, b.atom.id in selectedAtomIds))
                     }
                 }
@@ -340,10 +327,7 @@ fun CrystalViewport(
                 // Polyhedra use the full (unfiltered) neighbor set so hiding a bond or a ligand atom
                 // does not dissolve the polyhedron — visibility is decoupled per the v0.3.0 fix.
                 projected.filter {
-                    it.atom.siteId in visibility.polyhedronSites &&
-                        // Per v0.3.2: only in-cell atoms are polyhedron centres; boundary image atoms
-                        // (same site, cellOffset != 0) would otherwise draw the same polyhedron again.
-                        it.atom.cellOffset.x == 0 && it.atom.cellOffset.y == 0 && it.atom.cellOffset.z == 0
+                    !it.atom.isShell && it.atom.siteId in visibility.polyhedronSites
                 }.forEach { center ->
                     val vertices = neighbors[center.atom.id].orEmpty()
                     if (vertices.size >= 3) {
@@ -384,7 +368,7 @@ fun CrystalViewport(
             drawAtomInfo(projected, inspectedAtomId, false, appearance)?.let { infoBounds += Triple(it, false, inspectedAtomId) }
         }
         atomInfoBoundsList = infoBounds
-        controller.projectedAtoms = projected
+        controller.projectedAtoms = visibleProjected
     }
 }
 
@@ -520,8 +504,16 @@ private fun polyhedronFaceRenderables(
     val vertexIds = vertices.map { it.atom.id }
     val byCartesian = vertices.associateBy { it.atom.cartesian }
 
-    // Flat special case: every ligand mutually bonded (e.g. square-planar AB4) → single n-gon.
-    val allMutuallyAdjacent = vertices.size in 3..6 && vertices.indices.all { i ->
+    // Flat special case: every ligand mutually bonded AND coplanar (e.g. square-planar AB4) →
+    // single n-gon. The coplanar check is required so mutually-bonded non-coplanar ligands such as
+    // the four vertices of a tetrahedron still produce four triangular faces via convexHullFaces.
+    val areCoplanar = vertices.size >= 3 && run {
+        val v0 = vertices[0].atom.cartesian
+        val n = (vertices[1].atom.cartesian - v0).cross(vertices[2].atom.cartesian - v0)
+        if (n.lengthSquared() < 1e-12) return@run false
+        vertices.drop(3).all { abs(n.dot(it.atom.cartesian - v0)) < 1e-6 }
+    }
+    val allMutuallyAdjacent = areCoplanar && vertices.size in 3..6 && vertices.indices.all { i ->
         (vertices.indices - i).all { j -> adjacency[vertexIds[i]]?.contains(vertexIds[j]) == true }
     }
     val hullPolygons: List<List<ProjectedAtom>> = if (allMutuallyAdjacent) {

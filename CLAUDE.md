@@ -37,15 +37,15 @@ The core module contains no Android dependencies.
 
 - **Geometry** (`Geometry.kt`): `Vec3`, `Int3`, `Mat3` (stored by columns to match lattice-vector notation), and `UnitCell` with conversions between fractional and Cartesian coordinates.
 - **CIF codec** (`CifCodec.kt`): parses multi-block CIF 1.1 files into `CifDocument`/`CifBlock`/`CifLoop`/`CifPair`, preserves comments and non-structural items, and writes back by surgically replacing only the structural tags (`_cell_*`, `_atom_site_*`, `_space_group_*`, `_symmetry_equiv_pos_*`, `_krystals_bond_rule_*`). Use `CifCodec.parseStructure` to get a `ParsedStructure`, which carries both the original document and the derived `CrystalStructure`.
-- **Model** (`Model.kt`): `CrystalStructure`, `AtomSite`, `ExpandedAtom`, `BondRule`, `Bond`, `Expansion`, `ViewerAppearance`, and `SceneSnapshot`.
-- **Engine** (`CrystalEngine.kt`): expands the asymmetric unit via symmetry operations, builds supercells, infers bonds (custom rules first, then covalent-radius fallback with a spatial hash), and computes crystal info such as density and Hill-ordered composition. `MAX_RENDERED_ATOMS` is 100,000.
+- **Model** (`Model.kt`): `CrystalStructure`, `AtomSite`, `ExpandedAtom` (now with `isShell` to mark neighbour-cell images), `BondRule`, `Bond`, `Expansion`, `ViewerAppearance`, and `SceneSnapshot`.
+- **Engine** (`CrystalEngine.kt`): expands the asymmetric unit via symmetry operations, builds supercells, infers bonds, and computes crystal info such as density and Hill-ordered composition. Per v0.3.4 it materialises a one-cell-thick shell of neighbour cells around the primary expansion region; bonds are computed from every primary atom to atoms in its 3×3×3 neighbouring cells using real Cartesian distances (no minimum-image offsets). Shell atoms that do not participate in any bond are discarded before the `SceneSnapshot` is returned. `MAX_RENDERED_ATOMS` is 100,000.
 - **Editor** (`CrystalEditor.kt`): applies immutable `EditCommand` values to a `CrystalStructure`. Commands cover cell/space-group changes, atom add/update/delete, bond rules, and 3x3 integer transformation matrices.
 - **Space groups** (`SpaceGroupCatalog.kt`): catalogs all 230 space-group symbols and derives crystal system/point group. Only `P1` and `P-1` symmetry operations are actually implemented in `operations()`; adding a new space group requires both the catalog entry and its operation strings.
 - **Expression parser** (`ExpressionParser.kt`): small arithmetic evaluator used for fractional coordinates and cell parameters in the UI.
 
 ### `renderer`
 
-- `CrystalViewport.kt`: a `@Composable` that draws the scene to a Compose `Canvas`. It owns a `ViewerController` for yaw/pitch/zoom/pan and supports atom picking, measurements (length/angle/dihedral), cell frames, polyhedra, and per-site visibility. Rendering is painter-order based on projected depth.
+- `CrystalViewport.kt`: a `@Composable` that draws the scene to a Compose `Canvas`. It owns a `ViewerController` for yaw/pitch/zoom/pan and supports atom picking, measurements (length/angle/dihedral), cell frames, polyhedra, and per-site visibility. Shell atoms are hidden by default; they are rendered only when a cross-cell bond's rule has `extendAcrossCell = true`. Polyhedra are always built from the full coordination environment (including shell atoms) so boundary coordination is complete. Rendering is painter-order based on projected depth.
 - `CrystalImageExporter.kt`: produces a high-resolution `Bitmap` using the same projection logic as the viewport, useful for PNG export.
 - `FilamentRuntime.kt`: a minimal availability check for Filament 1.71.5; the actual rendering is currently Canvas-based.
 
