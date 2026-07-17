@@ -219,16 +219,16 @@ object CrystalImageExporter {
         val lightY = sin(azimuth) * cos(elevation)
         val lightOnPerp = (lightX * perpX + lightY * perpY).toDouble()
 
-        val start = Point(0L, a.element, a.siteId, a.siteLabel, startX, startY, a.z, a.radius, a.occupancy, a.fractional, a.cartesian, a.cellOffset)
-        val end = Point(0L, b.element, b.siteId, b.siteLabel, endX, endY, b.z, b.radius, b.occupancy, b.fractional, b.cartesian, b.cellOffset)
+        val start = Point(0L, a.element, a.siteId, a.siteLabel, startX, startY, a.z, a.radius, a.occupancy, a.fractional, a.cartesian, a.cellOffset, a.isShell)
+        val end = Point(0L, b.element, b.siteId, b.siteLabel, endX, endY, b.z, b.radius, b.occupancy, b.fractional, b.cartesian, b.cellOffset, b.isShell)
         if (appearance.bondColorMode == BondColorMode.UNICOLOR) {
             val base = appearance.uniformBondArgb.toInt()
             drawBondCylinder(canvas, start, end, width, perpX, perpY, lightOnPerp, base, opacity, appearance.bondReflectionEnabled)
         } else {
             val mx = (startX + endX) / 2f
             val my = (startY + endY) / 2f
-            val midA = Point(0L, a.element, a.siteId, a.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, a.occupancy, a.fractional, a.cartesian, a.cellOffset)
-            val midB = Point(0L, b.element, b.siteId, b.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, b.occupancy, b.fractional, b.cartesian, b.cellOffset)
+            val midA = Point(0L, a.element, a.siteId, a.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, a.occupancy, a.fractional, a.cartesian, a.cellOffset, a.isShell)
+            val midB = Point(0L, b.element, b.siteId, b.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, b.occupancy, b.fractional, b.cartesian, b.cellOffset, b.isShell)
             drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, PeriodicTable.resolveSiteArgb(a.siteId, a.element, siteArgbOverrides, elementArgbOverrides).toInt(), opacity, appearance.bondReflectionEnabled)
             drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, PeriodicTable.resolveSiteArgb(b.siteId, b.element, siteArgbOverrides, elementArgbOverrides).toInt(), opacity, appearance.bondReflectionEnabled)
         }
@@ -452,8 +452,8 @@ object CrystalImageExporter {
             // 3D cylinder shaft, lit the same way bonds are.
             val shaftEndX = tipX - unitX * headLen
             val shaftEndY = tipY - unitY * headLen
-            val shaftA = Point(0L, "", "", "", origin.x, origin.y, 0.0, 0f, 0.0, Vec3.ZERO, Vec3.ZERO, Int3(0, 0, 0))
-            val shaftB = Point(0L, "", "", "", shaftEndX, shaftEndY, 0.0, 0f, 0.0, Vec3.ZERO, Vec3.ZERO, Int3(0, 0, 0))
+            val shaftA = Point(0L, "", "", "", origin.x, origin.y, 0.0, 0f, 0.0, Vec3.ZERO, Vec3.ZERO, Int3(0, 0, 0), false)
+            val shaftB = Point(0L, "", "", "", shaftEndX, shaftEndY, 0.0, 0f, 0.0, Vec3.ZERO, Vec3.ZERO, Int3(0, 0, 0), false)
             drawBondCylinder(canvas, shaftA, shaftB, halfWidth * 2f, perpX, perpY, lightOnPerp, color, 1f, appearance.bondReflectionEnabled)
             // Conical arrowhead with the same lit gradient.
             val baseX = shaftEndX
