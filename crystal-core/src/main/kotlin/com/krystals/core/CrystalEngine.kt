@@ -116,10 +116,11 @@ object CrystalEngine {
 
     /**
      * Compute bonds between every primary/boundary atom and atoms in its 3×3×3 neighbouring cells.
-     * Primary atoms bond to all neighbouring atoms (primary, boundary images, and external shell).
-     * Boundary images are extra bond centres only for outward bonds to genuine external shell atoms;
-     * this prevents corner/edge atoms from creating spurious bonds back to primary atoms or along
-     * cell edges to other boundary images. Duplicates are avoided with an unordered id-pair set.
+     * Per v0.3.44: boundary-image centres bond over the same path as primary centres — this lets a
+     * bond whose BOTH endpoints are boundary images (a bond lying in a cell face/edge plane, shared
+     * by neighbouring cells) be generated. Same-site integer-translation pairs (periodic images of
+     * one atom, e.g. Cs–Cs) are still suppressed unless an explicit rule exists, so CsCl stays clean.
+     * Duplicates are avoided with an unordered id-pair set.
      */
     private fun inferPrimaryShellBonds(
         primaryAtoms: List<ExpandedAtom>,
@@ -142,11 +143,6 @@ object CrystalEngine {
                 val cell = Int3(cx + dx, cy + dy, cz + dz)
                 for (b in atomsByCell[cell].orEmpty()) {
                     if (a.id == b.id) continue
-                    // Boundary-image centres only bond outward to genuine external shell atoms.
-                    // Bonds to primary atoms and other boundary images are already handled by the
-                    // primary atom centres, and allowing them here would create spurious bonds
-                    // between corner/edge images of the same site.
-                    if (a.isBoundaryImage && !b.isExternalShell) continue
                     // Deduplicate by unordered atom-id pair; each physical bond is emitted once.
                     val bondKey = if (a.id < b.id) a.id to b.id else b.id to a.id
                     if (!seenBonds.add(bondKey)) continue
