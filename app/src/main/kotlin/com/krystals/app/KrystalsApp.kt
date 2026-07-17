@@ -920,6 +920,36 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                         tab.visibility = tab.visibility.copy(showBonds = true, hiddenBondPairs = allKeys - tab.visibility.hiddenBondPairs)
                                     }) { Text(localized("反选", "Invert")) }
                                 }
+                                // Per v0.3.42: select-all / invert for the "extend across cell" column,
+                                // so the user can bulk-toggle periodic-image bond visibility.
+                                if (visibleRules.isNotEmpty()) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(stringResource(R.string.extend_across_cell), style = MaterialTheme.typography.bodySmall)
+                                        Spacer(Modifier.width(8.dp))
+                                        val allExtend = visibleRules.all { it.extendAcrossCell }
+                                        val visibleKeys = visibleRules.map { it.key }.toSet()
+                                        TextButton(onClick = {
+                                            val target = !allExtend
+                                            var working = tab.structure
+                                            visibleRules.forEach { rule ->
+                                                if (rule.extendAcrossCell != target && rule.key in visibleKeys) {
+                                                    working = CrystalEditor.apply(working, EditCommand.SetBondRule(rule.copy(extendAcrossCell = target))).structure
+                                                }
+                                            }
+                                            viewModel.updateStructure(tab, working)
+                                        }) { Text(if (allExtend) localized("全部取消", "Clear all") else stringResource(R.string.select_all)) }
+                                        Spacer(Modifier.width(4.dp))
+                                        TextButton(onClick = {
+                                            var working = tab.structure
+                                            visibleRules.forEach { rule ->
+                                                if (rule.key in visibleKeys) {
+                                                    working = CrystalEditor.apply(working, EditCommand.SetBondRule(rule.copy(extendAcrossCell = !rule.extendAcrossCell))).structure
+                                                }
+                                            }
+                                            viewModel.updateStructure(tab, working)
+                                        }) { Text(localized("反选", "Invert")) }
+                                    }
+                                }
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                                 if (visibleRules.isEmpty()) {
                                     Text(localized("无化学键规则", "No bond rules"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))

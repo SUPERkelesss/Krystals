@@ -238,7 +238,7 @@ fun CrystalViewport(
         measurementBoundsList = emptyList()
         atomInfoBoundsList = emptyList()
         if (snapshot.atoms.isEmpty()) {
-            drawEmptyMessage()
+            // Per v0.3.42: no longer draw a "No atoms" message; just leave the background.
             controller.projectedAtoms = emptyList()
             return@Canvas
         }
@@ -288,7 +288,6 @@ fun CrystalViewport(
                 (it.atom.isExternalShell && it.atom.id in visibleExternalShellAtomIds)
         }
         if (visibleProjected.isEmpty()) {
-            drawEmptyMessage()
             controller.projectedAtoms = emptyList()
         } else {
             controller.projectedAtoms = visibleProjected
@@ -326,8 +325,11 @@ fun CrystalViewport(
             if (appearance.polyhedronEnabled && visibility.polyhedronSites.isNotEmpty()) {
                 // Polyhedra use the full (unfiltered) neighbor set so hiding a bond or a ligand atom
                 // does not dissolve the polyhedron — visibility is decoupled per the v0.3.0 fix.
+                // Per v0.3.42: boundary images are visible atoms too, so they also act as polyhedron
+                // centres (a corner/edge/face atom's coordination was previously dropped because it
+                // is marked isShell). External-shell atoms remain excluded (they are not real centres).
                 projected.filter {
-                    !it.atom.isShell && it.atom.siteId in visibility.polyhedronSites
+                    (!it.atom.isShell || it.atom.isBoundaryImage) && it.atom.siteId in visibility.polyhedronSites
                 }.forEach { center ->
                     val vertices = neighbors[center.atom.id].orEmpty()
                     if (vertices.size >= 3) {
@@ -526,7 +528,10 @@ private fun polyhedronFaceRenderables(
         val va = faceVerts[0]; val vb = faceVerts[1]; val vc = faceVerts[2]
         var worldNormal = (vb.atom.cartesian - va.atom.cartesian).cross(vc.atom.cartesian - va.atom.cartesian)
         val toCenter = center.atom.cartesian - va.atom.cartesian
-        if (worldNormal.dot(toCenter) < 0) worldNormal = worldNormal * -1.0
+        // Per v0.3.42: toCenter points from the face toward the centre atom, so the outward normal
+        // (pointing away from the centre) must have a NEGATIVE dot with toCenter. The previous code
+        // flipped when dot < 0, which turned outward into inward and culled the front face.
+        if (worldNormal.dot(toCenter) > 0) worldNormal = worldNormal * -1.0
         val len = worldNormal.length()
         if (len < 1e-12) return@forEach
         val normal = worldNormal / len
@@ -539,11 +544,13 @@ private fun polyhedronFaceRenderables(
             result += PolyhedronFaceRenderable(baseColor, screenVerts, vertexIds, faceDepth, camNormal)
         }
         // Per v0.3.41: for flat coordinations, also emit the reversed face so the polygon is visible
-        // from the centre-atom side.
+        // from the centre-atom side. Rendered after (so it paints over) with lower alpha to look like
+        // a translucent back side.
         if (allCoplanar) {
             val reversedCamNormal = rotate(normal * -1.0, yaw, pitch)
             if (reversedCamNormal.z > 0.0) {
-                result += PolyhedronFaceRenderable(baseColor, screenVerts.reversed(), vertexIds.reversed(), faceDepth, reversedCamNormal)
+                val backColor = baseColor.copy(alpha = (baseColor.alpha * 0.4f).coerceIn(0f, 1f))
+                result += PolyhedronFaceRenderable(backColor, screenVerts.reversed(), vertexIds.reversed(), faceDepth, reversedCamNormal)
             }
         }
     }
@@ -752,9 +759,8 @@ private fun DrawScope.drawCellFrames(
 }
 
 private fun DrawScope.drawEmptyMessage() {
-    drawContext.canvas.nativeCanvas.drawText("No atoms", size.width / 2f - 60f, size.height / 2f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.GRAY; textSize = 36f
-    })
+    // Per v0.3.42: the "No atoms" message is no longer drawn; kept as a no-op for callers that
+    // may still reference it.
 }
 
 private fun boundingCenter(points: List<Vec3>): Vec3 = Vec3(

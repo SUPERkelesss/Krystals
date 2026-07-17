@@ -142,10 +142,6 @@ object CrystalEngine {
                 val cell = Int3(cx + dx, cy + dy, cz + dz)
                 for (b in atomsByCell[cell].orEmpty()) {
                     if (a.id == b.id) continue
-                    // Skip bonds to integer-cell translations of the same site: they are the same
-                    // atom in a neighbour cell, not a real bond (e.g. Cs at (0,0,0) bonding to its
-                    // own image at (1,0,0)).
-                    if (a.siteId == b.siteId && (a.fractional - b.fractional).isIntegerVector()) continue
                     // Boundary-image centres only bond outward to genuine external shell atoms.
                     // Bonds to primary atoms and other boundary images are already handled by the
                     // primary atom centres, and allowing them here would create spurious bonds
@@ -157,7 +153,14 @@ object CrystalEngine {
                     val key = listOf(a.siteId, b.siteId).sorted().joinToString(" ")
                     // Per v0.2.3: a pair the user explicitly deleted is not redrawn via the fallback.
                     if (key in disabledPairs) continue
-                    val rule = custom[key] ?: BondRule(
+                    val customRule = custom[key]
+                    // Per v0.3.42: a same-site integer-translation pair is a periodic image of the
+                    // same atom (e.g. Ni(0,0,0)–Ni(1,0,0) along the c axis). The covalent-radius
+                    // auto fallback would spuriously bond every like-atom neighbour (Cs–Cs in CsCl),
+                    // so it is only allowed when the user defined an explicit rule for the pair.
+                    val isPeriodicSameSite = a.siteId == b.siteId && (a.fractional - b.fractional).isIntegerVector()
+                    if (customRule == null && isPeriodicSameSite) continue
+                    val rule = customRule ?: BondRule(
                         a.siteId, b.siteId, 0.1,
                         PeriodicTable.covalentRadius(a.element) + PeriodicTable.covalentRadius(b.element) + 0.45,
                         BondRuleSource.AUTO,
