@@ -56,6 +56,9 @@ object CrystalImageExporter {
         val faceVerts: List<Point>,
         val normal: Vec3,
         val alphaScale: Float,
+        // Per v0.3.44: outline-only back faces — draw just the edges at low alpha, no fill.
+        val outlineOnly: Boolean = false,
+        val outlineAlpha: Float = 0.35f,
         override val depth: Double,
     ) : RenderPrimitive
 
@@ -91,8 +94,14 @@ object CrystalImageExporter {
             val normal = outward / len
             val ordered = if (cross.dot(normal) < 0) faceVerts.reversed() else faceVerts
             val nearestDepth = ordered.minOf { it.z }
-            result += PolyhedronFacePrimitive(center, ordered, normal, 1.0f, nearestDepth)
-            if (allCoplanar) result += PolyhedronFacePrimitive(center, ordered.reversed(), normal * -1.0, 0.4f, nearestDepth)
+            val camZ = rotate(normal, yaw, pitch).z
+            if (camZ > 0.0) {
+                result += PolyhedronFacePrimitive(center, ordered, normal, 1.0f, outlineOnly = false, outlineAlpha = 0.35f, depth = nearestDepth)
+                if (allCoplanar) result += PolyhedronFacePrimitive(center, ordered.reversed(), normal * -1.0, 0.4f, outlineOnly = false, outlineAlpha = 0.35f, depth = nearestDepth)
+            } else {
+                // Per v0.3.44: back face — outline only, faint.
+                result += PolyhedronFacePrimitive(center, ordered, normal, 1.0f, outlineOnly = true, outlineAlpha = 0.18f, depth = nearestDepth)
+            }
         }
         return result
     }
@@ -435,32 +444,35 @@ object CrystalImageExporter {
         val baseArgb = PeriodicTable.resolveSiteArgb(face.center.siteId, face.center.element, siteArgbOverrides, elementArgbOverrides).toInt()
         val baseColor = Color.argb((appearance.polyhedronOpacity.coerceIn(0f, 1f) * 255).toInt(), Color.red(baseArgb), Color.green(baseArgb), Color.blue(baseArgb))
         val cam = rotate(face.normal, yaw, pitch)
-        if (cam.z <= 0.0) return // back face culled
-        val factor = if (appearance.polyhedronReflectionEnabled) {
-            val azimuth = appearance.lightAzimuth / 180.0 * PI
-            val elevation = appearance.lightElevation / 180.0 * PI
-            val light = Vec3(cos(azimuth) * cos(elevation), sin(azimuth) * cos(elevation), sin(elevation))
-            0.5 + 0.5 * cam.dot(light).coerceIn(0.0, 1.0)
-        } else 1.0
-        var fill = if (appearance.polyhedronReflectionEnabled) Color.argb(
-            Color.alpha(baseColor),
-            (Color.red(baseColor) * factor).toInt().coerceIn(0, 255),
-            (Color.green(baseColor) * factor).toInt().coerceIn(0, 255),
-            (Color.blue(baseColor) * factor).toInt().coerceIn(0, 255),
-        ) else baseColor
-        if (face.alphaScale < 1.0f) {
-            fill = Color.argb((Color.alpha(fill) * face.alphaScale).toInt().coerceIn(0, 255), Color.red(fill), Color.green(fill), Color.blue(fill))
-        }
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        val path = android.graphics.Path().apply {
-            moveTo(verts[0].x, verts[0].y)
-            for (i in 1 until verts.size) lineTo(verts[i].x, verts[i].y)
-            close()
+        // Per v0.3.44: outline-only back faces skip the fill and draw edges at low alpha.
+        if (!face.outlineOnly) {
+            if (cam.z <= 0.0) return // back face culled (filled)
+            val factor = if (appearance.polyhedronReflectionEnabled) {
+                val azimuth = appearance.lightAzimuth / 180.0 * PI
+                val elevation = appearance.lightElevation / 180.0 * PI
+                val light = Vec3(cos(azimuth) * cos(elevation), sin(azimuth) * cos(elevation), sin(elevation))
+                0.5 + 0.5 * cam.dot(light).coerceIn(0.0, 1.0)
+            } else 1.0
+            var fill = if (appearance.polyhedronReflectionEnabled) Color.argb(
+                Color.alpha(baseColor),
+                (Color.red(baseColor) * factor).toInt().coerceIn(0, 255),
+                (Color.green(baseColor) * factor).toInt().coerceIn(0, 255),
+                (Color.blue(baseColor) * factor).toInt().coerceIn(0, 255),
+            ) else baseColor
+            if (face.alphaScale < 1.0f) {
+                fill = Color.argb((Color.alpha(fill) * face.alphaScale).toInt().coerceIn(0, 255), Color.red(fill), Color.green(fill), Color.blue(fill))
+            }
+            val path = android.graphics.Path().apply {
+                moveTo(verts[0].x, verts[0].y)
+                for (i in 1 until verts.size) lineTo(verts[i].x, verts[i].y)
+                close()
+            }
+            paint.style = Paint.Style.FILL
+            paint.color = fill
+            canvas.drawPath(path, paint)
         }
-        paint.style = Paint.Style.FILL
-        paint.color = fill
-        canvas.drawPath(path, paint)
-        paint.color = Color.argb((0.35f * 255).toInt(), 255, 255, 255)
+        paint.color = Color.argb((face.outlineAlpha * 255).toInt().coerceIn(0, 255), 255, 255, 255)
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 1.2f
         val drawn = mutableSetOf<List<Long>>()
