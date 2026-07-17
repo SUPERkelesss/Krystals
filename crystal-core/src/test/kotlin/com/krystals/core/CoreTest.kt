@@ -52,6 +52,34 @@ class CoreTest {
         assertEquals(90.0, angleDegrees(Vec3(1.0, 0.0, 0.0), Vec3.ZERO, Vec3(0.0, 1.0, 0.0)), 1e-8)
     }
 
+    @Test fun cornerAtomPolyhedronHasAllSixFaceNeighbours() {
+        // Per v0.3.44: a corner atom (Cs at 0,0,0) with a Cs-Cs rule must find all 6 face-centre
+        // neighbours as bonds so its octahedral coordination polyhedron is complete. Previously the
+        // shell was only 1 cell thick, so the boundary-image centres at offset +1 could not reach
+        // their outward neighbours at offset +2; only the primary (0,0,0) had a complete octahedron.
+        // With a 2-cell shell every face-centre neighbour is materialised.
+        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
+        val structure = CrystalStructure(
+            "Cs", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
+            listOf(AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO)),
+            bondRules = listOf(BondRule("Cs", "Cs", 0.1, 5.09)),
+        )
+        val scene = CrystalEngine.buildScene(structure)
+        val primaryCs = scene.atoms.first { !it.isShell && it.siteId == "Cs" }
+        // The primary Cs bonds to all 6 face-centre neighbours (±x, ±y, ±z at distance 4.0).
+        val neighbours = scene.bonds.filter { it.atomA == primaryCs.id || it.atomB == primaryCs.id }
+        assertEquals(6, neighbours.size, "primary Cs should have 6 face-centre Cs neighbours")
+        // A boundary-image centre (e.g. Cs at offset (1,0,0)) must ALSO reach its outward neighbour
+        // at offset (2,0,0) — that atom lives in the second shell layer and must be kept.
+        val boundaryCs = scene.atoms.firstOrNull { it.isBoundaryImage && it.cellOffset == Int3(1, 0, 0) }
+        assertTrue(boundaryCs != null, "expected a boundary-image Cs at offset (1,0,0)")
+        val outwardNeighbour = scene.bonds.any { bond ->
+            val otherId = if (bond.atomA == boundaryCs!!.id) bond.atomB else if (bond.atomB == boundaryCs.id) bond.atomA else 0L
+            otherId != 0L && scene.atoms.first { it.id == otherId }.cellOffset == Int3(2, 0, 0)
+        }
+        assertTrue(outwardNeighbour, "boundary-image Cs should bond its outward (2,0,0) neighbour")
+    }
+
     @Test fun originAtomGeneratesPrimaryAndShellCells() {
         // Per v0.3.4: a single atom at the origin is placed in the primary cell, and the 26
         // surrounding neighbour cells are considered during bonding. Shell atoms that do not bond
