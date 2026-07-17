@@ -16,6 +16,8 @@ captures/
 .cxx/
 .tooling/
 app/release/
+# Backup files — never commit.
+*.bak
 
 # Activation code secrets — never commit (paid module).
 activation-codes.txt
