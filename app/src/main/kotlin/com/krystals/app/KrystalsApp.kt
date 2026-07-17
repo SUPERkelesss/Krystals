@@ -501,18 +501,24 @@ private fun ViewerScreen(
     var appearanceOpen by remember { mutableStateOf(false) }
     var floatingX by remember(tab.id) { mutableFloatStateOf(0f) }
     var floatingY by remember(tab.id) { mutableFloatStateOf(0f) }
-    // Per v0.4.1: clamp the floating ball within the scene so a drag can't push it off-screen.
-    // The ball is align(BottomEnd); outerSize = padding(18) + size(180) ≈ 216dp frame; positive
-    // floatingX/Y move it right/down past the edge, negative moves it left/up.
+    // Per v0.4.2: only the main ball (the 54dp center FAB) must stay on-screen — the radial tool
+    // fan is allowed to overhang the edges when expanded, so the ball can roam across the whole
+    // screen instead of being penned in by the 180dp container frame.
     var ballParentSize by remember(tab.id) { mutableStateOf(IntSize.Zero) }
     var ballOuterSize by remember(tab.id) { mutableStateOf(IntSize.Zero) }
+    val mainBallPx = with(LocalDensity.current) { 54.dp.toPx() }
     // Re-clamp on rotation / tab swap / first layout so an out-of-range offset snaps back in bounds.
-    LaunchedEffect(ballParentSize, ballOuterSize) {
+    LaunchedEffect(ballParentSize, ballOuterSize, mainBallPx) {
         if (ballParentSize != IntSize.Zero && ballOuterSize != IntSize.Zero) {
-            val minX = (ballOuterSize.width - ballParentSize.width).toFloat().coerceAtMost(0f)
-            val minY = (ballOuterSize.height - ballParentSize.height).toFloat().coerceAtMost(0f)
-            floatingX = floatingX.coerceIn(minX, 0f)
-            floatingY = floatingY.coerceIn(minY, 0f)
+            // Container is align(BottomEnd); the main ball is centered in it. The allowed offset
+            // range keeps only the main ball's edges inside the parent, letting the container itself
+            // (and the expanded tool fan) overhang the screen edges.
+            val minX = (ballOuterSize.width + mainBallPx) / 2f - ballParentSize.width
+            val maxX = (ballOuterSize.width - mainBallPx) / 2f
+            val minY = (ballOuterSize.height + mainBallPx) / 2f - ballParentSize.height
+            val maxY = (ballOuterSize.height - mainBallPx) / 2f
+            floatingX = floatingX.coerceIn(minX, maxX)
+            floatingY = floatingY.coerceIn(minY, maxY)
         }
     }
     var legendExpanded by remember(tab.id) { mutableStateOf(false) }
@@ -662,12 +668,14 @@ private fun ViewerScreen(
                     .pointerInput(tab.id) {
                         detectDragGestures { change, amount ->
                             change.consume()
-                            // BottomEnd anchor: positive (right/down) caps at 0 (flush to edge);
-                            // negative (left/up) caps so the opposite edge stays inside the parent.
-                            val minX = (ballOuterSize.width - ballParentSize.width).toFloat().coerceAtMost(0f)
-                            val minY = (ballOuterSize.height - ballParentSize.height).toFloat().coerceAtMost(0f)
-                            floatingX = (floatingX + amount.x).coerceIn(minX, 0f)
-                            floatingY = (floatingY + amount.y).coerceIn(minY, 0f)
+                            // Only the main ball (centered 54dp FAB) is kept on-screen; the
+                            // expanded radial tool fan may overhang the screen edges.
+                            val minX = (ballOuterSize.width + mainBallPx) / 2f - ballParentSize.width
+                            val maxX = (ballOuterSize.width - mainBallPx) / 2f
+                            val minY = (ballOuterSize.height + mainBallPx) / 2f - ballParentSize.height
+                            val maxY = (ballOuterSize.height - mainBallPx) / 2f
+                            floatingX = (floatingX + amount.x).coerceIn(minX, maxX)
+                            floatingY = (floatingY + amount.y).coerceIn(minY, maxY)
                         }
                     },
                 contentAlignment = Alignment.Center,
