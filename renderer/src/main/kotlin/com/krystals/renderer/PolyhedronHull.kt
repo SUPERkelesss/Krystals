@@ -2,6 +2,7 @@ package com.krystals.renderer
 
 import com.krystals.core.Vec3
 import kotlin.math.atan2
+import kotlin.math.abs
 
 /**
  * Convex-hull face enumeration for a small set of ligand points around a [center].
@@ -48,83 +49,88 @@ fun convexHullFaces(center: Vec3, points: List<Vec3>): List<List<Vec3>> {
     }
     if (triangles.isEmpty()) return emptyList()
 
-    // 2) Merge coplanar triangles sharing an edge. Two triangles are coplanar when their outward
-    //    normals are parallel (dot ≈ 1, same sign) and a shared edge exists.
-    val merged = mutableListOf<MutableList<Int>>()
+    // 2) Group coplanar triangles into faces and extract the outer boundary of each face. This
+    // handles any triangulation of the face — including cases where two triangles of a square share
+    // a diagonal rather than a boundary edge — because the boundary edges are exactly the edges
+    // that belong to only one triangle in the group.
     val used = BooleanArray(triangles.size)
-    fun coplanar(a: Vec3, b: Vec3) = a.dot(b) > 1.0 - 1e-6
+    val coplanarEps = 1e-6
+    val result = mutableListOf<List<Vec3>>()
+
+    fun extractBoundaryPolygons(group: List<Face>): List<List<Int>> {
+        val edgeCounts = mutableMapOf<List<Int>, Int>()
+        for (tri in group) {
+            val idxs = tri.indices
+            for (e in 0..2) {
+                val key = listOf(idxs[e], idxs[(e + 1) % 3]).sorted()
+                edgeCounts[key] = (edgeCounts[key] ?: 0) + 1
+            }
+        }
+        val boundaryEdges = edgeCounts.filter { it.value == 1 }.keys
+        val adj = mutableMapOf<Int, MutableList<Int>>()
+        for ((a, b) in boundaryEdges) {
+            adj.getOrPut(a) { mutableListOf() } += b
+            adj.getOrPut(b) { mutableListOf() } += a
+        }
+        val visited = mutableSetOf<Int>()
+        val polygons = mutableListOf<List<Int>>()
+        for (start in adj.keys.sorted()) {
+            if (start in visited) continue
+            val poly = mutableListOf<Int>()
+            var current = start
+            var prev = -1
+            do {
+                poly += current
+                visited += current
+                val neighbors = adj[current] ?: break
+                val next = neighbors.firstOrNull { it != prev } ?: break
+                prev = current
+                current = next
+            } while (current != start && current in adj)
+            if (poly.size >= 3) polygons += poly
+        }
+        return polygons
+    }
+
     for (t in triangles.indices) {
         if (used[t]) continue
         used[t] = true
-        val poly = triangles[t].indices.toMutableList()
-        var changed = true
-        while (changed) {
-            changed = false
+        val normal = triangles[t].normal
+        // Breadth-first search for all triangles on the same face: same outward normal (parallel
+        // and same direction) and, if not edge-adjacent, lying on the same plane.
+        val group = mutableListOf(triangles[t])
+        val queue = ArrayDeque<Int>()
+        queue += t
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            val currentNormal = triangles[current].normal
             for (u in triangles.indices) {
                 if (used[u]) continue
-                if (!coplanar(triangles[t].normal, triangles[u].normal)) continue
-                val shared = poly.filter { it in triangles[u].indices }
-                when (shared.size) {
-                    // Merge: insert the third vertex of u between the two shared vertices of poly,
-                    // but only when those two are adjacent in the polygon cycle (otherwise the
-                    // shared edge is a diagonal and merging would self-intersect the polygon).
-                    2 -> {
-                        val third = triangles[u].indices.first { it !in shared }
-                        val a = poly.indexOf(shared[0])
-                        val b = poly.indexOf(shared[1])
-                        val size = poly.size
-                        val insertAfter = when {
-                            (a + 1) % size == b -> a
-                            (b + 1) % size == a -> b
-                            else -> -1
-                        }
-                        if (insertAfter >= 0) {
-                            poly.add((insertAfter + 1) % size, third)
-                            used[u] = true
-                            changed = true
-                        } else {
-                            // The two shared vertices are already non-adjacent in poly — i.e. the
-                            // shared edge is a diagonal of the merged polygon. Since u is coplanar
-                            // with poly and its vertices all lie inside poly's face, u is already
-                            // covered by poly. Absorb it without adding a vertex, so it is not
-                            // later seeded as a stray overlapping triangle on the same face.
-                            used[u] = true
-                            changed = true
-                        }
-                    }
-                    // 3 shared vertices: the triangle lies entirely inside this polygon (it's one of
-                    // the C(4,3)=4 triangles of a coplanar quad). Absorb it without adding a vertex,
-                    // so its edges are not drawn as a stray diagonal over the merged face.
-                    3 -> {
-                        used[u] = true
-                        changed = true
-                    }
+                if (triangles[u].normal.dot(currentNormal) < 1.0 - coplanarEps) continue
+                val sharesVertex = triangles[current].indices.any { it in triangles[u].indices }
+                if (!sharesVertex) {
+                    val v0 = points[triangles[u].indices[0]]
+                    val vRef = points[triangles[current].indices[0]]
+                    if (abs(currentNormal.dot(v0 - vRef)) > coplanarEps) continue
                 }
+                used[u] = true
+                group += triangles[u]
+                queue += u
             }
         }
-        merged += poly
-    }
 
-    // 3) Order each polygon's vertices counter-clockwise about its normal (already roughly ordered
-    //    from the merge, but re-sort by angle around the face centroid projected onto its plane).
-    return merged.map { idxs ->
-        val verts = idxs.map { points[it] }
-        val centroid = verts.reduce { acc, v -> acc + v } / verts.size.toDouble()
-        // Use the first non-degenerate in-plane basis to compute angles.
-        val ref = verts[0] - centroid
-        val normal = triangles.first { it.indices[0] in idxs }.normal
-        // basis u = ref normalized; basis v = normal × u
-        var u = ref
-        val ul = u.length()
-        if (ul < 1e-12) {
-            // fallback: any in-plane vector
-            u = verts[1] - verts[0]
+        for (poly in extractBoundaryPolygons(group)) {
+            val verts = poly.map { points[it] }
+            val centroid = verts.reduce { acc, v -> acc + v } / verts.size.toDouble()
+            val ref = verts[0] - centroid
+            val u = (if (ref.length() < 1e-12) verts[1] - verts[0] else ref).normalized()
+            val v = normal.cross(u).normalized()
+            val ordered = verts.map { vec ->
+                val d = vec - centroid
+                Pair(vec, atan2(d.dot(v), d.dot(u)))
+            }.sortedBy { it.second }.map { it.first }
+            result += ordered
         }
-        u = u.normalized()
-        val v = normal.cross(u).normalized()
-        verts.map { v3 ->
-            val d = v3 - centroid
-            Pair(v3, atan2(d.dot(v), d.dot(u)))
-        }.sortedBy { it.second }.map { it.first }
     }
+    return result
 }

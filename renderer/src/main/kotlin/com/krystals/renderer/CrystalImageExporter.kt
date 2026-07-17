@@ -22,6 +22,7 @@ import com.krystals.core.angleDegrees
 import com.krystals.core.dihedralDegrees
 import com.krystals.core.distance
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
@@ -30,7 +31,7 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 object CrystalImageExporter {
-    private data class Point(val atomId: Long, val element: String, val siteId: String, val siteLabel: String, val x: Float, val y: Float, val z: Double, val radius: Float, val occupancy: Double, val fractional: Vec3, val cartesian: Vec3, val cellOffset: Int3)
+    private data class Point(val atomId: Long, val element: String, val siteId: String, val siteLabel: String, val x: Float, val y: Float, val z: Double, val radius: Float, val occupancy: Double, val fractional: Vec3, val cartesian: Vec3, val cellOffset: Int3, val isShell: Boolean)
 
     private sealed interface RenderPrimitive {
         val depth: Double
@@ -64,8 +65,23 @@ object CrystalImageExporter {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.drawColor(appearance.backgroundArgb.toInt())
-        val visible = snapshot.atoms.filterNot { it.siteId in visibility.hiddenSites }
         if (snapshot.atoms.isEmpty()) return bitmap
+        // Per v0.3.4: shell atoms are hidden by default and only become visible when a cross-cell
+        // bond whose rule opts in to "extend across cell" references them.
+        val visibleShellAtomIds = mutableSetOf<Long>()
+        if (visibility.showBonds) {
+            snapshot.bonds.forEach { bond ->
+                if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
+                val b = snapshot.atoms.firstOrNull { it.id == bond.atomB } ?: return@forEach
+                if (b.isShell && bond.rule.extendAcrossCell && b.siteId !in visibility.hiddenSites) {
+                    visibleShellAtomIds += b.id
+                }
+            }
+        }
+        val visible = snapshot.atoms.filter {
+            (!it.isShell && it.siteId !in visibility.hiddenSites) ||
+                (it.isShell && it.id in visibleShellAtomIds)
+        }
         val center = Vec3(
             (snapshot.atoms.minOf { it.cartesian.x } + snapshot.atoms.maxOf { it.cartesian.x }) / 2,
             (snapshot.atoms.minOf { it.cartesian.y } + snapshot.atoms.maxOf { it.cartesian.y }) / 2,
@@ -84,26 +100,11 @@ object CrystalImageExporter {
         val points = snapshot.atoms.map { atom ->
             val rotated = rotate(atom.cartesian - center, controller.yaw, controller.pitch)
             val (x, y) = screen(rotated)
-            Point(atom.id, atom.element, atom.siteId, atom.siteLabel, x, y, rotated.z, (PeriodicTable.defaultRadius(atom.element).toFloat() * scale).coerceIn(4.5f, 42f), atom.occupancy, atom.fractional, atom.cartesian, atom.cellOffset)
+            Point(atom.id, atom.element, atom.siteId, atom.siteLabel, x, y, rotated.z, (PeriodicTable.defaultRadius(atom.element).toFloat() * scale).coerceIn(4.5f, 42f), atom.occupancy, atom.fractional, atom.cartesian, atom.cellOffset, atom.isShell)
         }
-        val visiblePoints = points.filter { it.siteId !in visibility.hiddenSites }
+        val visiblePointIds = visible.map { it.id }.toSet()
+        val visiblePoints = points.filter { it.atomId in visiblePointIds }
         val byId = points.associateBy { it.atomId }
-        // Per v0.3.2: lattice vectors for minimum-image bond offsets (cross-cell bonds / polyhedron
-        // vertices outside the primary cell).
-        val cell = snapshot.structure.cell
-        val la = cell.matrix.a
-        val lb = cell.matrix.b
-        val lc = cell.matrix.c
-        fun offsetVec(offset: Int3) = la * offset.x.toDouble() + lb * offset.y.toDouble() + lc * offset.z.toDouble()
-        val imageCache = HashMap<Pair<Long, Int3>, Point>()
-        fun imageOf(base: Point, offset: Int3): Point {
-            if (offset.x == 0 && offset.y == 0 && offset.z == 0) return base
-            return imageCache.getOrPut(base.atomId to offset) {
-                val rotated = rotate(base.cartesian + offsetVec(offset) - center, controller.yaw, controller.pitch)
-                val (x, y) = screen(rotated)
-                Point(base.atomId, base.element, base.siteId, base.siteLabel, x, y, rotated.z, base.radius, base.occupancy, base.fractional, base.cartesian + offsetVec(offset), base.cellOffset)
-            }
-        }
         val neighbors = mutableMapOf<Long, MutableList<Point>>()
         val bondAdjacency = mutableMapOf<Long, MutableSet<Long>>()
         val renderables = buildList<RenderPrimitive> {
@@ -111,33 +112,28 @@ object CrystalImageExporter {
             if (visibility.showBonds) {
                 snapshot.bonds.forEach { bond ->
                     val a = byId[bond.atomA] ?: return@forEach
-                    val bBase = byId[bond.atomB] ?: return@forEach
+                    val b = byId[bond.atomB] ?: return@forEach
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
-                    val crossCell = bond.offsetB.x != 0 || bond.offsetB.y != 0 || bond.offsetB.z != 0
-                    val b = imageOf(bBase, bond.offsetB)
-                    val aFromB = if (crossCell) imageOf(a, Int3(-bond.offsetB.x, -bond.offsetB.y, -bond.offsetB.z)) else a
+                    val crossCell = b.isShell
                     // Polyhedron vertices: every bond registers its vertices (in-cell and cross-cell)
                     // so polyhedra keep full coordination; cross-cell vertices extend outside the cell.
                     neighbors.getOrPut(a.atomId) { mutableListOf() } += b
-                    neighbors.getOrPut(bBase.atomId) { mutableListOf() } += aFromB
-                    bondAdjacency.getOrPut(a.atomId) { mutableSetOf() } += bBase.atomId
-                    bondAdjacency.getOrPut(bBase.atomId) { mutableSetOf() } += a.atomId
+                    neighbors.getOrPut(b.atomId) { mutableListOf() } += a
+                    bondAdjacency.getOrPut(a.atomId) { mutableSetOf() } += b.atomId
+                    bondAdjacency.getOrPut(b.atomId) { mutableSetOf() } += a.atomId
                     // Bond-line rendering: a cross-cell bond draws only when its rule opts in via
                     // extendAcrossCell. Unchecked => no bond line leaves the primary cell.
                     if (crossCell && !bond.rule.extendAcrossCell) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(1.5f, 16f)
                     add(BondPrimitive(a, b, width))
-                    if (crossCell && bBase.siteId !in visibility.hiddenSites) {
+                    if (crossCell && b.atomId in visibleShellAtomIds) {
                         add(AtomPrimitive(b, b.atomId in selectedAtomIds))
                     }
                 }
             }
             if (appearance.polyhedronEnabled && visibility.polyhedronSites.isNotEmpty()) {
                 points.filter {
-                    it.siteId in visibility.polyhedronSites &&
-                        // Per v0.3.2: only in-cell atoms are polyhedron centres (avoid boundary image
-                        // duplicates redrawing the same polyhedron).
-                        it.cellOffset.x == 0 && it.cellOffset.y == 0 && it.cellOffset.z == 0
+                    !it.isShell && it.siteId in visibility.polyhedronSites
                 }.forEach { center ->
                     val vertices = neighbors[center.atomId].orEmpty()
                     if (vertices.size >= 3) add(PolyhedronPrimitive(center, vertices, bondAdjacency))
@@ -299,9 +295,17 @@ object CrystalImageExporter {
             (Color.blue(base) * factor).toInt().coerceIn(0, 255),
         )
 
-        // Special case: when every ligand is mutually bonded (e.g. a square-planar AB4 unit),
-        // the polyhedron is flat — draw a single n-gon rather than decomposing into triangles.
-        val allMutuallyAdjacent = vertices.size in 3..6 && vertices.indices.all { i ->
+        // Special case: when every ligand is mutually bonded AND coplanar (e.g. a square-planar
+        // AB4 unit), the polyhedron is flat — draw a single n-gon rather than decomposing into
+        // triangles. The coplanar check prevents mutually-bonded non-coplanar ligands such as a
+        // tetrahedron from being collapsed into one incorrect face.
+        val areCoplanar = vertices.size >= 3 && run {
+            val v0 = vertices[0].cartesian
+            val n = (vertices[1].cartesian - v0).cross(vertices[2].cartesian - v0)
+            if (n.lengthSquared() < 1e-12) return@run false
+            vertices.drop(3).all { abs(n.dot(it.cartesian - v0)) < 1e-6 }
+        }
+        val allMutuallyAdjacent = areCoplanar && vertices.size in 3..6 && vertices.indices.all { i ->
             (vertices.indices - i).all { j -> adjacency[vertexIds[i]]?.contains(vertexIds[j]) == true }
         }
         if (allMutuallyAdjacent) {

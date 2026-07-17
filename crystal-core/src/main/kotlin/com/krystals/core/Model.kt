@@ -77,6 +77,10 @@ data class ExpandedAtom(
     val cartesian: Vec3,
     val occupancy: Double,
     val cellOffset: Int3,
+    // Per v0.3.4: true for atoms in the surrounding shell of neighbour cells that exist only to
+    // compute cross-cell bonds and complete coordination polyhedra. Shell atoms are hidden unless
+    // a bond rule explicitly extends across the cell boundary.
+    val isShell: Boolean = false,
 )
 
 enum class BondRuleSource { CUSTOM, EXPLICIT, AUTO }
@@ -102,9 +106,8 @@ data class Bond(
     val atomB: Long,
     val distance: Double,
     val rule: BondRule,
-    // Per v0.3.2: B's periodic-image offset relative to A under the minimum-image convention
-    // (e.g. Int3(1,1,1) means B's image in the +1,+1,+1 neighbour cell is the bonded one). Runtime
-    // only — not persisted to CIF (bonds are recomputed from rules on load).
+    // Per v0.3.4: cross-cell bonds are represented by an actual shell atom in atomB, so the offset
+    // is always zero. The field is kept for binary compatibility with saved snapshots/tests.
     val offsetB: Int3 = Int3(0, 0, 0),
 )
 
