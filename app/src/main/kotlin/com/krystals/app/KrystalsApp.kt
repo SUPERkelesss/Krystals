@@ -820,7 +820,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
     var selected by remember { mutableStateOf(DisplayTab.ATOMS) }
     // Per v0.2.3: resizable panel — drag the handle to change how much of the screen the panel
     // occupies. Portrait: bottom sheet height fraction; landscape: right sheet width fraction.
-    var panelRatio by remember { mutableStateOf(0.62f) }
+    var panelRatio by remember { mutableStateOf(0.30f) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
         val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
