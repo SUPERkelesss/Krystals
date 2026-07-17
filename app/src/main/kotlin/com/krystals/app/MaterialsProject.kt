@@ -162,8 +162,7 @@ object MaterialsProject {
                     spaceGroupNumber = realSpaceGroup?.number ?: legacy.structure.spaceGroupNumber,
                     symmetryOperations = listOf(SymmetryOperation.IDENTITY),
                 )
-                ensureBondRules(corrected, materialId, "legacy").also { legacy.structure = it }
-                legacy
+                legacy.copy(structure = ensureBondRules(corrected, materialId, "legacy"))
             } ?: run {
                 // New letter-format id (or legacy unavailable): use the primitive cell from next-gen,
                 // written as P1 so there is no primitive-cell-vs-Fm-3m-label contradiction.
@@ -171,8 +170,7 @@ object MaterialsProject {
                 target.parentFile?.mkdirs()
                 target.writeText(cif, Charsets.UTF_8)
                 val p = CifCodec.parseStructure(cif)
-                ensureBondRules(p.structure, materialId, "primitive").also { p.structure = it }
-                p
+                p.copy(structure = ensureBondRules(p.structure, materialId, "primitive"))
             }
             Log.d("MP", "downloadCif ok: $materialId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroupName}")
             parsed

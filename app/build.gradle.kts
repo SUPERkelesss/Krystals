@@ -11,18 +11,21 @@ import java.security.SecureRandom
 // (e.g. a clean clone from github) both stay empty and activation is simply disabled — the build
 // still succeeds.
 val activationSecretsFile = rootProject.file("activation-secrets.gradle.kts")
-val activationSalt: String
-val activationHashes: String
-if (activationSecretsFile.exists()) {
+// Read both secrets as a single expression. The Kotlin DSL script compiler rejects declaring a
+// `val` and then assigning it in each branch of an `if` ("Captured member values initialization is
+// forbidden due to possible reassignment"), so resolve the whole pair in one destructuring
+// expression instead. When the secrets file is absent (clean clone) both stay empty and activation
+// is simply disabled — the build still succeeds.
+val activationSecrets: Pair<String, String> = if (activationSecretsFile.exists()) {
     val secretsText = activationSecretsFile.readText()
     fun extractSecret(key: String): String =
         Regex("""extra\["${key}"\]\s*=\s*"([^"]*)"""").find(secretsText)?.groupValues?.get(1).orEmpty()
-    activationSalt = extractSecret("activationSalt")
-    activationHashes = extractSecret("activationHashes")
+    extractSecret("activationSalt") to extractSecret("activationHashes")
 } else {
-    activationSalt = ""
-    activationHashes = ""
+    "" to ""
 }
+val activationSalt = activationSecrets.first
+val activationHashes = activationSecrets.second
 
 plugins {
     id("com.android.application")
