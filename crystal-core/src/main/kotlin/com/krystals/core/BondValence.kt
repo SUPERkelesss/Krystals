@@ -62,12 +62,18 @@ object BondValence {
      * Per-site bond-valence sum (BVS). Cation sites use the BVS from their estimated valence; anion
      * sites sum the bond valences of their bonds to neighbouring cations (using each cation's
      * resolved valence to look up R0/B). Sites without a resolvable valence are omitted.
+     *
+     * BVS is a per-atom property: each expanded atom's BVS is the sum of its own bond valences. A
+     * site's symmetry-equivalent atoms share the same environment, so the site BVS is taken from one
+     * representative expanded atom (averaged across the site's atoms as a safety net) — NOT summed
+     * across all symmetry images, which would multiply the BVS by the site multiplicity.
      */
     fun bondValenceSums(structure: CrystalStructure, epsilon: Double = 0.45): Map<String, Double> {
         val analysis = analyze(structure, epsilon) ?: return emptyMap()
         val siteValence = analysis.siteValence
         val atomById = analysis.atoms.associateBy { it.id }
-        val bvsBySite = HashMap<String, Double>()
+        // Per expanded-atom BVS.
+        val bvsByAtom = HashMap<Long, Double>()
         for ((a, b, d) in analysis.neighbours) {
             val atomA = atomById[a] ?: continue
             val atomB = atomById[b] ?: continue
@@ -83,10 +89,18 @@ object BondValence {
                 PeriodicTable.bondValenceParam(atomB.element, vB, atomA.element, vA)
             } else continue
             val s = param?.let { exp((it.r0 - d) / it.b) } ?: continue
-            bvsBySite[atomA.siteId] = (bvsBySite[atomA.siteId] ?: 0.0) + s
-            bvsBySite[atomB.siteId] = (bvsBySite[atomB.siteId] ?: 0.0) + s
+            bvsByAtom[a] = (bvsByAtom[a] ?: 0.0) + s
+            bvsByAtom[b] = (bvsByAtom[b] ?: 0.0) + s
         }
-        return bvsBySite
+        // Collapse per-atom BVS to per-site: average over the site's expanded atoms (they are
+        // symmetry-equivalent and share the same environment, so this just picks a representative
+        // value while tolerating any edge-case variation).
+        val bySite = HashMap<String, MutableList<Double>>()
+        for (atom in analysis.atoms) {
+            val bvs = bvsByAtom[atom.id] ?: continue
+            bySite.getOrPut(atom.siteId) { mutableListOf() }.add(bvs)
+        }
+        return bySite.mapValues { (_, list) -> list.average() }
     }
 
     /** Shared analysis: expand, build the (anion–anion-skipping) neighbour table, resolve each site. */
@@ -159,14 +173,18 @@ object BondValence {
             return SiteValence(radius, fixedAnionV, isAnion = true)
         }
 
+        // BVS is a per-atom property. A site's expanded atoms are symmetry-equivalent, so use one
+        // representative's bonds (the first expanded atom's) rather than summing across all images —
+        // summing would multiply the BVS by the site multiplicity and overshoot the real valence.
+        val representative = siteAtoms.first()
         val distByElement = HashMap<String, MutableList<Double>>()
         val atomById = atoms.associateBy { it.id }
         for ((a, b, d) in neighbours) {
             val atomA = atomById[a] ?: continue
             val atomB = atomById[b] ?: continue
-            if (atomA.siteId == site.id && atomB.element != site.element) {
+            if (atomA.id == representative.id && atomB.element != site.element) {
                 distByElement.getOrPut(atomB.element) { mutableListOf() }.add(d)
-            } else if (atomB.siteId == site.id && atomA.element != site.element) {
+            } else if (atomB.id == representative.id && atomA.element != site.element) {
                 distByElement.getOrPut(atomA.element) { mutableListOf() }.add(d)
             }
         }
