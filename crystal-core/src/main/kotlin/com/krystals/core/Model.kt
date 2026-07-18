@@ -180,6 +180,14 @@ data class ViewerAppearance(
     val polyhedronReflectionEnabled: Boolean = true,
     val showAxes: Boolean = true,
     val axisMode: AxisMode = AxisMode.ABC,
+    // Per v0.5.2: depth of field. Focal is the focus position as a normalized offset (0..1) across
+    // the scene's depth range; Range is the in-focus half-width; Blur/Fog scale the out-of-focus
+    // atom blur (BlurMaskFilter) and the far blend toward the background colour.
+    val depthOfFieldEnabled: Boolean = false,
+    val dofFocal: Float = 0.45f,
+    val dofRange: Float = 0.30f,
+    val dofBlur: Float = 0.6f,
+    val dofFog: Float = 0.35f,
 )
 
 data class SceneSnapshot(

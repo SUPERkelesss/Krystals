@@ -691,7 +691,7 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
                 listOf(
                     0xFF000000L to localized("黑色", "Black"),
                     0xFFFFFFFFL to localized("白色", "White"),
-                    0xFF9966CCL to localized("紫色", "Purple"),
+                    0xFF4D2D6EL to localized("紫色", "Purple"),
                 ).forEach { (argb, label) ->
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
                         Box(Modifier.size(40.dp).background(colorFromArgb(argb), RoundedCornerShape(20.dp)).clickable { appearance = appearance.copy(backgroundArgb = argb) })
@@ -705,34 +705,34 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("框线", "Frame"), fontWeight = FontWeight.Bold)
-            DropdownField(localized("模式", "Mode"), frameLabels[appearance.frameMode.ordinal], frameLabels) { appearance = appearance.copy(frameMode = FrameMode.entries[frameLabels.indexOf(it)]) }
-            DropdownField(localized("线型", "Line"), lineLabels[appearance.lineStyle.ordinal], lineLabels) { appearance = appearance.copy(lineStyle = LineStyle.entries[lineLabels.indexOf(it)]) }
+            Row(Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f)) {
+                    DropdownField(localized("模式", "Mode"), frameLabels[appearance.frameMode.ordinal], frameLabels) { appearance = appearance.copy(frameMode = FrameMode.entries[frameLabels.indexOf(it)]) }
+                }
+                Column(Modifier.weight(1f)) {
+                    DropdownField(localized("线型", "Line"), lineLabels[appearance.lineStyle.ordinal], lineLabels) { appearance = appearance.copy(lineStyle = LineStyle.entries[lineLabels.indexOf(it)]) }
+                }
+            }
             Spacer(Modifier.height(8.dp))
             val axisLabels = listOf("abc", "XYZ")
-            ToggleRow(localized("显示坐标轴", "Show axes"), appearance.showAxes) { appearance = appearance.copy(showAxes = it) }
-            if (appearance.showAxes) {
-                DropdownField(localized("坐标轴", "Axes"), axisLabels[appearance.axisMode.ordinal], axisLabels) {
-                    appearance = appearance.copy(axisMode = com.krystals.core.AxisMode.entries[axisLabels.indexOf(it)])
+            Text(localized("坐标轴", "Axes"), style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f)) {
+                    ToggleRow(localized("显示", "Show"), appearance.showAxes) { appearance = appearance.copy(showAxes = it) }
+                }
+                if (appearance.showAxes) Column(Modifier.weight(1f)) {
+                    DropdownField(localized("坐标系", "System"), axisLabels[appearance.axisMode.ordinal], axisLabels) {
+                        appearance = appearance.copy(axisMode = com.krystals.core.AxisMode.entries[axisLabels.indexOf(it)])
+                    }
                 }
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("原子", "Atoms"), fontWeight = FontWeight.Bold)
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    ToggleRow(localized("原子反光", "Reflection"), appearance.reflectionEnabled) { appearance = appearance.copy(reflectionEnabled = it) }
-                    LabeledSlider(localized("原子不透明度", "Atom opacity"), appearance.atomOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(atomOpacity = it) }
-                    if (appearance.reflectionEnabled) {
-                        LabeledSlider(localized("光源角度", "Light azimuth"), appearance.lightAzimuth, 0f..360f) { appearance = appearance.copy(lightAzimuth = it) }
-                        LabeledSlider(localized("光源高度", "Light elevation"), appearance.lightElevation, -90f..90f) { appearance = appearance.copy(lightElevation = it) }
-                        LabeledSlider(localized("反光强度", "Reflection intensity"), appearance.lightIntensity, 0f..1f) { appearance = appearance.copy(lightIntensity = it) }
-                        LabeledSlider(localized("反光扩散", "Reflection diffusion"), appearance.diffusion, 0f..1f) { appearance = appearance.copy(diffusion = it) }
-                    }
-                }
-                AtomAppearancePreview(appearance, Modifier.padding(start = 10.dp).size(112.dp))
-            }
+            ToggleRow(localized("原子反射", "Atom reflection"), appearance.reflectionEnabled) { appearance = appearance.copy(reflectionEnabled = it) }
+            LabeledSlider(localized("原子不透明度", "Atom opacity"), appearance.atomOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(atomOpacity = it) }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("化学键", "Bonds"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
-            ToggleRow(localized("键反光", "Bond reflection"), appearance.bondReflectionEnabled) { appearance = appearance.copy(bondReflectionEnabled = it) }
+            ToggleRow(localized("键反射", "Bond reflection"), appearance.bondReflectionEnabled) { appearance = appearance.copy(bondReflectionEnabled = it) }
             LabeledSlider(localized("键半径", "Bond radius"), appearance.bondRadius, 0.02f..0.4f) { appearance = appearance.copy(bondRadius = it) }
             LabeledSlider(localized("化学键不透明度", "Bond opacity"), appearance.bondOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(bondOpacity = it) }
             DropdownField(localized("键颜色", "Bond color"), bondColorLabels[appearance.bondColorMode.ordinal], bondColorLabels) { appearance = appearance.copy(bondColorMode = BondColorMode.entries[bondColorLabels.indexOf(it)]) }
@@ -741,8 +741,28 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
             Text(localized("多面体", "Polyhedra"), fontWeight = FontWeight.Bold)
             ToggleRow(localized("显示多面体", "Show polyhedra"), appearance.polyhedronEnabled) { appearance = appearance.copy(polyhedronEnabled = it) }
             if (appearance.polyhedronEnabled) {
-                ToggleRow(localized("多面体反光", "Polyhedron reflection"), appearance.polyhedronReflectionEnabled) { appearance = appearance.copy(polyhedronReflectionEnabled = it) }
+                ToggleRow(localized("多面体反射", "Polyhedron reflection"), appearance.polyhedronReflectionEnabled) { appearance = appearance.copy(polyhedronReflectionEnabled = it) }
                 LabeledSlider(localized("多面体不透明度", "Polyhedron opacity"), appearance.polyhedronOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(polyhedronOpacity = it) }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            Text(localized("世界光源", "World light"), fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    LabeledSlider(localized("光源方位角", "Light azimuth"), appearance.lightAzimuth, 0f..360f) { appearance = appearance.copy(lightAzimuth = it) }
+                    LabeledSlider(localized("光源高度角", "Light elevation"), appearance.lightElevation, 0f..90f) { appearance = appearance.copy(lightElevation = it) }
+                    LabeledSlider(localized("反射强度", "Reflection intensity"), appearance.lightIntensity, 0f..1f, percentage = true) { appearance = appearance.copy(lightIntensity = it) }
+                    LabeledSlider(localized("反射扩散", "Reflection diffusion"), appearance.diffusion, 0f..1f, percentage = true) { appearance = appearance.copy(diffusion = it) }
+                }
+                AtomAppearancePreview(appearance, Modifier.padding(start = 10.dp).size(112.dp))
+            }
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            Text(localized("景深", "Depth of field"), fontWeight = FontWeight.Bold)
+            ToggleRow(localized("景深", "Depth of field"), appearance.depthOfFieldEnabled) { appearance = appearance.copy(depthOfFieldEnabled = it) }
+            if (appearance.depthOfFieldEnabled) {
+                LabeledSlider(localized("焦点", "Focal"), appearance.dofFocal, 0f..1f, percentage = true) { appearance = appearance.copy(dofFocal = it) }
+                LabeledSlider(localized("清晰范围", "In-focus range"), appearance.dofRange, 0f..1f, percentage = true) { appearance = appearance.copy(dofRange = it) }
+                LabeledSlider(localized("模糊", "Blur"), appearance.dofBlur, 0f..1f, percentage = true) { appearance = appearance.copy(dofBlur = it) }
+                LabeledSlider(localized("雾化", "Fog"), appearance.dofFog, 0f..1f, percentage = true) { appearance = appearance.copy(dofFog = it) }
             }
         }
     }, confirmButton = { TextButton(onClick = { tab.appearance = appearance; onApplied(appearance); onDismiss() }) { Text(stringResource(R.string.confirm)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })
@@ -781,7 +801,7 @@ private fun AtomAppearancePreview(appearance: com.krystals.core.ViewerAppearance
                 val highlightBrush = Brush.radialGradient(
                     listOf(Color.White.copy(alpha = appearance.lightIntensity.coerceIn(.05f, 1f) * opacity), Color.Transparent),
                     center = highlight,
-                    radius = radius * (1.1f + appearance.diffusion * .45f),
+                    radius = radius * (0.35f + 0.75f * appearance.diffusion),
                 )
                 drawCircle(highlightBrush, radius, center)
             }
