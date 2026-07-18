@@ -943,7 +943,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                     }
                                     if (expanded) {
                                         groupSites.forEach { site ->
-                                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 28.dp, vertical = 2.dp)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 28.dp, top = 2.dp, bottom = 2.dp)) {
                                                 val visible = site.id !in tab.visibility.hiddenSites
                                                 Checkbox(visible, onCheckedChange = { checked ->
                                                     tab.visibility = tab.visibility.copy(hiddenSites = if (checked) tab.visibility.hiddenSites - site.id else tab.visibility.hiddenSites + site.id)
