@@ -93,10 +93,11 @@ data class ExpandedAtom(
 enum class BondRuleSource { CUSTOM, EXPLICIT, AUTO }
 
 // Per v0.4.1: radius source for bond-rule generation. BONDING (键合半径) is the default used by
-// ensureAutoBondRules and the "自动应用半径" (auto-apply radii) button in the bond editor; COVALENT
-// and VDW are the alternatives. BONDING radii are licensed CC BY-SA 4.0,
-// arXiv:2601.02017v1 [cond-mat.mtrl-sci] 05 Jan 2026.
-enum class RadiusSource { BONDING, COVALENT, VDW }
+// ensureAutoBondRules and the "自动应用半径" (auto-apply radii) button in the bond editor; VDW is
+// the alternative. BONDING looks up the bonding-radius table first and falls back to the covalent
+// single-bond table for elements it lacks (H, noble gases, Pm, Po–Ac, Pa, Am, Cm, …). The
+// bonding-radius data is licensed CC BY-SA 4.0, arXiv:2601.02017v1 [cond-mat.mtrl-sci] 05 Jan 2026.
+enum class RadiusSource { BONDING, VDW }
 
 data class BondRule(
     val siteA: String,
@@ -245,10 +246,10 @@ object PeriodicTable {
     }
     fun defaultRadius(symbol: String) = (covalentRadius(symbol) * 0.42).coerceIn(0.22, 0.85)
 
-    // Per v0.4.1: three radius tables. The auto-apply-radii button cycles between them; the default
-    // bond-rule generator uses BONDING (键合半径). Elements absent from a given table (D, the XX
-    // placeholder, the noble gases H/He/Ne/Ar and several heavy elements without a tabulated value,
-    // and 95+ actinides) fall back to [covalentRadius]'s default so bond generation never silently
+    // Per v0.4.1: two radius sources. The auto-apply-radii button cycles between them; the default
+    // bond-rule generator uses BONDING (键合半径). BONDING falls back to the covalent single-bond
+    // table below for elements it lacks, then to [covalentRadius]'s default for elements neither
+    // table covers (D, the XX placeholder, Fr, and 97+ actinides) so bond generation never silently
     // drops a pair.
     //
     // BONDING radii (键合半径) in Å. License: CC BY-SA 4.0; arXiv:2601.02017v1 [cond-mat.mtrl-sci] 05 Jan 2026.
@@ -284,8 +285,9 @@ object PeriodicTable {
         "U" to 1.86,
     )
     // Covalent (single-bond) radii in Å, sourced from .todos/atomic_radii.md (Wikipedia "Atomic
-    // radii of the elements" data page, Covalant(single bond) column). Elements with no tabulated
-    // single-bond value (Fr, Bk…Og) fall back to [covalentRadius] at lookup time.
+    // radii of the elements" data page, Covalant(single bond) column). Serves as the BONDING
+    // fallback for elements the bonding-radius table lacks (H, He, Ne, Ar, Pm, Po–Ac, Pa, Am, Cm).
+    // Elements with no tabulated single-bond value (Fr, Bk…Og) fall back to [covalentRadius].
     private val iniCovalentRadii = mapOf(
         "H" to 0.32, "He" to 0.46, "Li" to 1.33, "Be" to 1.02, "B" to 0.85, "C" to 0.75,
         "N" to 0.71, "O" to 0.63, "F" to 0.64, "Ne" to 0.67, "Na" to 1.55, "Mg" to 1.39,
@@ -305,12 +307,12 @@ object PeriodicTable {
         "U" to 1.70, "Np" to 1.71, "Pu" to 1.72, "Am" to 1.66, "Cm" to 1.66,
     )
 
-    /** Radius for bond-rule generation under [source]; falls back to [covalentRadius] when the
-     *  element is absent from the chosen table (D, the XX placeholder, noble gases / heavy elements
-     *  without a tabulated value, and 95+ actinides). */
+    /** Radius for bond-rule generation under [source]. BONDING uses the bonding-radius table, then
+     *  the covalent single-bond table, then [covalentRadius]; VDW uses the vdW table then
+     *  [covalentRadius]. Elements covered by none (D, the XX placeholder, Fr, 97+ actinides) always
+     *  reach the [covalentRadius] fallback so bond generation never silently drops a pair. */
     fun radius(symbol: String, source: RadiusSource): Double = when (source) {
-        RadiusSource.BONDING -> bondingRadii[symbol] ?: covalentRadius(symbol)
-        RadiusSource.COVALENT -> iniCovalentRadii[symbol] ?: covalentRadius(symbol)
+        RadiusSource.BONDING -> bondingRadii[symbol] ?: iniCovalentRadii[symbol] ?: covalentRadius(symbol)
         RadiusSource.VDW -> vdwRadii[symbol] ?: covalentRadius(symbol)
     }
 

@@ -426,7 +426,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         // Per v0.4.1: "自动应用半径" (auto-apply radii) clears every bond rule and regenerates them
-        // from one of three radius tables (bonding/covalent/vdW).
+        // from one of two radius sources (bonding/vdW).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { addOpen = true }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建规则", "New rule")) }
             Box(Modifier.weight(1f)) {
@@ -437,10 +437,6 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
                     DropdownMenuItem(text = { Text(localized("键合半径", "Bonding radius")) }, onClick = {
                         radiiMenuOpen = false
                         onStructure(CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.BONDING).structure)
-                    })
-                    DropdownMenuItem(text = { Text(localized("共价半径", "Covalent radius")) }, onClick = {
-                        radiiMenuOpen = false
-                        onStructure(CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.COVALENT).structure)
                     })
                     DropdownMenuItem(text = { Text(localized("vdW 半径", "vdW radius")) }, onClick = {
                         radiiMenuOpen = false
