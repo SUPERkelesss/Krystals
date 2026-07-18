@@ -136,6 +136,7 @@ import com.krystals.core.CrystalEditor
 import com.krystals.core.BondRuleMatching
 import com.krystals.core.CrystalEngine
 import com.krystals.core.EditCommand
+import com.krystals.core.CrystalStructure
 import com.krystals.core.ParsedStructure
 import com.krystals.core.PeriodicTable
 import com.krystals.renderer.CrystalViewport
@@ -380,6 +381,7 @@ fun KrystalsRoot(
                         onHelp = { helpOpen = true },
                         onAbout = { aboutOpen = true },
                         onSponsor = { sponsorOpen = true },
+                        onRunBondComputation = ::runWithBondComputation,
                     )
                 }
             }
@@ -553,6 +555,7 @@ private fun ViewerScreen(
     onHelp: () -> Unit,
     onAbout: () -> Unit,
     onSponsor: () -> Unit,
+    onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit),
 ) {
     val tab = viewModel.current ?: return
     var menuOpen by remember { mutableStateOf(false) }
@@ -785,7 +788,7 @@ private fun ViewerScreen(
                     modifier = Modifier.size(54.dp),
                 ) { AssetImage("icon_trans.png", Modifier.size(43.dp), ContentScale.Fit) }
             }
-            if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateStructure(tab, it) }, onMessage = onMessage, onRunBondComputation = ::runWithBondComputation)
+            if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateStructure(tab, it) }, onMessage = onMessage, onRunBondComputation = onRunBondComputation)
         }
     }
 
