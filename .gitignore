@@ -7,8 +7,8 @@ CLAUDE.md
 
 # Release signing secrets — never commit.
 keystore.properties
-keystores.properties
 *.keystore
+app/*.keystore
 **/build/
 *.iml
 captures/
