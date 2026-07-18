@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import com.krystals.core.CifCodec
-import com.krystals.core.CrystalEditor
 import com.krystals.core.ParsedStructure
 import com.krystals.core.SymmetryOperation
 import kotlinx.coroutines.Dispatchers
@@ -168,7 +167,8 @@ object MaterialsProject {
                     spaceGroupNumber = realSpaceGroup?.number ?: legacy.structure.spaceGroupNumber,
                     symmetryOperations = listOf(SymmetryOperation.IDENTITY),
                 )
-                legacy.copy(structure = ensureBondRules(corrected, materialId, "legacy"))
+                Log.d("MP", "downloadCif ok (legacy): $materialId -> ${corrected.sites.size} sites, sg=${corrected.spaceGroupName}")
+                legacy.copy(structure = corrected)
             } ?: run {
                 // New letter-format id (or legacy unavailable): use the primitive cell from next-gen,
                 // written as P1 so there is no primitive-cell-vs-Fm-3m-label contradiction.
@@ -176,7 +176,8 @@ object MaterialsProject {
                 target.parentFile?.mkdirs()
                 target.writeText(cif, Charsets.UTF_8)
                 val p = CifCodec.parseStructure(cif)
-                p.copy(structure = ensureBondRules(p.structure, materialId, "primitive"))
+                Log.d("MP", "downloadCif ok (primitive): $materialId -> ${p.structure.sites.size} sites, sg=${p.structure.spaceGroupName}")
+                p
             }
             Log.d("MP", "downloadCif ok: $materialId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroupName}")
             parsed
@@ -252,14 +253,6 @@ object MaterialsProject {
                 CifCodec.parseStructure(cifText)
             }
         }.onFailure { Log.w("MP", "tryLegacyCif failed for $materialId", it) }.getOrNull()
-    }
-
-    /** Synthesize bond rules for a freshly downloaded structure (MP CIFs carry none). */
-    private fun ensureBondRules(structure: com.krystals.core.CrystalStructure, materialId: String, how: String): com.krystals.core.CrystalStructure {
-        Log.d("MP", "downloadCif ok ($how): $materialId -> ${structure.sites.size} sites, sg=${structure.spaceGroupName}")
-        return if (structure.bondRules.isEmpty()) {
-            CrystalEditor.ensureAutoBondRules(structure).structure
-        } else structure
     }
 
     private data class SpaceGroupRef(val number: Int?, val symbol: String?)

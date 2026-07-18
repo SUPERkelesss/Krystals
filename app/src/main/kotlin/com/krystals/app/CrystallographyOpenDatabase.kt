@@ -2,7 +2,6 @@ package com.krystals.app
 
 import android.util.Log
 import com.krystals.core.CifCodec
-import com.krystals.core.CrystalEditor
 import com.krystals.core.ParsedStructure
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -221,10 +220,9 @@ object CrystallographyOpenDatabase {
                 target.writeText(cif, Charsets.UTF_8)
                 val parsed = CifCodec.parseStructure(cif)
                 Log.d("COD", "downloadCif ok: $fileId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroupName}")
-                // COD CIFs carry no bond rules, so synthesize them like MP downloads.
-                if (parsed.structure.bondRules.isEmpty()) {
-                    parsed.copy(structure = CrystalEditor.ensureAutoBondRules(parsed.structure).structure)
-                } else parsed
+                // Per v0.5.0: bond-rule synthesis is deferred to the caller's async path so the UI
+                // can show a "computing" overlay — return the parsed structure as-is here.
+                parsed
             }
         }
     }

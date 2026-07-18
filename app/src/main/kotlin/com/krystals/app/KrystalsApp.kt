@@ -136,6 +136,7 @@ import com.krystals.core.CrystalEditor
 import com.krystals.core.BondRuleMatching
 import com.krystals.core.CrystalEngine
 import com.krystals.core.EditCommand
+import com.krystals.core.ParsedStructure
 import com.krystals.core.PeriodicTable
 import com.krystals.renderer.CrystalViewport
 import com.krystals.renderer.CrystalImageExporter
@@ -182,6 +183,9 @@ fun KrystalsRoot(
     }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    // Per v0.5.0: global "计算中..." overlay shown while bond rules are recomputed (open file, add/
+    // delete atom, transform, hex/rhom conversion) off the UI thread.
+    var computing by remember { mutableStateOf(false) }
     var pendingOpen by remember { mutableStateOf<PendingOpen?>(null) }
     var pendingSaveTabId by remember { mutableStateOf<String?>(null) }
     var closeRequest by remember { mutableStateOf<Int?>(null) }
@@ -216,6 +220,24 @@ fun KrystalsRoot(
 
     fun showMessage(message: String) { scope.launch { snackbar.showSnackbar(message) } }
 
+    /**
+     * Per v0.5.0: run a bond-recomputing operation off the UI thread with the global "计算中..."
+     * overlay. [block] runs on Dispatchers.Default and returns the new structure (or null to abort
+     * silently, e.g. on validation failure where the caller already reported the error).
+     */
+    fun runWithBondComputation(block: suspend () -> CrystalStructure?) {
+        if (computing) return
+        computing = true
+        scope.launch {
+            val result = runCatching { withContext(Dispatchers.Default) { block() } }
+            computing = false
+            result.getOrNull()?.let { newStructure ->
+                viewModel.current?.let { viewModel.updateStructure(it, newStructure) }
+            }
+            result.onFailure { showMessage(it.message ?: "Operation failed") }
+        }
+    }
+
     // Per v0.4.0: resume the MP flow after the caution dialog — hasKey ? search : enter key.
     fun proceedToMp() {
         if (MaterialsProject.hasKey(activity)) mpSearchOpen = true else mpKeyDialogOpen = true
@@ -241,9 +263,21 @@ fun KrystalsRoot(
             }.onSuccess { result ->
                 if (result.candidates.size == 1) {
                     val parsed = CifCodec.parseStructure(result.text, result.candidates.first())
-                    viewModel.add(parsed, result.name, result.uri)
+                    openParsed(parsed, result.name, result.uri)
                 } else pendingOpen = result
             }.onFailure { showMessage(it.message ?: "Unable to open CIF") }
+        }
+    }
+
+    /** Per v0.5.0: add a parsed structure, synthesizing bond rules off-UI with the computing overlay. */
+    fun openParsed(parsed: ParsedStructure, name: String, uri: Uri?) {
+        // Add the tab immediately (so the empty structure shows), then compute rules if needed.
+        viewModel.add(parsed, name, uri)
+        val tab = viewModel.current ?: return
+        if (tab.structure.bondRules.isEmpty()) {
+            runWithBondComputation {
+                CrystalEditor.ensureAutoBondRules(tab.structure).structure
+            }
         }
     }
 
@@ -352,6 +386,16 @@ fun KrystalsRoot(
         }
 
         // Dialogs live inside KrystalsTheme so they pick up the correct color scheme (dark/light).
+        if (computing) {
+            androidx.compose.material3.BasicAlertDialog(onDismissRequest = {}) {
+                androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
+                    Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        androidx.compose.material3.CircularProgressIndicator()
+                        Text(localized("计算中...", "Computing..."))
+                    }
+                }
+            }
+        }
         pendingOpen?.let { pending ->
         val document = remember(pending) { CifCodec.parse(pending.text) }
         AlertDialog(
@@ -359,8 +403,8 @@ fun KrystalsRoot(
             title = { Text(localized("选择结构", "Select structure")) },
             text = { Column { pending.candidates.forEach { index -> TextButton(onClick = {
                 val parsed = CifCodec.parseStructure(pending.text, index)
-                viewModel.add(parsed, pending.name, pending.uri)
                 pendingOpen = null
+                openParsed(parsed, pending.name, pending.uri)
             }) { Text(document.blocks[index].name) } } } },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { pendingOpen = null }) { Text(stringResource(R.string.cancel)) } },
@@ -398,6 +442,7 @@ fun KrystalsRoot(
         preferences = preferences,
         onDismiss = { presetOpen = false },
         onMessage = ::showMessage,
+        onOpenParsed = { parsed, name -> presetOpen = false; openParsed(parsed, name, null) },
     )
     if (mpKeyDialogOpen) MpApiKeyDialog(
         context = activity,
@@ -427,6 +472,7 @@ fun KrystalsRoot(
         onBack = { mpSearchOpen = false },
         onChangeKey = { mpSearchOpen = false; mpKeyDialogOpen = true },
         onMessage = ::showMessage,
+        onOpenParsed = { parsed, name -> mpSearchOpen = false; openParsed(parsed, name, null) },
     )
     if (onlineSourceOpen) OnlineSourcePickerDialog(
         onDismiss = { onlineSourceOpen = false },
@@ -448,6 +494,7 @@ fun KrystalsRoot(
         viewModel = viewModel,
         onBack = { codSearchOpen = false },
         onMessage = ::showMessage,
+        onOpenParsed = { parsed, name -> codSearchOpen = false; openParsed(parsed, name, null) },
     )
     }
 }
@@ -630,8 +677,9 @@ private fun ViewerScreen(
                     onAtomTap = { atom ->
                         when (tab.atomEditMode) {
                             AtomEditMode.DELETE_NEXT -> {
-                                viewModel.updateStructure(tab, CrystalEditor.apply(tab.structure, EditCommand.DeleteAtom(atom.siteId)).structure)
                                 tab.atomEditMode = AtomEditMode.NONE
+                                val deleted = runCatching { CrystalEditor.apply(tab.structure, EditCommand.DeleteAtom(atom.siteId)).structure }.getOrNull()
+                                if (deleted != null) runWithBondComputation { CrystalEditor.ensureAutoBondRules(deleted).structure }
                             }
                             AtomEditMode.MODIFY_NEXT -> {
                                 tab.editingSiteId = atom.siteId; tab.atomEditMode = AtomEditMode.NONE; tab.editorOpen = true
@@ -737,7 +785,7 @@ private fun ViewerScreen(
                     modifier = Modifier.size(54.dp),
                 ) { AssetImage("icon_trans.png", Modifier.size(43.dp), ContentScale.Fit) }
             }
-            if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateStructure(tab, it) }, onMessage = onMessage)
+            if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateStructure(tab, it) }, onMessage = onMessage, onRunBondComputation = ::runWithBondComputation)
         }
     }
 
@@ -1299,6 +1347,7 @@ private fun PresetLibraryDialog(
     preferences: android.content.SharedPreferences,
     onDismiss: () -> Unit,
     onMessage: (String) -> Unit,
+    onOpenParsed: (ParsedStructure, String) -> Unit,
 ) {
     var presets by remember { mutableStateOf(PresetRepository.listPresets(context)) }
     var pendingDelete by remember { mutableStateOf<PresetEntry?>(null) }
@@ -1332,7 +1381,7 @@ private fun PresetLibraryDialog(
                             Text(localized("我的预设", "My presets"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
                         }
                     }
-                    if ("__user__" in expanded) items(userGroup, key = { "u_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage) { pendingDelete = entry } }
+                    if ("__user__" in expanded) items(userGroup, key = { "u_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
                 }
                 bundledGroups.forEach { (category, entries) ->
                     item(key = "header_$category") {
@@ -1341,7 +1390,7 @@ private fun PresetLibraryDialog(
                             Text(category, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
                         }
                     }
-                    if (category in expanded) items(entries, key = { category + "_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage) { pendingDelete = entry } }
+                    if (category in expanded) items(entries, key = { category + "_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
                 }
             }
         },
@@ -1367,13 +1416,14 @@ private fun PresetRow(
     onDismiss: () -> Unit,
     onMessage: (String) -> Unit,
     onDelete: () -> Unit,
+    onOpenParsed: (ParsedStructure, String) -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable {
             runCatching { PresetRepository.openPreset(context, entry) }
                 .onSuccess { parsed ->
-                    viewModel.add(parsed, entry.name, null, isNew = false)
                     onDismiss()
+                    onOpenParsed(parsed, entry.name)
                 }
                 .onFailure { onMessage(it.message ?: "Unable to open preset") }
         },
@@ -1442,6 +1492,7 @@ private fun MpSearchScreen(
     onBack: () -> Unit,
     onChangeKey: () -> Unit,
     onMessage: (String) -> Unit,
+    onOpenParsed: (ParsedStructure, String) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     var fuzzySearch by remember { mutableStateOf(false) }
@@ -1513,8 +1564,8 @@ private fun MpSearchScreen(
                                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                         downloadingId = null
                                         result.onSuccess { parsed ->
-                                            viewModel.add(parsed, "${item.materialId}.cif", Uri.fromFile(target), isNew = false)
                                             onBack()
+                                            onOpenParsed(parsed, "${item.materialId}.cif")
                                         }.onFailure { onMessage(it.message ?: "Download failed") }
                                     }
                                 }
@@ -1542,6 +1593,7 @@ private fun CodSearchScreen(
     viewModel: KrystalsViewModel,
     onBack: () -> Unit,
     onMessage: (String) -> Unit,
+    onOpenParsed: (ParsedStructure, String) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     // Per v0.3.1: COD supports three search modes — formula (default), element, text. Formula is
@@ -1649,8 +1701,8 @@ private fun CodSearchScreen(
                                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                         downloadingId = null
                                         result.onSuccess { parsed ->
-                                            viewModel.add(parsed, "cod-${item.fileId}.cif", Uri.fromFile(target), isNew = false)
                                             onBack()
+                                            onOpenParsed(parsed, "cod-${item.fileId}.cif")
                                         }.onFailure { onMessage(it.message ?: "Download failed") }
                                     }
                                 }
