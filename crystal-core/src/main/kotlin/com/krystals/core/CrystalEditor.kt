@@ -52,7 +52,9 @@ object CrystalEditor {
             bondRules = structure.bondRules.filterNot { it.siteA == command.siteId || it.siteB == command.siteId },
         ))
         is EditCommand.SetBondRule -> {
-            val rules = structure.bondRules.filterNot { it.key == command.rule.key } + command.rule
+            // Per v0.3.44: update the matching rule in place to preserve the bondRules list order,
+            // so toggling extendAcrossCell does not reshuffle the display order of bond rules.
+            val rules = structure.bondRules.map { if (it.key == command.rule.key) command.rule else it }
             // Re-adding a rule for a previously disabled pair re-enables it.
             EditResult(structure.copy(bondRules = rules, disabledBondPairs = structure.disabledBondPairs - command.rule.key))
         }
