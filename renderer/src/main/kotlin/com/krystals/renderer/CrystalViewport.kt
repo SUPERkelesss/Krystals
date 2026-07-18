@@ -31,6 +31,7 @@ import com.krystals.core.BondColorMode
 import com.krystals.core.ExpandedAtom
 import com.krystals.core.FrameMode
 import com.krystals.core.LineStyle
+import com.krystals.core.Mat3
 import com.krystals.core.PeriodicTable
 import com.krystals.core.SceneSnapshot
 import com.krystals.core.UnitCell
@@ -39,6 +40,9 @@ import com.krystals.core.ViewerAppearance
 import com.krystals.core.angleDegrees
 import com.krystals.core.dihedralDegrees
 import com.krystals.core.distance
+import com.krystals.core.eulerYX
+import com.krystals.core.rotX
+import com.krystals.core.rotY
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -96,8 +100,11 @@ private data class PolyhedronFaceRenderable(
 
 @Stable
 class ViewerController {
-    var yaw by mutableFloatStateOf(-28f)
-    var pitch by mutableFloatStateOf(22f)
+    // Per v0.5.1: orientation is a rotation matrix (world -> camera) instead of two accumulated
+    // Euler scalars. Drag deltas are applied as increments about the CAMERA's local axes (left
+    // multiply), so once the view is pitched/rolled the horizontal/vertical drags keep tracking
+    // the screen axes instead of the world axes — no more "skewed rotation after tilting".
+    var rotation: Mat3 by mutableStateOf(eulerYX(-28.0, 22.0))
     var zoom by mutableFloatStateOf(1f)
     var panX by mutableFloatStateOf(0f)
     var panY by mutableFloatStateOf(0f)
@@ -108,12 +115,27 @@ class ViewerController {
     var viewportHeight: Int = 1080
         internal set
 
+    /**
+     * Apply a single-finger drag as a camera-local rotation increment. [dxPx]/[dyPx] are pixel
+     * deltas. Both axes follow the finger: dragging right/down moves the object right/down.
+     * The negations compensate for the projection (`project` uses `-v.y*scale`, and the camera
+     * looks down -Z), so the object tracks the finger on both axes. Left-multiplying the
+     * increment keeps it in the camera frame, which is what makes a tilted view still follow.
+     */
+    fun rotateByDrag(dxPx: Float, dyPx: Float, sensitivity: Float = 0.32f) {
+        val pitchInc = -dyPx * sensitivity
+        val yawInc = -dxPx * sensitivity
+        val increment = rotX(pitchInc.toDouble()) * rotY(yawInc.toDouble())
+        rotation = (increment * rotation).orthonormalized()
+    }
+
     fun align(axis: Char) {
-        when (axis.lowercaseChar()) {
-            'x' -> { yaw = -90f; pitch = 0f }
-            'y' -> { yaw = 0f; pitch = 90f }
-            else -> { yaw = 0f; pitch = 0f }
+        val (yaw, pitch) = when (axis.lowercaseChar()) {
+            'x' -> -90f to 0f
+            'y' -> 0f to 90f
+            else -> 0f to 0f
         }
+        rotation = eulerYX(yaw.toDouble(), pitch.toDouble())
         panX = 0f
         panY = 0f
     }
@@ -127,8 +149,7 @@ class ViewerController {
         val pitchRad = atan2(v.y, v.z)
         val zPlane = v.y * sin(pitchRad) + v.z * cos(pitchRad)
         val yawRad = atan2(-v.x, zPlane)
-        yaw = Math.toDegrees(yawRad).toFloat()
-        pitch = Math.toDegrees(pitchRad).toFloat()
+        rotation = eulerYX(Math.toDegrees(yawRad.toDouble()), Math.toDegrees(pitchRad.toDouble()))
         panX = 0f
         panY = 0f
     }
@@ -187,8 +208,7 @@ fun CrystalViewport(
                             if (pressed.size == 1) {
                                 val delta = pressed.first().position - pressed.first().previousPosition
                                 if (delta.getDistance() > 0f) {
-                                    controller.yaw += delta.x * 0.32f
-                                    controller.pitch += delta.y * 0.32f
+                                    controller.rotateByDrag(delta.x, delta.y)
                                     onViewMoved()
                                 }
                             } else if (pressed.size >= 2) {
@@ -247,7 +267,7 @@ fun CrystalViewport(
         val center = boundingCenter(snapshot.atoms.map { it.cartesian })
         // Per v0.3.0: project ALL atoms (not just visible) so bonds/polyhedra survive hiding an
         // atom — the bond endpoint / polyhedron vertex lookup (byId) needs the hidden atoms too.
-        val rotated = snapshot.atoms.associateWith { rotate(it.cartesian - center, controller.yaw, controller.pitch) }
+        val rotated = snapshot.atoms.associateWith { controller.rotation * (it.cartesian - center) }
         val fullRotated = rotated.values.toList()
         val extentX = fullRotated.maxOf { it.x } - fullRotated.minOf { it.x }
         val extentY = fullRotated.maxOf { it.y } - fullRotated.minOf { it.y }
@@ -341,7 +361,7 @@ fun CrystalViewport(
                         // front atoms.
                         val baseArgb = PeriodicTable.resolveSiteArgb(center.atom.siteId, center.atom.element, snapshot.structure.siteArgbOverrides, snapshot.elementArgbOverrides)
                         val baseColor = colorFromArgb(baseArgb).copy(alpha = appearance.polyhedronOpacity.coerceIn(0f, 1f))
-                        polyhedronFaceRenderables(center, vertices, baseColor, controller.yaw, controller.pitch).forEach { add(it) }
+                        polyhedronFaceRenderables(center, vertices, baseColor, controller.rotation).forEach { add(it) }
                     }
                 }
             }
@@ -499,8 +519,7 @@ private fun polyhedronFaceRenderables(
     center: ProjectedAtom,
     vertices: List<ProjectedAtom>,
     baseColor: Color,
-    yaw: Float,
-    pitch: Float,
+    rotation: Mat3,
 ): List<PolyhedronFaceRenderable> {
     if (vertices.size < 3) return emptyList()
     val byCartesian = vertices.associateBy { it.atom.cartesian }
@@ -535,7 +554,7 @@ private fun polyhedronFaceRenderables(
         val len = worldNormal.length()
         if (len < 1e-12) return@forEach
         val normal = worldNormal / len
-        val camNormal = rotate(normal, yaw, pitch)
+        val camNormal = rotation * normal
         val screenVerts = faceVerts.map { it.point }
         val nearestDepth = faceVerts.minOf { it.depth }
         val vertexIds = faceVerts.map { it.atom.id }
@@ -555,7 +574,7 @@ private fun polyhedronFaceRenderables(
         // from the centre-atom side. Rendered after (so it paints over) with lower alpha to look like
         // a translucent back side.
         if (allCoplanar) {
-            val reversedCamNormal = rotate(normal * -1.0, yaw, pitch)
+            val reversedCamNormal = rotation * (normal * -1.0)
             if (reversedCamNormal.z > 0.0) {
                 val backColor = baseColor.copy(alpha = (baseColor.alpha * 0.4f).coerceIn(0f, 1f))
                 result += PolyhedronFaceRenderable(backColor, screenVerts.reversed(), vertexIds.reversed(), nearestDepth, reversedCamNormal)
@@ -703,7 +722,7 @@ private fun DrawScope.drawAxes(
         strokeWidth = 4f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
     }
     directions.forEachIndexed { index, dir ->
-        val rotated = rotate(dir, controller.yaw, controller.pitch)
+        val rotated = controller.rotation * dir
         // Normalize the projected direction so each arrow is the same screen length.
         val projected = Offset(rotated.x.toFloat(), -rotated.y.toFloat())
         val len = projected.getDistance()
@@ -769,7 +788,7 @@ private fun DrawScope.drawCellFrames(
             Vec3(ix.toDouble(), iy.toDouble(), iz + 1.0), Vec3(ix + 1.0, iy.toDouble(), iz + 1.0),
             Vec3(ix.toDouble(), iy + 1.0, iz + 1.0), Vec3(ix + 1.0, iy + 1.0, iz + 1.0),
         ).map { snapshot.structure.cell.toCartesian(it) - center }
-            .map { rotate(it, controller.yaw, controller.pitch) }
+            .map { controller.rotation * it }
             .map(project)
         edges.forEach { (a, b) -> drawLine(Color.Gray.copy(alpha = 0.72f), vertices[a], vertices[b], 1.4f, pathEffect = effect) }
     }
@@ -780,15 +799,5 @@ private fun boundingCenter(points: List<Vec3>): Vec3 = Vec3(
     (points.minOf { it.y } + points.maxOf { it.y }) / 2,
     (points.minOf { it.z } + points.maxOf { it.z }) / 2,
 )
-
-private fun rotate(v: Vec3, yawDegrees: Float, pitchDegrees: Float): Vec3 {
-    val yaw = yawDegrees / 180.0 * PI
-    val pitch = pitchDegrees / 180.0 * PI
-    val y = v.y * cos(pitch) - v.z * sin(pitch)
-    val zPitch = v.y * sin(pitch) + v.z * cos(pitch)
-    val x = v.x * cos(yaw) + zPitch * sin(yaw)
-    val finalZ = -v.x * sin(yaw) + zPitch * cos(yaw)
-    return Vec3(x, y, finalZ)
-}
 
 private fun colorFromArgb(argb: Long) = Color(argb)

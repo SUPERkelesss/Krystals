@@ -13,6 +13,7 @@ import com.krystals.core.AxisMode
 import com.krystals.core.BondColorMode
 import com.krystals.core.FrameMode
 import com.krystals.core.LineStyle
+import com.krystals.core.Mat3
 import com.krystals.core.PeriodicTable
 import com.krystals.core.SceneSnapshot
 import com.krystals.core.Vec3
@@ -62,9 +63,8 @@ object CrystalImageExporter {
         appearance: ViewerAppearance,
         elementArgbOverrides: Map<String, Long>,
         siteArgbOverrides: Map<String, Long>,
-        yaw: Float,
-        pitch: Float,
-    ): List<PolyhedronFacePrimitive> {
+        rotation: Mat3,
+): List<PolyhedronFacePrimitive> {
         if (vertices.size < 3) return emptyList()
         val hullFaces = convexHullFaces(center.cartesian, vertices.map { it.cartesian })
         val faces = hullFaces.map { poly -> poly.map { p -> vertices.first { it.cartesian == p } } }
@@ -87,7 +87,7 @@ object CrystalImageExporter {
             val normal = outward / len
             val ordered = if (cross.dot(normal) < 0) faceVerts.reversed() else faceVerts
             val nearestDepth = ordered.minOf { it.z }
-            val camZ = rotate(normal, yaw, pitch).z
+            val camZ = (rotation * normal).z
             if (camZ > 0.0) {
                 result += PolyhedronFacePrimitive(center, ordered, normal, 1.0f, outlineOnly = false, outlineAlpha = 0.35f, depth = nearestDepth)
                 if (allCoplanar) result += PolyhedronFacePrimitive(center, ordered.reversed(), normal * -1.0, 0.4f, outlineOnly = false, outlineAlpha = 0.35f, depth = nearestDepth)
@@ -139,7 +139,7 @@ object CrystalImageExporter {
             (snapshot.atoms.minOf { it.cartesian.y } + snapshot.atoms.maxOf { it.cartesian.y }) / 2,
             (snapshot.atoms.minOf { it.cartesian.z } + snapshot.atoms.maxOf { it.cartesian.z }) / 2,
         )
-        val allRotated = snapshot.atoms.map { rotate(it.cartesian - center, controller.yaw, controller.pitch) }
+        val allRotated = snapshot.atoms.map { controller.rotation * (it.cartesian - center) }
         val extentX = allRotated.maxOf { it.x } - allRotated.minOf { it.x }
         val extentY = allRotated.maxOf { it.y } - allRotated.minOf { it.y }
         val scale = min(width / max(1.0, extentX), height / max(1.0, extentY)).toFloat() * 0.72f * controller.zoom
@@ -150,7 +150,7 @@ object CrystalImageExporter {
         // Per v0.3.0: project ALL atoms (so bonds/polyhedra survive hiding an atom); render only
         // visible atoms as AtomPrimitive.
         val points = snapshot.atoms.map { atom ->
-            val rotated = rotate(atom.cartesian - center, controller.yaw, controller.pitch)
+            val rotated = controller.rotation * (atom.cartesian - center)
             val (x, y) = screen(rotated)
             Point(atom.id, atom.element, atom.siteId, atom.siteLabel, x, y, rotated.z, (PeriodicTable.defaultRadius(atom.element).toFloat() * scale).coerceIn(4.5f, 42f), atom.occupancy, atom.fractional, atom.cartesian, atom.isShell, atom.isBoundaryImage)
         }
@@ -190,7 +190,7 @@ object CrystalImageExporter {
                     if (vertices.size >= 3) {
                         // Per v0.3.43: draw each face as its own primitive sorted by the face's nearest
                         // vertex depth, instead of one block at the centre depth.
-                        drawPolyhedronFacePrimitives(center, vertices, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.yaw, controller.pitch).forEach { add(it) }
+                        drawPolyhedronFacePrimitives(center, vertices, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.rotation).forEach { add(it) }
                     }
                 }
             }
@@ -200,7 +200,7 @@ object CrystalImageExporter {
             when (primitive) {
                 is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, selectedAtomIds, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides)
                 is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites)
-                is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.yaw, controller.pitch)
+                is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.rotation)
             }
         }
         // Per v0.3.0: draw locked (persistent) + active measurement/info windows.
@@ -331,14 +331,13 @@ object CrystalImageExporter {
         appearance: ViewerAppearance,
         elementArgbOverrides: Map<String, Long>,
         siteArgbOverrides: Map<String, Long>,
-        yaw: Float,
-        pitch: Float,
+        rotation: Mat3,
     ) {
         val verts = face.faceVerts
         if (verts.size < 3) return
         val baseArgb = PeriodicTable.resolveSiteArgb(face.center.siteId, face.center.element, siteArgbOverrides, elementArgbOverrides).toInt()
         val baseColor = Color.argb((appearance.polyhedronOpacity.coerceIn(0f, 1f) * 255).toInt(), Color.red(baseArgb), Color.green(baseArgb), Color.blue(baseArgb))
-        val cam = rotate(face.normal, yaw, pitch)
+        val cam = rotation * face.normal
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         // Per v0.3.44: outline-only back faces skip the fill and draw edges at low alpha.
         if (!face.outlineOnly) {
@@ -423,7 +422,7 @@ object CrystalImageExporter {
             strokeWidth = 4f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(4f, 1f, 1f, Color.BLACK)
         }
         directions.forEachIndexed { index, dir ->
-            val rotated = rotate(dir, controller.yaw, controller.pitch)
+            val rotated = controller.rotation * dir
             val projected = PointF(rotated.x.toFloat(), -rotated.y.toFloat())
             val len = sqrt(projected.x * projected.x + projected.y * projected.y)
             val unitX = if (len > 0.0001f) projected.x / len else 0f
@@ -482,7 +481,7 @@ object CrystalImageExporter {
                 Vec3(ix.toDouble(), iy + 1.0, iz.toDouble()), Vec3(ix + 1.0, iy + 1.0, iz.toDouble()),
                 Vec3(ix.toDouble(), iy.toDouble(), iz + 1.0), Vec3(ix + 1.0, iy.toDouble(), iz + 1.0),
                 Vec3(ix.toDouble(), iy + 1.0, iz + 1.0), Vec3(ix + 1.0, iy + 1.0, iz + 1.0),
-            ).map { rotate(snapshot.structure.cell.toCartesian(it) - center, controller.yaw, controller.pitch) }
+            ).map { controller.rotation * (snapshot.structure.cell.toCartesian(it) - center) }
                 .map { Pair(width / 2f + controller.panX + it.x.toFloat() * scale, height / 2f + controller.panY - it.y.toFloat() * scale) }
             edges.forEach { (a, b) -> canvas.drawLine(vertices[a].first, vertices[a].second, vertices[b].first, vertices[b].second, paint) }
         }
@@ -545,14 +544,4 @@ object CrystalImageExporter {
     }
 
     private fun Double.formatFract() = "%.4f".format(this)
-
-    private fun rotate(v: Vec3, yawDegrees: Float, pitchDegrees: Float): Vec3 {
-        val yaw = yawDegrees / 180.0 * PI
-        val pitch = pitchDegrees / 180.0 * PI
-        val y = v.y * cos(pitch) - v.z * sin(pitch)
-        val zPitch = v.y * sin(pitch) + v.z * cos(pitch)
-        val x = v.x * cos(yaw) + zPitch * sin(yaw)
-        val finalZ = -v.x * sin(yaw) + zPitch * cos(yaw)
-        return Vec3(x, y, finalZ)
-    }
 }

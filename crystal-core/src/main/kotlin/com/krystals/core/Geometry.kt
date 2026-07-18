@@ -70,7 +70,58 @@ data class Mat3(val a: Vec3, val b: Vec3, val c: Vec3) {
             Vec3(rows[0][2].toDouble(), rows[1][2].toDouble(), rows[2][2].toDouble()),
         )
     }
+
+    /** Transpose (rows <-> columns). For a rotation matrix this is also its inverse. */
+    fun transposed() = Mat3(
+        Vec3(a.x, b.x, c.x),
+        Vec3(a.y, b.y, c.y),
+        Vec3(a.z, b.z, c.z),
+    )
+
+    /**
+     * Re-orthonormalize via Gram-Schmidt. Accumulated left-multiplied rotation matrices drift out
+     * of orthogonality over many drag increments; this keeps the columns an orthonormal basis.
+     */
+    fun orthonormalized(): Mat3 {
+        val c0 = a.normalized()
+        val c1 = (b - c0 * b.dot(c0)).normalized()
+        val c2 = c0.cross(c1)
+        return Mat3(c0, c1, c2)
+    }
 }
+
+/** Rotation matrix for `R_x(theta)`: rotation about the world X axis by [degrees]. */
+fun rotX(degrees: Double): Mat3 {
+    val t = degrees / 180.0 * PI
+    val c = cos(t)
+    val s = sin(t)
+    // R_x acts on (y, z): y' = y*cos - z*sin, z' = y*sin + z*cos. Stored by columns.
+    return Mat3(
+        Vec3(1.0, 0.0, 0.0),
+        Vec3(0.0, c, s),
+        Vec3(0.0, -s, c),
+    )
+}
+
+/** Rotation matrix for `R_y(theta)`: rotation about the world Y axis by [degrees]. */
+fun rotY(degrees: Double): Mat3 {
+    val t = degrees / 180.0 * PI
+    val c = cos(t)
+    val s = sin(t)
+    // R_y acts on (x, z): x' = x*cos + z*sin, z' = -x*sin + z*cos. Stored by columns.
+    return Mat3(
+        Vec3(c, 0.0, -s),
+        Vec3(0.0, 1.0, 0.0),
+        Vec3(s, 0.0, c),
+    )
+}
+
+/**
+ * Euler rotation `R = R_y(yaw) * R_x(pitch)` (fixed-axis, yaw then pitch application order).
+ * Bit-for-bit equivalent to the legacy `rotate(v, yaw, pitch)` so the start view and the align
+ * results are unchanged after the matrix migration.
+ */
+fun eulerYX(yawDegrees: Double, pitchDegrees: Double): Mat3 = rotY(yawDegrees) * rotX(pitchDegrees)
 
 data class UnitCell(
     val a: Double,
