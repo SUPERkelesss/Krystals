@@ -168,11 +168,22 @@ fun KrystalsRoot(
     var language by remember {
         mutableStateOf(preferences.getString("language", if (java.util.Locale.getDefault().language == "zh") "zh" else "en") ?: "en")
     }
+    // Per v0.5.2a: load the persisted global appearance once at startup (falls back to defaults).
+    LaunchedEffect(Unit) {
+        preferences.getString(AppearanceStore.KEY, null)?.let { json ->
+            AppearanceStore.fromJson(json)?.let { ap -> viewModel.applyAppearance(ap) }
+        }
+    }
     val systemDark = isSystemInDarkTheme()
     fun applyViewerBackground(dark: Boolean) {
         val background = if (dark) 0xFF101014 else 0xFFF8F8FB
         viewModel.defaultAppearance = viewModel.defaultAppearance.copy(backgroundArgb = background)
         viewModel.tabs.forEach { tab -> tab.appearance = tab.appearance.copy(backgroundArgb = background) }
+    }
+    // Per v0.5.2a: persist + globally apply a new appearance (default + every open tab).
+    fun applyViewerAppearance(ap: com.krystals.core.ViewerAppearance) {
+        viewModel.applyAppearance(ap)
+        preferences.edit().putString(AppearanceStore.KEY, AppearanceStore.run { ap.toJson() }).apply()
     }
     fun applyTheme(mode: ThemeMode) {
         themeMode = mode
@@ -383,6 +394,7 @@ fun KrystalsRoot(
                         onAbout = { aboutOpen = true },
                         onSponsor = { sponsorOpen = true },
                         onRunBondComputation = ::runWithBondComputation,
+                        onApplyAppearance = ::applyViewerAppearance,
                     )
                 }
             }
@@ -557,6 +569,7 @@ private fun ViewerScreen(
     onAbout: () -> Unit,
     onSponsor: () -> Unit,
     onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit),
+    onApplyAppearance: (com.krystals.core.ViewerAppearance) -> Unit,
 ) {
     val tab = viewModel.current ?: return
     var menuOpen by remember { mutableStateOf(false) }
@@ -566,6 +579,9 @@ private fun ViewerScreen(
     var displayOpen by remember { mutableStateOf(false) }
     var infoOpen by remember { mutableStateOf(false) }
     var appearanceOpen by remember { mutableStateOf(false) }
+    // Per v0.5.2a: while non-null, the viewer renders with this edited appearance (press-and-hold
+    // "Preview" in the Appearance dialog sets it and hides the dialog); null = use tab.appearance.
+    var previewAppearance by remember { mutableStateOf<com.krystals.core.ViewerAppearance?>(null) }
     var floatingX by remember(tab.id) { mutableFloatStateOf(0f) }
     var floatingY by remember(tab.id) { mutableFloatStateOf(0f) }
     // Per v0.4.2: only the main ball (the 54dp center FAB) must stay on-screen — the radial tool
@@ -637,7 +653,7 @@ private fun ViewerScreen(
             sceneResult.onSuccess { snapshot ->
                 CrystalViewport(
                     snapshot = snapshot,
-                    appearance = tab.appearance,
+                    appearance = previewAppearance ?: tab.appearance,
                     controller = controller,
                     visibility = tab.visibility,
                     selectedAtomIds = tab.selectedAtomIds,
@@ -822,7 +838,14 @@ private fun ViewerScreen(
     )
     if (displayOpen) DisplayPanel(tab, viewModel, onDismiss = { displayOpen = false })
     if (infoOpen) InfoDialog(tab, onDismiss = { infoOpen = false })
-    if (appearanceOpen) AppearanceDialog(tab, onDismiss = { appearanceOpen = false }) { viewModel.defaultAppearance = it }
+    // Per v0.5.2a: hide the Appearance dialog while previewing (previewAppearance != null).
+    if (appearanceOpen && previewAppearance == null) AppearanceDialog(
+        tab,
+        onDismiss = { appearanceOpen = false },
+        onApplied = { onApplyAppearance(it) },
+        onPreviewStart = { previewAppearance = it },
+        onPreviewEnd = { previewAppearance = null },
+    )
 }
 
 @Composable

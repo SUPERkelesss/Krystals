@@ -64,6 +64,13 @@ class KrystalsViewModel : ViewModel() {
 
     val current: DocumentTab? get() = tabs.getOrNull(selectedIndex)
 
+    // Per v0.5.2a: set the global appearance — default + every open tab — in one go (used both at
+    // startup to load the persisted value and when the user saves in the Appearance dialog).
+    fun applyAppearance(ap: ViewerAppearance) {
+        defaultAppearance = ap
+        tabs.forEach { it.appearance = ap }
+    }
+
     fun add(parsed: ParsedStructure, name: String, uri: Uri?, isNew: Boolean = false) {
         val existing = uri?.let { target -> tabs.indexOfFirst { it.uri == target } } ?: -1
         if (existing >= 0) { selectedIndex = existing; return }

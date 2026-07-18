@@ -180,14 +180,14 @@ data class ViewerAppearance(
     val polyhedronReflectionEnabled: Boolean = true,
     val showAxes: Boolean = true,
     val axisMode: AxisMode = AxisMode.ABC,
-    // Per v0.5.3: depth cueing via a linear alpha fog. Near/Far are signed distances in scene
-    // units (1 unit = 1/5 of the visible depth span): negative = toward the camera, positive = away,
-    // 0 = the crystal centre. Atoms/bonds/polyhedra fade to transparent (alpha -> 0) linearly across
-    // [near, far]; their RGB is untouched so colours stay true. Defaults 0.5 / 3.5 fog only the far
-    // side. Replaces the v0.5.2 blur+fog model.
-    val depthOfFieldEnabled: Boolean = false,
-    val dofNear: Float = 0.5f,
-    val dofFar: Float = 3.5f,
+    // Per v0.5.3/v0.5.2a: depth cueing via a linear alpha fog. Near/Far are signed distances in scene
+    // units (1 unit = 1/6 of the visible depth span, so the nearest atom maps to -3 and the farthest
+    // to +3): negative = toward the camera, positive = away, 0 = the crystal centre. Atoms/bonds/
+    // polyhedra fade to transparent (alpha -> 0) linearly across [near, far]; RGB is untouched so
+    // colours stay true. Defaults: cueing on, near -0.5 / far 4.5 (fog only the far side).
+    val depthOfFieldEnabled: Boolean = true,
+    val dofNear: Float = -0.5f,
+    val dofFar: Float = 4.5f,
 )
 
 data class SceneSnapshot(

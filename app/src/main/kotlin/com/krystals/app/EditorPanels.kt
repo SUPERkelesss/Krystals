@@ -3,6 +3,7 @@
 package com.krystals.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -69,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -701,7 +703,15 @@ private fun ExpansionCluster(label: String, value: Int, onValue: (Int) -> Unit) 
 }
 
 @Composable
-fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.krystals.core.ViewerAppearance) -> Unit = {}) {
+fun AppearanceDialog(
+    tab: DocumentTab,
+    onDismiss: () -> Unit,
+    onApplied: (com.krystals.core.ViewerAppearance) -> Unit = {},
+    // Per v0.5.2a: press-and-hold Preview callbacks. onPreviewStart hands the in-dialog appearance
+    // up so the viewer can render with it; onPreviewEnd restores the dialog.
+    onPreviewStart: (com.krystals.core.ViewerAppearance) -> Unit = {},
+    onPreviewEnd: () -> Unit = {},
+) {
     var appearance by remember { mutableStateOf(tab.appearance) }
     var colorPickerOpen by remember { mutableStateOf(false) }
     var bondColorPickerOpen by remember { mutableStateOf(false) }
@@ -793,16 +803,42 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
             if (appearance.depthOfFieldEnabled) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        // Per v0.5.3: near/far signed distances in scene units (-5..5). Negative =
-                        // toward the camera, positive = away, 0 = crystal centre. Integer step.
-                        LabeledSlider(localized("起始值", "Near"), appearance.dofNear, -5f..5f, steps = 9) { appearance = appearance.copy(dofNear = it) }
-                        LabeledSlider(localized("终止值", "Far"), appearance.dofFar, -5f..5f, steps = 9) { appearance = appearance.copy(dofFar = it) }
+                        // Per v0.5.2a: continuous slider (-5..5, may exceed the -3..3 atom range);
+                        // near cannot exceed far (clamped on change).
+                        LabeledSlider(localized("起始值", "Near"), appearance.dofNear, -5f..5f) { v -> appearance = appearance.copy(dofNear = v.coerceAtMost(appearance.dofFar)) }
+                        LabeledSlider(localized("终止值", "Far"), appearance.dofFar, -5f..5f) { v -> appearance = appearance.copy(dofFar = v.coerceAtLeast(appearance.dofNear)) }
                     }
                     DepthCueingPreview(appearance, Modifier.padding(start = 10.dp).size(112.dp))
                 }
             }
         }
-    }, confirmButton = { TextButton(onClick = { tab.appearance = appearance; onApplied(appearance); onDismiss() }) { Text(stringResource(R.string.confirm)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })
+    }, confirmButton = {
+        // Per v0.5.2a: Preview (press-and-hold, rounded) / Cancel (text) / Save (rounded).
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Preview: press-and-hold via detectTapGestures.onPress; no onClick.
+            Box(
+                Modifier
+                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(16.dp))
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onPress = {
+                                onPreviewStart(appearance)
+                                tryAwaitRelease()
+                                onPreviewEnd()
+                            },
+                        )
+                    }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) { Text(localized("预览", "Preview"), color = MaterialTheme.colorScheme.onPrimary) }
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = onDismiss) { Text(localized("取消", "Cancel")) }
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { onApplied(appearance); onDismiss() },
+                shape = RoundedCornerShape(16.dp),
+            ) { Text(localized("保存", "Save")) }
+        }
+    })
 
     if (colorPickerOpen) {
         ColorPickerDialog(
@@ -849,10 +885,10 @@ private fun AtomAppearancePreview(appearance: com.krystals.core.ViewerAppearance
 }
 
 /**
- * Per v0.5.3: depth-cueing preview — a vertical column of sample atoms spanning the near→far range,
- * faded by the same linear alpha fog the renderer applies. Colours stay true; only alpha drops with
- * distance. Near (top) is full-opacity, far (bottom) is fully faded, matching [CrystalViewport]'s
- * `dofAlpha(near..far)` ramp.
+ * Per v0.5.2a: depth-cueing preview — five atoms arranged near (top) → far (bottom) at the fixed
+ * crystal-depth positions -3, -1.5, 0, 1.5, 3, each lit by the world light (same highlight as the
+ * atom preview) and faded by the linear alpha fog from [depthCueAlpha]. The nearest atom is
+ * labelled "-3" and the farthest "3". Alpha updates live as the near/far sliders move.
  */
 @Composable
 private fun DepthCueingPreview(appearance: com.krystals.core.ViewerAppearance, modifier: Modifier = Modifier) {
@@ -860,31 +896,59 @@ private fun DepthCueingPreview(appearance: com.krystals.core.ViewerAppearance, m
         Canvas(Modifier.fillMaxSize().padding(8.dp)) {
             val near = appearance.dofNear.coerceIn(-5f, 5f)
             val far = appearance.dofFar.coerceIn(-5f, 5f)
-            val span = (far - near).let { if (abs(it) < 1e-3f) 1e-3f else it }
-            val samples = 5
-            val r = size.minDimension * 0.11f
-            val top = size.height * 0.14f
-            val bottom = size.height * 0.86f
-            // Sample colours across the palette so the fade is visible on varied atoms.
-            val colors = listOf(0xFFE57373L, 0xFF81C784L, 0xFF64B5F6L, 0xFFFFD54FL, 0xFFBA68C8L)
-            for (i in 0 until samples) {
-                // i=0 at the near value (top, full opacity), i=last at the far value (bottom, faded).
-                val t = if (samples == 1) 0f else i.toFloat() / (samples - 1)
-                val d = near + t * span
-                val alpha = depthCueAlpha(d, near, far)
+            val r = size.minDimension * 0.10f
+            val top = size.height * 0.16f
+            val bottom = size.height * 0.84f
+            // Fixed depth positions: nearest atom = -3, farthest = +3 (the full crystal depth range).
+            val depths = listOf(-3f, -1.5f, 0f, 1.5f, 3f)
+            val cx = size.width / 2f
+            val n = depths.size
+            for (i in 0 until n) {
+                val t = i.toFloat() / (n - 1)
                 val y = top + t * (bottom - top)
-                val cx = size.width / 2f
-                val base = colorFromArgb(colors[i]).copy(alpha = alpha)
-                drawCircle(base, r, Offset(cx, y))
+                val alpha = depthCueAlpha(depths[i], near, far)
+                drawPreviewSphere(Offset(cx, y), r, appearance, alpha)
             }
+            // Labels: "-3" beside the nearest (top) atom, "3" beside the farthest (bottom).
+            val labelColor = Color.White.copy(alpha = 0.9f)
+            val nc = drawContext.canvas.nativeCanvas
+            val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = (labelColor.alpha * 255).toInt().coerceIn(0, 255) shl 24 or 0x00FFFFFF
+                textSize = r * 1.1f
+                setShadowLayer(3f, 1f, 1f, android.graphics.Color.BLACK)
+            }
+            nc.drawText("-3", cx + r + 6f, top + r * 0.4f, p)
+            nc.drawText("3", cx + r + 6f, bottom + r * 0.4f, p)
         }
     }
 }
 
+/** Draws one lit preview sphere at [c] with radius [r], world-light highlight, and [alpha] fade. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
+    c: Offset, r: Float, appearance: com.krystals.core.ViewerAppearance, alpha: Float,
+) {
+    if (alpha < 0.01f) return
+    val gray = Color(0xFF747479).copy(alpha = alpha)
+    drawCircle(gray, r, c)
+    if (appearance.reflectionEnabled && alpha > 0.01f) {
+        val azimuth = appearance.lightAzimuth / 180f * PI.toFloat()
+        val elevation = appearance.lightElevation / 180f * PI.toFloat()
+        val lightOffset = r * .38f * cos(elevation)
+        val highlight = c - Offset(cos(azimuth) * lightOffset, sin(azimuth) * lightOffset)
+        val highlightBrush = Brush.radialGradient(
+            listOf(Color.White.copy(alpha = appearance.lightIntensity.coerceIn(.05f, 1f) * alpha), Color.Transparent),
+            center = highlight,
+            radius = r * (0.35f + 0.75f * appearance.diffusion),
+        )
+        drawCircle(highlightBrush, r, c)
+    }
+    drawCircle(Color.Black.copy(alpha = .3f * alpha), r, c, style = androidx.compose.ui.graphics.drawscope.Stroke(1.2f))
+}
+
 /**
- * Per v0.5.3: linear alpha fog. [d] is the signed distance in scene units (negative = near camera,
- * positive = far, 0 = crystal centre). Returns alpha in 0..1: 1 at/below [near], ramping linearly
- * to 0 at/above [far]. RGB is left untouched by the caller. Mirrors [CrystalViewport.dofAlpha].
+ * Per v0.5.3/v0.5.2a: linear alpha fog. [d] is the signed distance in scene units (negative = near
+ * camera, positive = far, 0 = crystal centre). Returns alpha in 0..1: 1 at/below [near], ramping
+ * linearly to 0 at/above [far]. Mirrors [CrystalViewport.dofAlpha].
  */
 private fun depthCueAlpha(d: Float, near: Float, far: Float): Float {
     if (far <= near) return if (d <= near) 1f else 0f

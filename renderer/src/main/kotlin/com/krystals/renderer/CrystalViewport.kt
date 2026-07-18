@@ -76,15 +76,20 @@ private data class AtomRenderable(val atom: ProjectedAtom, val selected: Boolean
 }
 
 private data class BondRenderable(val a: ProjectedAtom, val b: ProjectedAtom, val width: Float) : Renderable {
-    override val depth = (a.depth + b.depth) / 2.0
+    // Per v0.5.2a: sort by the NEAREST endpoint's z (largest z = closest to camera, since +Z is toward
+    // the viewer). The old (a+b)/2 average let a bond's far half sort behind a closer atom and get
+    // wrongly occluded; the nearest endpoint guarantees the bond only paints over things its near
+    // half actually covers.
+    override val depth = maxOf(a.depth, b.depth)
 }
 
 /**
  * A single polygonal face of a polyhedron, emitted as its own renderable so it sorts against atoms
  * and bonds by its own face depth (rather than the whole polyhedron sorting as one block by
  * its center, which let back faces occlude front atoms). [screenVerts] are the projected 2D vertices
- * in draw order; [faceDepth] is the nearest-vertex rotated-Z of the face; [normal] is the outward face
- * normal in camera space (after rotate) for screen-space lighting + back-face culling.
+ * in draw order; [faceDepth] is the nearest-vertex rotated-Z of the face (largest z = closest to
+ * camera, +Z toward viewer); [normal] is the outward face normal in camera space (after rotate) for
+ * screen-space lighting + back-face culling.
  */
 private data class PolyhedronFaceRenderable(
     val baseColor: Color,
@@ -369,22 +374,21 @@ fun CrystalViewport(
             }
         }.sortedBy { it.depth }
 
-        // Per v0.5.3: depth cueing via linear alpha fog. Near/Far are signed distances in scene
-        // units (1 unit = 1/5 of the visible depth span): negative = toward the camera, positive =
-        // away, 0 = crystal centre. Objects fade to transparent (alpha -> 0) across [near, far];
-        // their RGB is untouched so colours stay true. No blur — only alpha attenuation.
+        // Per v0.5.3/v0.5.2a: depth cueing via linear alpha fog. Near/Far are signed distances in
+        // scene units (1 unit = 1/6 of the visible depth span, so nearest atom = -3, farthest = +3):
+        // negative = toward the camera, positive = away, 0 = crystal centre. Objects fade to
+        // transparent (alpha -> 0) across [near, far]; RGB is untouched so colours stay true.
         val depthRange = run {
             val ds = visibleProjected.map { it.depth }
             if (ds.isEmpty()) null else (ds.min() to ds.max())
         }
-        // The centre depth (camera-space z through the bounding centre) maps to the user's 0. One
-        // scene unit = 1/5 of the depth span, matching the -5..5 slider.
         fun dofAlpha(depth: Double): Float {
             if (!appearance.depthOfFieldEnabled || depthRange == null) return 1f
             val (dMin, dMax) = depthRange
             val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
             val centre = (dMin + dMax) / 2.0
-            val d = ((depth - centre) / dSpan * 10.0).toFloat() // signed distance, ~-5..5 range
+            // 1 unit = 1/6 of the depth span → nearest atom ≈ -3, farthest ≈ +3.
+            val d = ((depth - centre) / dSpan * 6.0).toFloat()
             val near = appearance.dofNear
             val far = appearance.dofFar
             if (far <= near) return if (d <= near) 1f else 0f
@@ -402,11 +406,13 @@ fun CrystalViewport(
         }
 
         renderables.forEach { renderable ->
-            val alpha = dofAlpha(renderable.depth)
             when (renderable) {
-                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, alpha)
-                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites, alpha)
-                is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance, alpha)
+                // Per v0.5.2a: atoms/faces keep a single alpha from their own depth. Bonds compute
+                // each half's alpha from its endpoint atom's depth (drawBond splits at the midpoint)
+                // so the bond fades continuously into its atoms instead of a single mid-depth step.
+                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, dofAlpha(renderable.depth))
+                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites, ::dofAlpha)
+                is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance, dofAlpha(renderable.depth))
             }
         }
         // Per v0.2.3: draw the locked (persistent) measurement/info windows first, then the active
@@ -463,10 +469,13 @@ private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearanc
     if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))
 }
 
-private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dofAlpha: Float = 1f) {
-    // Per v0.5.3: depth cueing fades only alpha (RGB untouched).
-    val opacity = appearance.bondOpacity.coerceIn(0f, 1f) * dofAlpha.coerceIn(0f, 1f)
-    if (opacity < 0.01f) return
+private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dofAlpha: (Double) -> Float) {
+    // Per v0.5.2a: split the bond at its midpoint and fade each half by its endpoint atom's depth,
+    // so the bond fades continuously into its atoms instead of a single mid-depth alpha step.
+    val baseOpacity = appearance.bondOpacity.coerceIn(0f, 1f)
+    val opacityA = baseOpacity * dofAlpha(a.depth).coerceIn(0f, 1f)
+    val opacityB = baseOpacity * dofAlpha(b.depth).coerceIn(0f, 1f)
+    if (opacityA < 0.01f && opacityB < 0.01f) return
     val delta = b.point - a.point
     val length = delta.getDistance()
     if (length < 0.001f) return
@@ -484,16 +493,23 @@ private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float,
 
     val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
     val lightOnPerp = (light.x.toFloat() * perp.x + light.y.toFloat() * perp.y).toDouble()
+    val midpoint = Offset((start.x + end.x) / 2f, (start.y + end.y) / 2f)
 
     if (appearance.bondColorMode == BondColorMode.UNICOLOR) {
-        val base = colorFromArgb(appearance.uniformBondArgb).copy(alpha = opacity)
-        drawBondCylinder(start, end, width / 2f, perp, lightOnPerp, base, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+        // Unicolor: same colour, but each half carries its endpoint's alpha.
+        if (opacityA >= 0.01f) {
+            val baseA = colorFromArgb(appearance.uniformBondArgb).copy(alpha = opacityA)
+            drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+        }
+        if (opacityB >= 0.01f) {
+            val baseB = colorFromArgb(appearance.uniformBondArgb).copy(alpha = opacityB)
+            drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+        }
     } else {
-        val midpoint = Offset((start.x + end.x) / 2f, (start.y + end.y) / 2f)
-        val baseA = colorFromArgb(PeriodicTable.resolveSiteArgb(a.atom.siteId, a.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacity)
-        val baseB = colorFromArgb(PeriodicTable.resolveSiteArgb(b.atom.siteId, b.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacity)
-        drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
-        drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+        val baseA = colorFromArgb(PeriodicTable.resolveSiteArgb(a.atom.siteId, a.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacityA)
+        val baseB = colorFromArgb(PeriodicTable.resolveSiteArgb(b.atom.siteId, b.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacityB)
+        if (opacityA >= 0.01f) drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+        if (opacityB >= 0.01f) drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
     }
 }
 
@@ -678,14 +694,16 @@ private fun polyhedronFaceRenderables(
         val normal = worldNormal / len
         val camNormal = rotation * normal
         val screenVerts = faceVerts.map { it.point }
-        val nearestDepth = faceVerts.minOf { it.depth }
+        // Per v0.5.2a: nearest vertex = LARGEST z (camera +Z toward viewer, so larger z is closer).
+        // The old minOf took the farthest vertex and sorted the face too early, letting it occlude
+        // atoms that actually sat in front of it.
+        val nearestDepth = faceVerts.maxOf { it.depth }
         val vertexIds = faceVerts.map { it.atom.id }
         // Per v0.3.2: always cull back faces (camera looks down -Z).
         if (camNormal.z > 0.0) {
-            // Per v0.3.43: sort the face by its NEAREST vertex depth (smallest rotated-Z = closest to
-            // camera). Using the face-centre average let a large face whose centre sat behind a front
-            // atom but whose near edge was in front of it draw on top of that atom. The nearest vertex
-            // guarantees the face only paints over atoms it actually occludes.
+            // Per v0.3.43/v0.5.2a: sort the face by its NEAREST vertex depth (largest rotated-Z =
+            // closest to camera). Using the face-centre average let a large face whose centre sat
+            // behind a front atom but whose near edge was in front of it draw on top of that atom.
             result += PolyhedronFaceRenderable(baseColor, screenVerts, vertexIds, nearestDepth, camNormal)
         } else {
             // Per v0.3.44: back face — emit an outline-only renderable so the polyhedron's back edges

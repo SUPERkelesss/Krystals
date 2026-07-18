@@ -1,0 +1,73 @@
+package com.krystals.app
+
+import com.krystals.core.AxisMode
+import com.krystals.core.BondColorMode
+import com.krystals.core.FrameMode
+import com.krystals.core.LineStyle
+import com.krystals.core.ViewerAppearance
+import org.json.JSONObject
+
+/**
+ * Per v0.5.2a: persistence for the global ViewerAppearance. The appearance is a rendering-only
+ * setting (not part of the CIF), so it is stored as a JSON string under [KEY] in the "krystals"
+ * SharedPreferences namespace alongside theme/language/etc. Fields the stored object lacks fall back
+ * to [ViewerAppearance]'s defaults, so old saves stay valid when new fields are added.
+ */
+object AppearanceStore {
+    const val KEY = "appearance_json"
+
+    fun ViewerAppearance.toJson(): String = JSONObject().apply {
+        put("backgroundArgb", backgroundArgb.toString())
+        put("reflectionEnabled", reflectionEnabled)
+        put("lightAzimuth", lightAzimuth)
+        put("lightElevation", lightElevation)
+        put("lightIntensity", lightIntensity)
+        put("diffusion", diffusion)
+        put("atomOpacity", atomOpacity)
+        put("frameMode", frameMode.name)
+        put("lineStyle", lineStyle.name)
+        put("bondRadius", bondRadius)
+        put("bondOpacity", bondOpacity)
+        put("bondColorMode", bondColorMode.name)
+        put("uniformBondArgb", uniformBondArgb.toString())
+        put("bondReflectionEnabled", bondReflectionEnabled)
+        put("polyhedronEnabled", polyhedronEnabled)
+        put("polyhedronOpacity", polyhedronOpacity)
+        put("polyhedronReflectionEnabled", polyhedronReflectionEnabled)
+        put("showAxes", showAxes)
+        put("axisMode", axisMode.name)
+        put("depthOfFieldEnabled", depthOfFieldEnabled)
+        put("dofNear", dofNear)
+        put("dofFar", dofFar)
+    }.toString()
+
+    /** Parse a saved appearance string; any missing/corrupt field falls back to the default. */
+    fun fromJson(json: String): ViewerAppearance? = runCatching {
+        val o = JSONObject(json)
+        val d = ViewerAppearance()
+        ViewerAppearance(
+            backgroundArgb = o.optString("backgroundArgb", d.backgroundArgb.toString()).toLong(),
+            reflectionEnabled = o.optBoolean("reflectionEnabled", d.reflectionEnabled),
+            lightAzimuth = o.optDouble("lightAzimuth", d.lightAzimuth.toDouble()).toFloat(),
+            lightElevation = o.optDouble("lightElevation", d.lightElevation.toDouble()).toFloat(),
+            lightIntensity = o.optDouble("lightIntensity", d.lightIntensity.toDouble()).toFloat(),
+            diffusion = o.optDouble("diffusion", d.diffusion.toDouble()).toFloat(),
+            atomOpacity = o.optDouble("atomOpacity", d.atomOpacity.toDouble()).toFloat(),
+            frameMode = runCatching { FrameMode.valueOf(o.optString("frameMode", d.frameMode.name)) }.getOrDefault(d.frameMode),
+            lineStyle = runCatching { LineStyle.valueOf(o.optString("lineStyle", d.lineStyle.name)) }.getOrDefault(d.lineStyle),
+            bondRadius = o.optDouble("bondRadius", d.bondRadius.toDouble()).toFloat(),
+            bondOpacity = o.optDouble("bondOpacity", d.bondOpacity.toDouble()).toFloat(),
+            bondColorMode = runCatching { BondColorMode.valueOf(o.optString("bondColorMode", d.bondColorMode.name)) }.getOrDefault(d.bondColorMode),
+            uniformBondArgb = o.optString("uniformBondArgb", d.uniformBondArgb.toString()).toLong(),
+            bondReflectionEnabled = o.optBoolean("bondReflectionEnabled", d.bondReflectionEnabled),
+            polyhedronEnabled = o.optBoolean("polyhedronEnabled", d.polyhedronEnabled),
+            polyhedronOpacity = o.optDouble("polyhedronOpacity", d.polyhedronOpacity.toDouble()).toFloat(),
+            polyhedronReflectionEnabled = o.optBoolean("polyhedronReflectionEnabled", d.polyhedronReflectionEnabled),
+            showAxes = o.optBoolean("showAxes", d.showAxes),
+            axisMode = runCatching { AxisMode.valueOf(o.optString("axisMode", d.axisMode.name)) }.getOrDefault(d.axisMode),
+            depthOfFieldEnabled = o.optBoolean("depthOfFieldEnabled", d.depthOfFieldEnabled),
+            dofNear = o.optDouble("dofNear", d.dofNear.toDouble()).toFloat(),
+            dofFar = o.optDouble("dofFar", d.dofFar.toDouble()).toFloat(),
+        )
+    }.getOrNull()
+}

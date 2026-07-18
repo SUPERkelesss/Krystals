@@ -45,7 +45,8 @@ object CrystalImageExporter {
     }
 
     private data class BondPrimitive(val a: Point, val b: Point, val width: Float) : RenderPrimitive {
-        override val depth = (a.z + b.z) / 2.0
+        // Per v0.5.2a: sort by the NEAREST endpoint's z (largest z = closest to camera).
+        override val depth = maxOf(a.z, b.z)
     }
 
     private data class PolyhedronFacePrimitive(
@@ -88,7 +89,9 @@ object CrystalImageExporter {
             if (len < 1e-12) return@forEach
             val normal = outward / len
             val ordered = if (cross.dot(normal) < 0) faceVerts.reversed() else faceVerts
-            val nearestDepth = ordered.minOf { it.z }
+            // Per v0.5.2a: nearest vertex = LARGEST z (camera +Z toward viewer). Old minOf took the
+            // farthest vertex and sorted the face too early, occluding atoms in front of it.
+            val nearestDepth = ordered.maxOf { it.z }
             val camZ = (rotation * normal).z
             if (camZ > 0.0) {
                 result += PolyhedronFacePrimitive(center, ordered, normal, 1.0f, outlineOnly = false, outlineAlpha = 0.35f, depth = nearestDepth)
@@ -198,9 +201,8 @@ object CrystalImageExporter {
             }
         }.sortedBy { it.depth }
 
-        // Per v0.5.3: depth cueing via linear alpha fog — mirror CrystalViewport. Near/Far are signed
-        // distances (1 unit = 1/5 of the depth span): negative = toward camera, positive = away,
-        // 0 = crystal centre. Only alpha fades; RGB stays true. No blur.
+        // Per v0.5.3/v0.5.2a: depth cueing via linear alpha fog — mirror CrystalViewport. 1 unit =
+        // 1/6 of the depth span (nearest atom = -3, farthest = +3). Only alpha fades; RGB stays true.
         val depthRange = run {
             val ds = points.map { it.z }
             if (ds.isEmpty()) null else (ds.min() to ds.max())
@@ -210,7 +212,7 @@ object CrystalImageExporter {
             val (dMin, dMax) = depthRange
             val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
             val centre = (dMin + dMax) / 2.0
-            val d = ((depth - centre) / dSpan * 10.0).toFloat()
+            val d = ((depth - centre) / dSpan * 6.0).toFloat()
             val near = appearance.dofNear
             val far = appearance.dofFar
             if (far <= near) return if (d <= near) 1f else 0f
@@ -225,11 +227,11 @@ object CrystalImageExporter {
         }
 
         renderables.forEach { primitive ->
-            val alpha = dofAlpha(primitive.depth)
             when (primitive) {
-                is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, selectedAtomIds, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, alpha)
-                is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites, alpha)
-                is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.rotation, alpha)
+                // Per v0.5.2a: bonds split at midpoint, each half faded by its endpoint's depth.
+                is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, selectedAtomIds, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, dofAlpha(primitive.depth))
+                is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites, ::dofAlpha)
+                is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.rotation, dofAlpha(primitive.depth))
             }
         }
         // Per v0.3.0: draw locked (persistent) + active measurement/info windows.
@@ -281,10 +283,13 @@ object CrystalImageExporter {
         canvas.drawCircle(point.x, point.y, point.radius + if (point.atomId in selectedAtomIds) 3f else 0f, paint)
     }
 
-    private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dofAlpha: Float = 1f) {
-        // Per v0.5.3: depth cueing fades only alpha (RGB untouched).
-        val opacity = (appearance.bondOpacity.coerceIn(0f, 1f) * dofAlpha.coerceIn(0f, 1f)).coerceIn(0f, 1f)
-        if (opacity < 0.01f) return
+    private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dofAlpha: (Double) -> Float) {
+        // Per v0.5.2a: split at midpoint; each half faded by its endpoint atom's depth (continuous
+        // fade into the atoms instead of a single mid-depth alpha step).
+        val baseOpacity = appearance.bondOpacity.coerceIn(0f, 1f)
+        val opacityA = (baseOpacity * dofAlpha(a.z).coerceIn(0f, 1f)).coerceIn(0f, 1f)
+        val opacityB = (baseOpacity * dofAlpha(b.z).coerceIn(0f, 1f)).coerceIn(0f, 1f)
+        if (opacityA < 0.01f && opacityB < 0.01f) return
         val dx = b.x - a.x
         val dy = b.y - a.y
         val length = sqrt(dx * dx + dy * dy)
@@ -310,20 +315,21 @@ object CrystalImageExporter {
 
         val start = Point(0L, a.element, a.siteId, a.siteLabel, startX, startY, a.z, a.radius, a.occupancy, a.fractional, a.cartesian, a.isShell, a.isBoundaryImage)
         val end = Point(0L, b.element, b.siteId, b.siteLabel, endX, endY, b.z, b.radius, b.occupancy, b.fractional, b.cartesian, b.isShell, b.isBoundaryImage)
-        // Per v0.5.3: pack opacity into the bond colour's alpha so depth cueing fades the bond
-        // without recolouring it (drawBondCylinder builds its gradient from baseArgb).
-        fun packAlpha(argb: Int) = (argb and 0x00FFFFFF) or ((opacity * 255).toInt().coerceIn(0, 255) shl 24)
+        val mx = (startX + endX) / 2f
+        val my = (startY + endY) / 2f
+        val midA = Point(0L, a.element, a.siteId, a.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, a.occupancy, a.fractional, a.cartesian, a.isShell, a.isBoundaryImage)
+        val midB = Point(0L, b.element, b.siteId, b.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, b.occupancy, a.fractional, b.cartesian, b.isShell, a.isBoundaryImage)
+        // Per v0.5.2a: each half packs its own endpoint alpha into baseArgb (RGB untouched).
+        fun pack(argb: Int, op: Float) = (argb and 0x00FFFFFF) or ((op * 255).toInt().coerceIn(0, 255) shl 24)
         if (appearance.bondColorMode == BondColorMode.UNICOLOR) {
-            drawBondCylinder(canvas, start, end, width, perpX, perpY, lightOnPerp, packAlpha(appearance.uniformBondArgb.toInt()), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+            val u = appearance.uniformBondArgb.toInt()
+            if (opacityA >= 0.01f) drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, pack(u, opacityA), opacityA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+            if (opacityB >= 0.01f) drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, pack(u, opacityB), opacityB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         } else {
-            val mx = (startX + endX) / 2f
-            val my = (startY + endY) / 2f
-            val midA = Point(0L, a.element, a.siteId, a.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, a.occupancy, a.fractional, a.cartesian, a.isShell, a.isBoundaryImage)
-            val midB = Point(0L, b.element, b.siteId, b.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, b.occupancy, b.fractional, b.cartesian, b.isShell, b.isBoundaryImage)
             val baseA = PeriodicTable.resolveSiteArgb(a.siteId, a.element, siteArgbOverrides, elementArgbOverrides).toInt()
             val baseB = PeriodicTable.resolveSiteArgb(b.siteId, b.element, siteArgbOverrides, elementArgbOverrides).toInt()
-            drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, packAlpha(baseA), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
-            drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, packAlpha(baseB), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+            if (opacityA >= 0.01f) drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, pack(baseA, opacityA), opacityA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+            if (opacityB >= 0.01f) drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, pack(baseB, opacityB), opacityB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         }
     }
 
