@@ -1,8 +1,6 @@
 package com.krystals.core
 
-import kotlin.math.abs
-
-data class CifToken(val value: String, val start: Int, val end: Int, val line: Int)
+data class CifToken(val value: String, val start: Int, val end: Int)
 
 sealed interface CifItem {
     val start: Int
@@ -309,7 +307,7 @@ object CifCodec {
                         index++
                     }
                     val completeValues = values.take(values.size - values.size % tags.size)
-                    val itemEnd = if (completeValues.isEmpty()) tokens[index - 1].end else tokens[index - 1].end
+                    val itemEnd = tokens[index - 1].end
                     items += CifLoop(tags, completeValues, loopStart, itemEnd)
                 }
                 token.value.startsWith('_') && index + 1 < endExclusive -> {
@@ -326,53 +324,47 @@ object CifCodec {
     private fun tokenize(source: String): List<CifToken> {
         val tokens = mutableListOf<CifToken>()
         var index = 0
-        var line = 1
         fun atLineStart(i: Int) = i == 0 || source[i - 1] == '\n' || source[i - 1] == '\r'
         while (index < source.length) {
             val ch = source[index]
             when {
-                ch == '\n' -> { line++; index++ }
+                ch == '\n' -> index++
                 ch.isWhitespace() -> index++
                 ch == '#' -> {
                     while (index < source.length && source[index] != '\n') index++
                 }
                 ch == ';' && atLineStart(index) -> {
                     val start = index
-                    val startLine = line
                     index++
                     while (index < source.length) {
-                        if (source[index] == '\n') line++
                         if (source[index] == ';' && atLineStart(index)) {
                             index++
                             break
                         }
                         index++
                     }
-                    tokens += CifToken(source.substring(start, index), start, index, startLine)
+                    tokens += CifToken(source.substring(start, index), start, index)
                 }
                 ch == '\'' || ch == '"' -> {
                     val quote = ch
                     val start = index
-                    val startLine = line
                     index++
                     while (index < source.length) {
-                        if (source[index] == '\n') line++
                         if (source[index] == quote && (index + 1 == source.length || source[index + 1].isWhitespace())) {
                             index++
                             break
                         }
                         index++
                     }
-                    tokens += CifToken(source.substring(start, index), start, index, startLine)
+                    tokens += CifToken(source.substring(start, index), start, index)
                 }
                 else -> {
                     val start = index
-                    val startLine = line
                     while (index < source.length && !source[index].isWhitespace()) {
                         if (source[index] == '#' && index == start) break
                         index++
                     }
-                    if (index > start) tokens += CifToken(source.substring(start, index), start, index, startLine)
+                    if (index > start) tokens += CifToken(source.substring(start, index), start, index)
                     else index++
                 }
             }

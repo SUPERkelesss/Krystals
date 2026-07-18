@@ -1,5 +1,3 @@
-param([switch]$SkipAndroidTests)
-
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $Tooling = Join-Path $Root '.tooling'

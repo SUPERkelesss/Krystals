@@ -110,7 +110,7 @@ debug APK 文件位于 `app/build/outputs/apk/debug/app-debug.apk`。
 
 ## 版权说明
 
-本项目遵循 [MIT 协议许可](LICENCE)。
+本项目遵循 [MIT 协议许可](LICENSE)。
 
 ## 鸣谢
 
