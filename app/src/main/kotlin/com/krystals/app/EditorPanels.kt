@@ -426,7 +426,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         // Per v0.4.1: "自动应用半径" (auto-apply radii) clears every bond rule and regenerates them
-        // from one of the three elements.ini radius columns (ionic/covalent/vdW).
+        // from one of three radius tables (bonding/covalent/vdW).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { addOpen = true }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建规则", "New rule")) }
             Box(Modifier.weight(1f)) {
@@ -434,9 +434,9 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
                     Text(localized("自动应用半径", "Auto-apply radii"))
                 }
                 DropdownMenu(expanded = radiiMenuOpen, onDismissRequest = { radiiMenuOpen = false }) {
-                    DropdownMenuItem(text = { Text(localized("离子半径", "Ionic radius")) }, onClick = {
+                    DropdownMenuItem(text = { Text(localized("键合半径", "Bonding radius")) }, onClick = {
                         radiiMenuOpen = false
-                        onStructure(CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.IONIC).structure)
+                        onStructure(CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.BONDING).structure)
                     })
                     DropdownMenuItem(text = { Text(localized("共价半径", "Covalent radius")) }, onClick = {
                         radiiMenuOpen = false
@@ -493,10 +493,10 @@ private fun BondRuleDialog(
     var b by remember { mutableStateOf(editingRule?.siteB ?: sites.first().id) }
     val siteA = sites.firstOrNull { it.id == a } ?: sites.first()
     val siteB = sites.firstOrNull { it.id == b } ?: sites.first()
-    // Per v0.4.1: default maximum is the sum of the two atoms' ionic radii (elements.ini column 4),
+    // Per v0.4.1: default maximum is the sum of the two atoms' bonding radii (键合半径),
     // matching the default bond-rule generator. It is recomputed as the user switches sites so the
     // suggested window tracks the selected pair.
-    val defaultMax = PeriodicTable.radius(siteA.element, RadiusSource.IONIC) + PeriodicTable.radius(siteB.element, RadiusSource.IONIC)
+    val defaultMax = PeriodicTable.radius(siteA.element, RadiusSource.BONDING) + PeriodicTable.radius(siteB.element, RadiusSource.BONDING)
     var minValue by remember { mutableFloatStateOf((editingRule?.minAngstrom ?: 0.1).toFloat()) }
     // When creating a new rule (no editingRule), maxValue follows the selected pair's default; once
     // the user drags the slider the override sticks until they switch sites again.
@@ -518,7 +518,7 @@ private fun BondRuleDialog(
                 DropdownField(localized("晶位 B", "Site B"), siteB.label, sites.map { it.label }) { label -> b = sites.first { it.label == label }.id; userTouchedMax = false }
                 DistanceControl(localized("最小值 (Å)", "Minimum (Å)"), minValue, 0f..sliderMax) { minValue = it }
                 DistanceControl(localized("最大值 (Å)", "Maximum (Å)"), maxValue, 0f..sliderMax) { maxValue = it; userTouchedMax = true }
-                Text(localized("默认最大值为两原子离子半径之和", "Default maximum is the sum of ionic radii"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                Text(localized("默认最大值为两原子键合半径之和", "Default maximum is the sum of bonding radii"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
             }
         },
         confirmButton = { TextButton(onClick = {

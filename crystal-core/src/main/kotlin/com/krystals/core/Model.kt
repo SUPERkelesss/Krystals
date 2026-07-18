@@ -92,10 +92,11 @@ data class ExpandedAtom(
 
 enum class BondRuleSource { CUSTOM, EXPLICIT, AUTO }
 
-// Per v0.4.1: radius source for bond-rule generation. The three values correspond to the first
-// three columns of elements.ini (covalent / van der Waals / ionic). IONIC is the default used by
-// ensureAutoBondRules and the "自动应用半径" (auto-apply radii) button in the bond editor.
-enum class RadiusSource { IONIC, COVALENT, VDW }
+// Per v0.4.1: radius source for bond-rule generation. BONDING (键合半径) is the default used by
+// ensureAutoBondRules and the "自动应用半径" (auto-apply radii) button in the bond editor; COVALENT
+// and VDW are the alternatives. BONDING radii are licensed CC BY-SA 4.0,
+// arXiv:2601.02017v1 [cond-mat.mtrl-sci] 05 Jan 2026.
+enum class RadiusSource { BONDING, COVALENT, VDW }
 
 data class BondRule(
     val siteA: String,
@@ -244,28 +245,30 @@ object PeriodicTable {
     }
     fun defaultRadius(symbol: String) = (covalentRadius(symbol) * 0.42).coerceIn(0.22, 0.85)
 
-    // Per v0.4.1: three radius tables sourced from .todos/elements.ini columns 2–4 (covalent / vdW /
-    // ionic, in Å). The auto-apply-radii button cycles between them; the default bond-rule generator
-    // uses IONIC. Elements absent here (D, XX placeholder, and 96+ actinides) fall back to
-    // [covalentRadius]'s default so bond generation never silently drops a pair.
-    private val iniCovalentRadii = mapOf(
-        "H" to 0.46, "He" to 1.22, "Li" to 1.57, "Be" to 1.12, "B" to 0.81, "C" to 0.77,
-        "N" to 0.74, "O" to 0.74, "F" to 0.72, "Ne" to 1.60, "Na" to 1.91, "Mg" to 1.60,
-        "Al" to 1.43, "Si" to 1.18, "P" to 1.10, "S" to 1.04, "Cl" to 0.99, "Ar" to 1.92,
-        "K" to 2.35, "Ca" to 1.97, "Sc" to 1.64, "Ti" to 1.47, "V" to 1.35, "Cr" to 1.29,
-        "Mn" to 1.37, "Fe" to 1.26, "Co" to 1.25, "Ni" to 1.25, "Cu" to 1.28, "Zn" to 1.37,
-        "Ga" to 1.53, "Ge" to 1.22, "As" to 1.21, "Se" to 1.04, "Br" to 1.14, "Kr" to 1.98,
-        "Rb" to 2.50, "Sr" to 2.15, "Y" to 1.82, "Zr" to 1.60, "Nb" to 1.47, "Mo" to 1.40,
-        "Tc" to 1.35, "Ru" to 1.34, "Rh" to 1.34, "Pd" to 1.37, "Ag" to 1.44, "Cd" to 1.52,
-        "In" to 1.67, "Sn" to 1.58, "Sb" to 1.41, "Te" to 1.37, "I" to 1.33, "Xe" to 2.18,
-        "Cs" to 2.72, "Ba" to 2.24, "La" to 1.88, "Ce" to 1.82, "Pr" to 1.82, "Nd" to 1.82,
-        "Pm" to 1.81, "Sm" to 1.81, "Eu" to 2.06, "Gd" to 1.79, "Tb" to 1.77, "Dy" to 1.77,
-        "Ho" to 1.76, "Er" to 1.75, "Tm" to 1.00, "Yb" to 1.94, "Lu" to 1.72, "Hf" to 1.59,
-        "Ta" to 1.47, "W" to 1.41, "Re" to 1.37, "Os" to 1.35, "Ir" to 1.36, "Pt" to 1.39,
-        "Au" to 1.44, "Hg" to 1.55, "Tl" to 1.71, "Pb" to 1.75, "Bi" to 1.82, "Po" to 1.77,
-        "At" to 0.62, "Rn" to 0.80, "Fr" to 1.00, "Ra" to 2.35, "Ac" to 2.03, "Th" to 1.80,
-        "Pa" to 1.63, "U" to 1.56, "Np" to 1.56, "Pu" to 1.64, "Am" to 1.73,
+    // Per v0.4.1: three radius tables. The auto-apply-radii button cycles between them; the default
+    // bond-rule generator uses BONDING (键合半径). Elements absent from a given table (D, the XX
+    // placeholder, the noble gases H/He/Ne/Ar and several heavy elements without a tabulated value,
+    // and 95+ actinides) fall back to [covalentRadius]'s default so bond generation never silently
+    // drops a pair.
+    //
+    // BONDING radii (键合半径) in Å. License: CC BY-SA 4.0; arXiv:2601.02017v1 [cond-mat.mtrl-sci] 05 Jan 2026.
+    private val bondingRadii = mapOf(
+        "Li" to 1.28, "Be" to 1.02, "B" to 0.88, "C" to 0.76, "N" to 0.68, "O" to 0.69,
+        "F" to 0.59, "Na" to 1.70, "Mg" to 1.42, "Al" to 1.27, "Si" to 1.09, "P" to 1.02,
+        "S" to 0.98, "Cl" to 0.95, "K" to 2.01, "Ca" to 1.71, "Sc" to 1.60, "Ti" to 1.39,
+        "V" to 1.49, "Cr" to 1.33, "Mn" to 1.41, "Fe" to 1.30, "Co" to 1.30, "Ni" to 1.33,
+        "Cu" to 1.27, "Zn" to 1.43, "Ga" to 1.42, "Ge" to 1.26, "As" to 1.21, "Se" to 1.17,
+        "Br" to 1.18, "Kr" to 2.10, "Rb" to 2.13, "Sr" to 1.94, "Y" to 1.68, "Zr" to 1.76,
+        "Nb" to 1.34, "Mo" to 1.52, "Tc" to 1.38, "Ru" to 1.37, "Rh" to 1.34, "Pd" to 1.32,
+        "Ag" to 1.58, "Cd" to 1.59, "In" to 1.47, "Sn" to 1.45, "Sb" to 1.40, "Te" to 1.45,
+        "I" to 1.38, "Xe" to 1.25, "Cs" to 2.31, "Ba" to 2.05, "La" to 1.85, "Ce" to 1.83,
+        "Pr" to 1.84, "Nd" to 1.84, "Sm" to 1.85, "Eu" to 1.74, "Gd" to 1.73, "Tb" to 1.71,
+        "Dy" to 1.58, "Ho" to 1.70, "Er" to 1.70, "Tm" to 1.70, "Yb" to 1.75, "Lu" to 1.63,
+        "Hf" to 1.62, "Ta" to 1.45, "W" to 0.64, "Re" to 1.34, "Os" to 1.41, "Ir" to 1.39,
+        "Pt" to 1.30, "Au" to 1.31, "Hg" to 1.37, "Tl" to 1.52, "Pb" to 1.76, "Bi" to 1.60,
+        "Th" to 1.77, "U" to 1.08, "Np" to 1.15, "Pu" to 1.04,
     )
+    // vdW radii in Å, sourced from .todos/elements.ini column 3.
     private val vdwRadii = mapOf(
         "H" to 1.20, "He" to 1.40, "Li" to 1.40, "Be" to 1.40, "B" to 1.40, "C" to 1.70,
         "N" to 1.55, "O" to 1.52, "F" to 1.47, "Ne" to 1.54, "Na" to 1.54, "Mg" to 1.54,
@@ -284,29 +287,31 @@ object PeriodicTable {
         "At" to 2.16, "Rn" to 2.16, "Fr" to 2.16, "Ra" to 2.16, "Ac" to 2.16, "Th" to 2.16,
         "Pa" to 2.16, "U" to 2.16, "Np" to 2.16, "Pu" to 2.16, "Am" to 2.16,
     )
-    private val ionicRadii = mapOf(
-        "H" to 0.200, "He" to 1.220, "Li" to 0.590, "Be" to 0.270, "B" to 0.110, "C" to 0.150,
-        "N" to 1.460, "O" to 1.400, "F" to 1.330, "Ne" to 1.600, "Na" to 1.020, "Mg" to 0.720,
-        "Al" to 0.390, "Si" to 0.260, "P" to 0.170, "S" to 1.840, "Cl" to 1.810, "Ar" to 1.920,
-        "K" to 1.510, "Ca" to 1.120, "Sc" to 0.745, "Ti" to 0.605, "V" to 0.580, "Cr" to 0.615,
-        "Mn" to 0.830, "Fe" to 0.780, "Co" to 0.745, "Ni" to 0.690, "Cu" to 0.730, "Zn" to 0.740,
-        "Ga" to 0.620, "Ge" to 0.530, "As" to 0.335, "Se" to 1.980, "Br" to 1.960, "Kr" to 1.980,
-        "Rb" to 1.610, "Sr" to 1.260, "Y" to 1.019, "Zr" to 0.720, "Nb" to 0.640, "Mo" to 0.590,
-        "Tc" to 0.560, "Ru" to 0.620, "Rh" to 0.665, "Pd" to 0.860, "Ag" to 1.150, "Cd" to 0.950,
-        "In" to 0.800, "Sn" to 0.690, "Sb" to 0.760, "Te" to 2.210, "I" to 2.200, "Xe" to 0.480,
-        "Cs" to 1.740, "Ba" to 1.420, "La" to 1.160, "Ce" to 0.970, "Pr" to 1.126, "Nd" to 1.109,
-        "Pm" to 1.093, "Sm" to 1.270, "Eu" to 1.066, "Gd" to 1.053, "Tb" to 1.040, "Dy" to 1.027,
-        "Ho" to 1.015, "Er" to 1.004, "Tm" to 0.994, "Yb" to 0.985, "Lu" to 0.977, "Hf" to 0.710,
-        "Ta" to 0.640, "W" to 0.600, "Re" to 0.530, "Os" to 0.630, "Ir" to 0.625, "Pt" to 0.625,
-        "Au" to 1.370, "Hg" to 1.020, "Tl" to 0.885, "Pb" to 1.190, "Bi" to 1.030, "Po" to 0.940,
-        "At" to 0.620, "Rn" to 0.800, "Fr" to 1.800, "Ra" to 1.480, "Ac" to 1.120, "Th" to 1.050,
-        "Pa" to 0.780, "U" to 0.730, "Np" to 0.750, "Pu" to 0.860, "Am" to 0.975,
+    // Covalent radii in Å, sourced from .todos/elements.ini column 2.
+    private val iniCovalentRadii = mapOf(
+        "H" to 0.46, "He" to 1.22, "Li" to 1.57, "Be" to 1.12, "B" to 0.81, "C" to 0.77,
+        "N" to 0.74, "O" to 0.74, "F" to 0.72, "Ne" to 1.60, "Na" to 1.91, "Mg" to 1.60,
+        "Al" to 1.43, "Si" to 1.18, "P" to 1.10, "S" to 1.04, "Cl" to 0.99, "Ar" to 1.92,
+        "K" to 2.35, "Ca" to 1.97, "Sc" to 1.64, "Ti" to 1.47, "V" to 1.35, "Cr" to 1.29,
+        "Mn" to 1.37, "Fe" to 1.26, "Co" to 1.25, "Ni" to 1.25, "Cu" to 1.28, "Zn" to 1.37,
+        "Ga" to 1.53, "Ge" to 1.22, "As" to 1.21, "Se" to 1.04, "Br" to 1.14, "Kr" to 1.98,
+        "Rb" to 2.50, "Sr" to 2.15, "Y" to 1.82, "Zr" to 1.60, "Nb" to 1.47, "Mo" to 1.40,
+        "Tc" to 1.35, "Ru" to 1.34, "Rh" to 1.34, "Pd" to 1.37, "Ag" to 1.44, "Cd" to 1.52,
+        "In" to 1.67, "Sn" to 1.58, "Sb" to 1.41, "Te" to 1.37, "I" to 1.33, "Xe" to 2.18,
+        "Cs" to 2.72, "Ba" to 2.24, "La" to 1.88, "Ce" to 1.82, "Pr" to 1.82, "Nd" to 1.82,
+        "Pm" to 1.81, "Sm" to 1.81, "Eu" to 2.06, "Gd" to 1.79, "Tb" to 1.77, "Dy" to 1.77,
+        "Ho" to 1.76, "Er" to 1.75, "Tm" to 1.00, "Yb" to 1.94, "Lu" to 1.72, "Hf" to 1.59,
+        "Ta" to 1.47, "W" to 1.41, "Re" to 1.37, "Os" to 1.35, "Ir" to 1.36, "Pt" to 1.39,
+        "Au" to 1.44, "Hg" to 1.55, "Tl" to 1.71, "Pb" to 1.75, "Bi" to 1.82, "Po" to 1.77,
+        "At" to 0.62, "Rn" to 0.80, "Fr" to 1.00, "Ra" to 2.35, "Ac" to 2.03, "Th" to 1.80,
+        "Pa" to 1.63, "U" to 1.56, "Np" to 1.56, "Pu" to 1.64, "Am" to 1.73,
     )
 
     /** Radius for bond-rule generation under [source]; falls back to [covalentRadius] when the
-     *  element is absent from the chosen elements.ini column (D, XX placeholder, 96+ actinides). */
+     *  element is absent from the chosen table (D, the XX placeholder, noble gases / heavy elements
+     *  without a tabulated value, and 95+ actinides). */
     fun radius(symbol: String, source: RadiusSource): Double = when (source) {
-        RadiusSource.IONIC -> ionicRadii[symbol] ?: covalentRadius(symbol)
+        RadiusSource.BONDING -> bondingRadii[symbol] ?: covalentRadius(symbol)
         RadiusSource.COVALENT -> iniCovalentRadii[symbol] ?: covalentRadius(symbol)
         RadiusSource.VDW -> vdwRadii[symbol] ?: covalentRadius(symbol)
     }

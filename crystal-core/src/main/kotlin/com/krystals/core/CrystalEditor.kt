@@ -71,9 +71,10 @@ object CrystalEditor {
             structure.sites.drop(i).mapNotNull { siteB ->
                 val key = listOf(siteA.id, siteB.id).sorted().joinToString("\u0000")
                 if (key in existingKeys) return@mapNotNull null
+                // Per v0.4.1: default radius source is BONDING (键合半径).
                 BondRule(
                     siteA.id, siteB.id, 0.1,
-                    PeriodicTable.radius(siteA.element, RadiusSource.IONIC) + PeriodicTable.radius(siteB.element, RadiusSource.IONIC) + 0.45,
+                    PeriodicTable.radius(siteA.element, RadiusSource.BONDING) + PeriodicTable.radius(siteB.element, RadiusSource.BONDING) + 0.45,
                     BondRuleSource.CUSTOM,
                 )
             }
@@ -83,7 +84,7 @@ object CrystalEditor {
 
     /**
      * Per v0.4.1: clear every existing bond rule (and the disabled-pair record) and regenerate a
-     * rule for every site pair using the given [source] radius column. Used by the bond editor's
+     * rule for every site pair using the given [source] radius table. Used by the bond editor's
      * "自动应用半径" (auto-apply radii) button. Same window formula as [ensureAutoBondRules]:
      * min = 0.1 Å, max = rA + rB + 0.45 Å.
      */
