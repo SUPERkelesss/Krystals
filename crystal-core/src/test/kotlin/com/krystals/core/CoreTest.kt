@@ -336,5 +336,23 @@ class CoreTest {
         }, "spurious Cs–Cs same-site periodic-image bond generated")
     }
 
+    @Test fun hasMatchingBondDetectsAtomToOwnPeriodicImage() {
+        // Per v0.3.44: CsCl has a single Cs in the ASU, so a Cs-Cs bond is the atom to its own
+        // lattice image (distance |a|=4.0). The previous hasMatchingBond only checked pairs of
+        // distinct atoms, so a Cs-Cs rule was hidden from the editor/display lists even though
+        // inferPrimaryShellBonds generated its bond. hasMatchingBond must also consider atom-to-
+        // own-image distances.
+        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
+        val structure = CrystalStructure(
+            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
+            listOf(
+                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
+                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
+            ),
+            bondRules = listOf(BondRule("Cs", "Cs", 0.1, 5.09)),
+        )
+        assertTrue(BondRuleMatching.hasMatchingBond(structure.bondRules.single { it.siteA == "Cs" && it.siteB == "Cs" }, structure))
+    }
+
     private fun atomById(scene: SceneSnapshot, id: Long): ExpandedAtom = scene.atoms.first { it.id == id }
 }
