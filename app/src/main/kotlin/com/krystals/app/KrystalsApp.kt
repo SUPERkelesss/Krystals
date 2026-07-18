@@ -248,6 +248,19 @@ fun KrystalsRoot(
         runCatching { activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))) }.onFailure { showMessage("Unable to open browser") }
     }
 
+    /** Per v0.5.0: add a parsed structure, synthesizing bond rules off-UI with the computing overlay.
+     *  Defined before [loadUri] because local functions must be declared before use (no forward refs). */
+    fun openParsed(parsed: ParsedStructure, name: String, uri: Uri?) {
+        // Add the tab immediately (so the empty structure shows), then compute rules if needed.
+        viewModel.add(parsed, name, uri)
+        val tab = viewModel.current ?: return
+        if (tab.structure.bondRules.isEmpty()) {
+            runWithBondComputation {
+                CrystalEditor.ensureAutoBondRules(tab.structure).structure
+            }
+        }
+    }
+
     fun loadUri(uri: Uri) {
         scope.launch {
             runCatching {
@@ -267,18 +280,6 @@ fun KrystalsRoot(
                     openParsed(parsed, result.name, result.uri)
                 } else pendingOpen = result
             }.onFailure { showMessage(it.message ?: "Unable to open CIF") }
-        }
-    }
-
-    /** Per v0.5.0: add a parsed structure, synthesizing bond rules off-UI with the computing overlay. */
-    fun openParsed(parsed: ParsedStructure, name: String, uri: Uri?) {
-        // Add the tab immediately (so the empty structure shows), then compute rules if needed.
-        viewModel.add(parsed, name, uri)
-        val tab = viewModel.current ?: return
-        if (tab.structure.bondRules.isEmpty()) {
-            runWithBondComputation {
-                CrystalEditor.ensureAutoBondRules(tab.structure).structure
-            }
         }
     }
 
@@ -682,7 +683,7 @@ private fun ViewerScreen(
                             AtomEditMode.DELETE_NEXT -> {
                                 tab.atomEditMode = AtomEditMode.NONE
                                 val deleted = runCatching { CrystalEditor.apply(tab.structure, EditCommand.DeleteAtom(atom.siteId)).structure }.getOrNull()
-                                if (deleted != null) runWithBondComputation { CrystalEditor.ensureAutoBondRules(deleted).structure }
+                                if (deleted != null) onRunBondComputation { CrystalEditor.ensureAutoBondRules(deleted).structure }
                             }
                             AtomEditMode.MODIFY_NEXT -> {
                                 tab.editingSiteId = atom.siteId; tab.atomEditMode = AtomEditMode.NONE; tab.editorOpen = true
