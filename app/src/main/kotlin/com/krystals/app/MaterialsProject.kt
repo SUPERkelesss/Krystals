@@ -108,6 +108,12 @@ object MaterialsProject {
             "formula", formula,
             "_limit", "50",
             "_fields", "material_id,formula_pretty,nsites,symmetry",
+            // Per v0.3.5: return material_id in legacy numeric form (mp-22862) instead of the
+            // padded alpha form (mp-aaaabhvi) for materials below the cut point. The alpha id is
+            // the numeric id base-26 encoded; the legacy /cif endpoint only accepts numeric ids,
+            // so requesting legacy form here maximises the chance downloadCif can fetch the
+            // conventional cell from legacy instead of falling back to a primitive P1 cell.
+            "id_format", "legacy",
         )
         val request = apiRequest(key, url)
         runCatching {
@@ -179,7 +185,7 @@ object MaterialsProject {
 
     /** Real space-group (number/symbol) reported by next-gen for [materialId], or null on failure. */
     private fun fetchRealSpaceGroup(key: String, materialId: String): SpaceGroupRef? {
-        val url = summaryUrl("material_ids", materialId, "_fields", "material_id,symmetry")
+        val url = summaryUrl("material_ids", materialId, "_fields", "material_id,symmetry", "id_format", "legacy")
         return runCatching {
             client.newCall(apiRequest(key, url)).execute().use { response ->
                 if (!response.isSuccessful) return@use null
@@ -195,7 +201,7 @@ object MaterialsProject {
 
     /** Fetch a next-gen summary item including the primitive `structure`. Throws on HTTP/parse error. */
     private fun fetchNextgenStructure(key: String, materialId: String): JSONObject {
-        val url = summaryUrl("material_ids", materialId, "_fields", "material_id,structure,symmetry")
+        val url = summaryUrl("material_ids", materialId, "_fields", "material_id,structure,symmetry", "id_format", "legacy")
         client.newCall(apiRequest(key, url)).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
