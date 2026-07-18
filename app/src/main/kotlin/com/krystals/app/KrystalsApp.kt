@@ -4,6 +4,7 @@ package com.krystals.app
 
 import android.Manifest
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -210,12 +211,20 @@ fun KrystalsRoot(
     // content" gate shown when MP is picked without an active code.
     var activationOpen by remember { mutableStateOf(false) }
     var mpPremiumOpen by remember { mutableStateOf(false) }
+    // Per v0.4.0: one-time caution shown to activated users before the MP flow, explaining the
+    // new/legacy API trade-off. Dismissable permanently via the "不再显示" checkbox.
+    var mpCautionOpen by remember { mutableStateOf(false) }
     // Per v0.3.1: MP and COD imports share an "import from online sources" entry that opens a
     // picker; the picker routes to the COD search screen (no key) or the MP flow (key-gated).
     var onlineSourceOpen by remember { mutableStateOf(false) }
     var codSearchOpen by remember { mutableStateOf(false) }
 
     fun showMessage(message: String) { scope.launch { snackbar.showSnackbar(message) } }
+
+    // Per v0.4.0: resume the MP flow after the caution dialog — hasKey ? search : enter key.
+    fun proceedToMp() {
+        if (MaterialsProject.hasKey(activity)) mpSearchOpen = true else mpKeyDialogOpen = true
+    }
 
     fun openUrl(url: String) {
         runCatching { activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))) }.onFailure { showMessage("Unable to open browser") }
@@ -412,6 +421,11 @@ fun KrystalsRoot(
         onDismiss = { mpPremiumOpen = false },
         onSponsor = { mpPremiumOpen = false; sponsorOpen = true },
     )
+    if (mpCautionOpen) MpCautionDialog(
+        preferences = preferences,
+        onDismiss = { mpCautionOpen = false },
+        onContinue = { mpCautionOpen = false; proceedToMp() },
+    )
     if (mpSearchOpen) MpSearchScreen(
         context = activity,
         viewModel = viewModel,
@@ -428,6 +442,7 @@ fun KrystalsRoot(
             // code, show the premium-content dialog instead of the API-key flow.
             when {
                 !ActivationManager.isActivated(activity) -> mpPremiumOpen = true
+                !preferences.getBoolean("mp_caution_dismissed", false) -> mpCautionOpen = true
                 MaterialsProject.hasKey(activity) -> mpSearchOpen = true
                 else -> mpKeyDialogOpen = true
             }
@@ -1670,6 +1685,38 @@ private fun MpPremiumDialog(onDismiss: () -> Unit, onSponsor: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(localized("再考虑一下…", "Maybe later…")) } },
+    )
+}
+
+@Composable
+private fun MpCautionDialog(preferences: SharedPreferences, onDismiss: () -> Unit, onContinue: () -> Unit) {
+    var dontShow by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(localized("注意", "Note")) },
+        text = {
+            Column {
+                Text(
+                    localized(
+                        "由于Materials Project官方接口存在两种API，其中新API需要apikey才能使用，旧API可以直接接入；但旧API只能返回对称性为P1的非对称晶胞。因此Krystals的Materials Project接口需要新API使用。\n\n· 由于新API不时有bug，所以有时会回退成旧API。\n\n· 如果旧API被mp官方废除，将导致部分晶体无法下载，请及时更新软件。\n\n· API的获取方法见下个窗口。",
+                        "Materials Project exposes two APIs: the new one (requires an API key) and a legacy one (direct access) that only returns P1 asymmetric cells. Krystals therefore requires the new API.\n\n· The new API is occasionally buggy and may fall back to the legacy API.\n\n· If the legacy API is retired by MP, some crystals will no longer be downloadable — please update the app.\n\n· How to obtain an API key is shown in the next dialog."
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Checkbox(checked = dontShow, onCheckedChange = { dontShow = it })
+                    Text(localized("不再显示", "Don't show again"), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (dontShow) preferences.edit().putBoolean("mp_caution_dismissed", true).apply()
+                onContinue()
+            }) { Text(localized("我知道了", "Got it")) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
 }
 
