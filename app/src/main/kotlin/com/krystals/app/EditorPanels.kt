@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 
 package com.krystals.app
 
@@ -71,6 +71,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -715,11 +716,21 @@ fun AppearanceDialog(
     var appearance by remember { mutableStateOf(tab.appearance) }
     var colorPickerOpen by remember { mutableStateOf(false) }
     var bondColorPickerOpen by remember { mutableStateOf(false) }
+    // Per v0.5.3a: preview hides the dialog visually (alpha 0) but keeps it mounted so the
+    // Preview button's pointerInput survives the press-and-hold and onPreviewEnd fires on release.
+    // (v0.5.2a unmounted the dialog on press, killing the gesture → stuck preview.)
+    var previewing by remember { mutableStateOf(false) }
     val frameLabels = listOf(localized("不显示框线", "No frame"), localized("单个晶胞", "Single cell"), localized("所有框线", "All frames"))
     val lineLabels = listOf(localized("实线", "Solid"), localized("虚线", "Dashed"))
     val bondColorLabels = listOf(localized("双色圆柱", "Bicolor cylinder"), localized("单色圆柱", "Unicolor cylinder"))
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(localized("调整外观", "Appearance")) }, text = {
-        Column(Modifier.fillMaxWidth().height(480.dp).verticalScroll(rememberScrollState())) {
+    BasicAlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.alpha(if (previewing) 0f else 1f),
+    ) {
+        Surface(shape = RoundedCornerShape(24.dp), tonalElevation = 6.dp) {
+            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp)) {
+                Text(localized("调整外观", "Appearance"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 12.dp))
+                Column(Modifier.fillMaxWidth().height(480.dp).verticalScroll(rememberScrollState())) {
             Text(localized("背景色", "Background"), fontWeight = FontWeight.Bold)
             FlowRow(verticalArrangement = Arrangement.Center) {
                 listOf(
@@ -812,9 +823,8 @@ fun AppearanceDialog(
                 }
             }
         }
-    }, confirmButton = {
         // Per v0.5.2a: Preview (press-and-hold, rounded) / Cancel (text) / Save (rounded).
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             // Preview: press-and-hold via detectTapGestures.onPress; no onClick.
             Box(
                 Modifier
@@ -822,15 +832,17 @@ fun AppearanceDialog(
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onPress = {
+                                previewing = true
                                 onPreviewStart(appearance)
                                 tryAwaitRelease()
                                 onPreviewEnd()
+                                previewing = false
                             },
                         )
                     }
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) { Text(localized("预览", "Preview"), color = MaterialTheme.colorScheme.onPrimary) }
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.weight(1f))
             TextButton(onClick = onDismiss) { Text(localized("取消", "Cancel")) }
             Spacer(Modifier.width(8.dp))
             Button(
@@ -838,7 +850,9 @@ fun AppearanceDialog(
                 shape = RoundedCornerShape(16.dp),
             ) { Text(localized("保存", "Save")) }
         }
-    })
+        }
+    }
+    }
 
     if (colorPickerOpen) {
         ColorPickerDialog(
@@ -885,77 +899,88 @@ private fun AtomAppearancePreview(appearance: com.krystals.core.ViewerAppearance
 }
 
 /**
- * Per v0.5.2a: depth-cueing preview — five atoms arranged near (top) → far (bottom) at the fixed
- * crystal-depth positions -3, -1.5, 0, 1.5, 3, each lit by the world light (same highlight as the
- * atom preview) and faded by the linear alpha fog from [depthCueAlpha]. The nearest atom is
- * labelled "-3" and the farthest "3". Alpha updates live as the near/far sliders move.
+ * Per v0.5.3a: depth-cueing preview — five atoms along a 235° diagonal (near = -3 at bottom-left,
+ * far = +3 at top-right), overlapping so the nearest occludes the farthest. Painted back-to-front
+ * (far first, near last) so -3 covers everything behind it. Each atom's colour blends toward the
+ * preview background by its fog amount (opacity unchanged), mirroring the renderer's depth cueing.
+ * The nearest is labelled "-3", the farthest "3".
  */
 @Composable
 private fun DepthCueingPreview(appearance: com.krystals.core.ViewerAppearance, modifier: Modifier = Modifier) {
-    Surface(modifier, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+    val bgCompose = MaterialTheme.colorScheme.surfaceVariant
+    Surface(modifier, shape = RoundedCornerShape(16.dp), color = bgCompose) {
         Canvas(Modifier.fillMaxSize().padding(8.dp)) {
             val near = appearance.dofNear.coerceIn(-5f, 5f)
             val far = appearance.dofFar.coerceIn(-5f, 5f)
-            val r = size.minDimension * 0.10f
-            val top = size.height * 0.16f
-            val bottom = size.height * 0.84f
-            // Fixed depth positions: nearest atom = -3, farthest = +3 (the full crystal depth range).
-            val depths = listOf(-3f, -1.5f, 0f, 1.5f, 3f)
-            val cx = size.width / 2f
+            val r = size.minDimension * 0.12f
+            // Diagonal from bottom-left (-3, near) to top-right (+3, far). 235° from top CW points
+            // to the bottom-left, so the line from near→far runs along 55° (top-right direction).
+            val pad = r * 0.6f
+            val nearPos = Offset(pad, size.height - pad)            // -3, bottom-left
+            val farPos = Offset(size.width - pad, pad)              // +3, top-right
+            val depths = listOf(-3f, -1.5f, 0f, 1.5f, 3f)          // near → far
             val n = depths.size
-            for (i in 0 until n) {
-                val t = i.toFloat() / (n - 1)
-                val y = top + t * (bottom - top)
-                val alpha = depthCueAlpha(depths[i], near, far)
-                drawPreviewSphere(Offset(cx, y), r, appearance, alpha)
+            // Paint far→near so near occludes far (painter's algorithm: nearest on top).
+            for (idx in n - 1 downTo 0) {
+                val t = idx.toFloat() / (n - 1)
+                val pos = Offset(farPos.x + (nearPos.x - farPos.x) * t, farPos.y + (nearPos.y - farPos.y) * t)
+                val fog = depthCueFog(depths[idx], near, far)
+                drawPreviewSphere(pos, r, appearance, fog, bgCompose)
             }
-            // Labels: "-3" beside the nearest (top) atom, "3" beside the farthest (bottom).
-            val labelColor = Color.White.copy(alpha = 0.9f)
+            // Labels: "-3" at the near (bottom-left) atom, "3" at the far (top-right) atom.
             val nc = drawContext.canvas.nativeCanvas
             val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                color = (labelColor.alpha * 255).toInt().coerceIn(0, 255) shl 24 or 0x00FFFFFF
-                textSize = r * 1.1f
+                color = 0xE6FFFFFF.toInt()
+                textSize = r * 1.0f
                 setShadowLayer(3f, 1f, 1f, android.graphics.Color.BLACK)
             }
-            nc.drawText("-3", cx + r + 6f, top + r * 0.4f, p)
-            nc.drawText("3", cx + r + 6f, bottom + r * 0.4f, p)
+            nc.drawText("-3", nearPos.x - r * 1.3f, nearPos.y + r * 0.4f, p)
+            nc.drawText("3", farPos.x + r * 0.5f, farPos.y + r * 0.4f, p)
         }
     }
 }
 
-/** Draws one lit preview sphere at [c] with radius [r], world-light highlight, and [alpha] fade. */
+/** Draws one lit preview sphere at [c] with radius [r], world-light highlight; colour blends
+ *  toward [bg] by [fog] (opacity unchanged), mirroring the renderer's depth cueing. */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
-    c: Offset, r: Float, appearance: com.krystals.core.ViewerAppearance, alpha: Float,
+    c: Offset, r: Float, appearance: com.krystals.core.ViewerAppearance, fog: Float, bg: Color,
 ) {
-    if (alpha < 0.01f) return
-    val gray = Color(0xFF747479).copy(alpha = alpha)
-    drawCircle(gray, r, c)
-    if (appearance.reflectionEnabled && alpha > 0.01f) {
+    val base = Color(0xFF747479).blend(bg, fog)
+    drawCircle(base, r, c)
+    if (appearance.reflectionEnabled) {
         val azimuth = appearance.lightAzimuth / 180f * PI.toFloat()
         val elevation = appearance.lightElevation / 180f * PI.toFloat()
         val lightOffset = r * .38f * cos(elevation)
         val highlight = c - Offset(cos(azimuth) * lightOffset, sin(azimuth) * lightOffset)
         val highlightBrush = Brush.radialGradient(
-            listOf(Color.White.copy(alpha = appearance.lightIntensity.coerceIn(.05f, 1f) * alpha), Color.Transparent),
+            listOf(Color.White.copy(alpha = appearance.lightIntensity.coerceIn(.05f, 1f) * (1f - fog)), Color.Transparent),
             center = highlight,
             radius = r * (0.35f + 0.75f * appearance.diffusion),
         )
         drawCircle(highlightBrush, r, c)
     }
-    drawCircle(Color.Black.copy(alpha = .3f * alpha), r, c, style = androidx.compose.ui.graphics.drawscope.Stroke(1.2f))
+    drawCircle(Color.Black.copy(alpha = .3f), r, c, style = androidx.compose.ui.graphics.drawscope.Stroke(1.2f))
 }
 
 /**
- * Per v0.5.3/v0.5.2a: linear alpha fog. [d] is the signed distance in scene units (negative = near
- * camera, positive = far, 0 = crystal centre). Returns alpha in 0..1: 1 at/below [near], ramping
- * linearly to 0 at/above [far]. Mirrors [CrystalViewport.dofAlpha].
+ * Per v0.5.3a: linear fog. [d] is the signed distance in scene units (negative = near camera,
+ * positive = far, 0 = crystal centre). Returns fog in 0..1 (0 = near/no fade, 1 = far/fully
+ * faded). Mirrors [CrystalViewport.dofFog].
  */
-private fun depthCueAlpha(d: Float, near: Float, far: Float): Float {
-    if (far <= near) return if (d <= near) 1f else 0f
-    if (d <= near) return 1f
-    if (d >= far) return 0f
-    return 1f - (d - near) / (far - near)
+private fun depthCueFog(d: Float, near: Float, far: Float): Float {
+    if (far <= near) return if (d <= near) 0f else 1f
+    if (d <= near) return 0f
+    if (d >= far) return 1f
+    return (d - near) / (far - near)
 }
+
+/** Per v0.5.3a: blend this colour toward [target] by [t] (0..1). Mirrors the renderer's blend. */
+private fun Color.blend(target: Color, t: Float) = Color(
+    red + (target.red - red) * t,
+    green + (target.green - green) * t,
+    blue + (target.blue - blue) * t,
+    alpha,
+)
 
 @Composable
 fun ColorPickerDialog(initialArgb: Long, onDismiss: () -> Unit, onColorSelected: (Long) -> Unit) {

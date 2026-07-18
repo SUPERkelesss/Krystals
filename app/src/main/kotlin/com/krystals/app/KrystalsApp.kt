@@ -838,8 +838,9 @@ private fun ViewerScreen(
     )
     if (displayOpen) DisplayPanel(tab, viewModel, onDismiss = { displayOpen = false })
     if (infoOpen) InfoDialog(tab, onDismiss = { infoOpen = false })
-    // Per v0.5.2a: hide the Appearance dialog while previewing (previewAppearance != null).
-    if (appearanceOpen && previewAppearance == null) AppearanceDialog(
+    // Per v0.5.3a: the dialog stays mounted (it self-hides via alpha) so the preview press-and-hold
+    // gesture survives; the viewer uses previewAppearance while non-null.
+    if (appearanceOpen) AppearanceDialog(
         tab,
         onDismiss = { appearanceOpen = false },
         onApplied = { onApplyAppearance(it) },
