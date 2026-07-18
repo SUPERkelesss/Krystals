@@ -108,7 +108,7 @@ fun EditorPanel(
     onDismiss: () -> Unit,
     onStructure: (CrystalStructure) -> Unit,
     onMessage: (String) -> Unit,
-    onRunBondComputation: ((() -> CrystalStructure?) -> Unit)? = null,
+    onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit)? = null,
 ) {
     var selectedTab by remember { mutableStateOf(if (tab.editingSiteId != null) EditorTab.ATOMS else EditorTab.BASIC) }
     // Per v0.2.3: resizable panel (mirrors DisplayPanel).
@@ -189,7 +189,7 @@ fun EditorPanel(
 }
 
 @Composable
-private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((() -> CrystalStructure?) -> Unit)? = null) {
+private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit)? = null) {
     val currentGroup = SpaceGroupCatalog.find(tab.structure.spaceGroupName) ?: SpaceGroupCatalog.all.first()
     var system by remember(tab.structure.spaceGroupName) { mutableStateOf(currentGroup.crystalSystem) }
     var pointGroup by remember(tab.structure.spaceGroupName) { mutableStateOf(currentGroup.pointGroup) }
@@ -287,7 +287,7 @@ private fun CellField(label: String, value: String, onValue: (String) -> Unit, e
 }
 
 @Composable
-private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((() -> CrystalStructure?) -> Unit)? = null) {
+private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit)? = null) {
     var atomDialog by remember { mutableStateOf<AtomSite?>(null) }
     var newElement by remember { mutableStateOf<String?>(null) }
     var periodicOpen by remember { mutableStateOf(false) }
@@ -651,7 +651,7 @@ private fun DistanceControl(label: String, value: Float, range: ClosedFloatingPo
 }
 
 @Composable
-private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRunBondComputation: ((() -> CrystalStructure?) -> Unit)? = null) {
+private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit)? = null) {
     var x by remember(tab.expansion) { mutableStateOf(tab.expansion.x) }
     var y by remember(tab.expansion) { mutableStateOf(tab.expansion.y) }
     var z by remember(tab.expansion) { mutableStateOf(tab.expansion.z) }
