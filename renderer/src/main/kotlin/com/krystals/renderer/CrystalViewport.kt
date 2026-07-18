@@ -75,9 +75,9 @@ private data class BondRenderable(val a: ProjectedAtom, val b: ProjectedAtom, va
 
 /**
  * A single polygonal face of a polyhedron, emitted as its own renderable so it sorts against atoms
- * and bonds by its own face-center depth (rather than the whole polyhedron sorting as one block by
+ * and bonds by its own face depth (rather than the whole polyhedron sorting as one block by
  * its center, which let back faces occlude front atoms). [screenVerts] are the projected 2D vertices
- * in draw order; [faceDepth] is the average rotated-Z of the face; [normal] is the outward face
+ * in draw order; [faceDepth] is the nearest-vertex rotated-Z of the face; [normal] is the outward face
  * normal in camera space (after rotate) for screen-space lighting + back-face culling.
  */
 private data class PolyhedronFaceRenderable(
@@ -131,10 +131,6 @@ class ViewerController {
         pitch = Math.toDegrees(pitchRad).toFloat()
         panX = 0f
         panY = 0f
-    }
-
-    fun reset() {
-        yaw = -28f; pitch = 22f; zoom = 1f; panX = 0f; panY = 0f
     }
 
     internal fun pick(position: Offset): ExpandedAtom? = projectedAtoms
@@ -298,7 +294,6 @@ fun CrystalViewport(
         }
 
         val neighbors = mutableMapOf<Long, MutableList<ProjectedAtom>>()
-        val bondAdjacency = mutableMapOf<Long, MutableSet<Long>>()
         val renderables = buildList<Renderable> {
             visibleProjected.forEach { add(AtomRenderable(it, it.atom.id in selectedAtomIds)) }
             if (visibility.showBonds) {
@@ -315,8 +310,6 @@ fun CrystalViewport(
                     // coordination, with cross-cell vertices extending outside the primary cell.
                     neighbors.getOrPut(a.atom.id) { mutableListOf() } += b
                     neighbors.getOrPut(b.atom.id) { mutableListOf() } += a
-                    bondAdjacency.getOrPut(a.atom.id) { mutableSetOf() } += b.atom.id
-                    bondAdjacency.getOrPut(b.atom.id) { mutableSetOf() } += a.atom.id
                     // Bond-line rendering: an external-shell bond only draws when its rule opts in via
                     // extendAcrossCell. Boundary-image bonds are drawn by default.
                     if (externalBond && !bond.rule.extendAcrossCell) return@forEach
@@ -347,7 +340,7 @@ fun CrystalViewport(
                         // front atoms.
                         val baseArgb = PeriodicTable.resolveSiteArgb(center.atom.siteId, center.atom.element, snapshot.structure.siteArgbOverrides, snapshot.elementArgbOverrides)
                         val baseColor = colorFromArgb(baseArgb).copy(alpha = appearance.polyhedronOpacity.coerceIn(0f, 1f))
-                        polyhedronFaceRenderables(center, vertices, bondAdjacency, baseColor, controller.yaw, controller.pitch).forEach { add(it) }
+                        polyhedronFaceRenderables(center, vertices, baseColor, controller.yaw, controller.pitch).forEach { add(it) }
                     }
                 }
             }
@@ -504,7 +497,6 @@ private fun Color.lighten(factor: Float) = Color(
 private fun polyhedronFaceRenderables(
     center: ProjectedAtom,
     vertices: List<ProjectedAtom>,
-    adjacency: Map<Long, Set<Long>>,
     baseColor: Color,
     yaw: Float,
     pitch: Float,
@@ -544,7 +536,6 @@ private fun polyhedronFaceRenderables(
         val normal = worldNormal / len
         val camNormal = rotate(normal, yaw, pitch)
         val screenVerts = faceVerts.map { it.point }
-        val faceDepth = faceVerts.map { it.depth }.average()
         val nearestDepth = faceVerts.minOf { it.depth }
         val vertexIds = faceVerts.map { it.atom.id }
         // Per v0.3.2: always cull back faces (camera looks down -Z).
@@ -777,11 +768,6 @@ private fun DrawScope.drawCellFrames(
             .map(project)
         edges.forEach { (a, b) -> drawLine(Color.Gray.copy(alpha = 0.72f), vertices[a], vertices[b], 1.4f, pathEffect = effect) }
     }
-}
-
-private fun DrawScope.drawEmptyMessage() {
-    // Per v0.3.42: the "No atoms" message is no longer drawn; kept as a no-op for callers that
-    // may still reference it.
 }
 
 private fun boundingCenter(points: List<Vec3>): Vec3 = Vec3(

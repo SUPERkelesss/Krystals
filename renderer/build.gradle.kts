@@ -19,7 +19,6 @@ android {
 
 dependencies {
     api(project(":crystal-core"))
-    api("com.google.android.filament:filament-android:1.71.5")
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")

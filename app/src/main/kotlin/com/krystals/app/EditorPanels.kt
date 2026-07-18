@@ -22,9 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -600,7 +597,6 @@ private fun ExpansionCluster(label: String, value: Int, onValue: (Int) -> Unit) 
 fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.krystals.core.ViewerAppearance) -> Unit = {}) {
     var appearance by remember { mutableStateOf(tab.appearance) }
     var colorPickerOpen by remember { mutableStateOf(false) }
-    var colorPickerTarget by remember { mutableStateOf<String?>(null) }
     val frameLabels = listOf(localized("不显示框线", "No frame"), localized("单个晶胞", "Single cell"), localized("所有框线", "All frames"))
     val lineLabels = listOf(localized("实线", "Solid"), localized("虚线", "Dashed"))
     val bondColorLabels = listOf(localized("双色圆柱", "Bicolor cylinder"), localized("单色圆柱", "Unicolor cylinder"))
@@ -619,7 +615,7 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
                     }
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
-                    Box(Modifier.size(40.dp).background(colorFromArgb(appearance.backgroundArgb), RoundedCornerShape(20.dp)).clickable { colorPickerTarget = "background"; colorPickerOpen = true })
+                    Box(Modifier.size(40.dp).background(colorFromArgb(appearance.backgroundArgb), RoundedCornerShape(20.dp)).clickable { colorPickerOpen = true })
                     Text(localized("自定义", "Custom"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
                 }
             }
@@ -670,11 +666,10 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
     if (colorPickerOpen) {
         ColorPickerDialog(
             initialArgb = appearance.backgroundArgb,
-            onDismiss = { colorPickerOpen = false; colorPickerTarget = null },
+            onDismiss = { colorPickerOpen = false },
             onColorSelected = { color ->
                 appearance = appearance.copy(backgroundArgb = color)
                 colorPickerOpen = false
-                colorPickerTarget = null
             },
         )
     }

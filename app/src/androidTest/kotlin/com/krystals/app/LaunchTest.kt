@@ -13,8 +13,8 @@ class LaunchTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
     @Test fun homeShowsPrimaryActions() {
-        rule.onNodeWithText(rule.activity.getString(R.string.open_file)).assertIsDisplayed()
+        rule.onNodeWithText(rule.activity.getString(R.string.import_local)).assertIsDisplayed()
         rule.onNodeWithText(rule.activity.getString(R.string.new_file)).assertIsDisplayed()
-        rule.onNodeWithText(rule.activity.getString(R.string.materials_project)).assertIsDisplayed()
+        rule.onNodeWithText(rule.activity.getString(R.string.import_online)).assertIsDisplayed()
     }
 }

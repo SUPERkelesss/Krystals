@@ -112,7 +112,7 @@ None yet…
 
 ## License
 
-This project is released under the [MIT License](LICENCE).
+This project is released under the [MIT License](LICENSE).
 
 ## Acknowledgements
 
