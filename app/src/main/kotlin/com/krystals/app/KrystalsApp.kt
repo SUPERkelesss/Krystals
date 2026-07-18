@@ -1411,7 +1411,7 @@ private fun MpApiKeyDialog(
         text = {
             Column {
                 OutlinedTextField(key, { key = it }, label = { Text("API Key") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                TextButton(onClick = { onOpenUrl("https://www.kelesss.art") }) { Text(localized("如何创建 apikey？", "How to create an API key?")) }
+                TextButton(onClick = { onOpenUrl("https://next-gen.materialsproject.org/api") }) { Text(localized("创建 apikey...", "Create an API key...")) }
                 if (validating) Text(localized("验证中…", "Validating…"), style = MaterialTheme.typography.bodySmall)
             }
         },
@@ -1622,8 +1622,8 @@ private fun CodSearchScreen(
             }
             Text(
                 localized(
-                    "化学式如 SiO2（自动按 Hill 顺序转为 O2 Si）。元素如 Si O。文本如 quartz，匹配矿物名/化学名/标题。",
-                    "Formula e.g. SiO2 (auto-converted to Hill order: O2 Si). Element e.g. Si O. Text e.g. quartz, matches mineral/chemical names and titles.",
+                    "化学式如 SiO2（自动转为 Hill 顺序 O2 Si）。元素以空格分开，如 Si O。文本如 quartz，匹配矿物名/化学名/标题。",
+                    "Formula e.g. SiO2 (auto-converted to Hill order: O2 Si). Element sperating by space, e.g. Si O. Text e.g. quartz, matches mineral/chemical names and titles.",
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1690,7 +1690,7 @@ private fun OnlineSourcePickerDialog(
                 OnlineSourceCard(
                     icon = Icons.Default.Science,
                     title = stringResource(R.string.import_cod),
-                    subtitle = localized("开放晶体学数据库，无需密钥", "Open database, no API key needed"),
+                    subtitle = localized("Crystallography Open Database，无需密钥", "Crystallography Open Database, no API key required"),
                     onClick = onPickCod,
                 )
                 OnlineSourceCard(
@@ -1748,8 +1748,8 @@ private fun SponsorDialog(onDismiss: () -> Unit, launchCount: Int = 0, onSponsor
         text = {
             Column {
                 Text(
-                    if (launchCount > 0) localized("Krystals 已经为您启动了 $launchCount 次啦！如果想要支持开发，请多多赞助作者 kelesss 哦！\n\n支付一点大米让 kelesss 猫猫努力工作的说……", "Krystals has been launched $launchCount times! If you'd like to support development, please sponsor kelesss!\n\nToss a little money to keep kelesss working hard…")
-                    else localized("支付一点大米让kelesss猫猫努力工作的说……ο(=•ω＜=)ρ⌒☆", "Toss a little money to keep kelesss working hard…")
+                    if (launchCount > 0) localized("Krystals 已经为您启动了 $launchCount 次啦！如果想要支持开发，请多多赞助作者 kelesss 哦！", "Krystals has been launched $launchCount times! If you'd like to support development, please sponsor kelesss!")
+                    else localized("支付一点大米让kelesss猫猫努力工作的说……ο(=•ω＜=)ρ⌒☆", "Toss a little money to keep kelesss working hard…ο(=•ω＜=)ρ⌒☆")
                 )
                 Spacer(Modifier.height(12.dp))
                 Text(localized("· 赞助后可永久关闭赞助提醒，并可以接入materials project检索。未赞助不影响绝大部分功能的使用。", "· Sponsoring permanently dismisses this prompt and unlocks Materials Project search. Not sponsoring does not affect most features."), style = MaterialTheme.typography.bodySmall)
@@ -1775,14 +1775,14 @@ private fun ActivationDialog(
     var code by remember { mutableStateOf(ActivationManager.getActivationCode(context) ?: "") }
     // Pre-resolve the bilingual toast strings in the @Composable body; `localized` is itself a
     // @Composable function, so it cannot be called inside the non-composable onClick lambda.
-    val activationSuccessText = localized("激活成功！感谢赞助！", "Activated! Thank you for sponsoring!")
+    val activationSuccessText = localized("激活成功！感谢♪(^∇^*)", "Activated! Thanks ♪(^∇^*)")
     val activationInvalidText = localized("激活码无效", "Invalid activation code")
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(localized("输入激活码", "Enter activation code")) },
         text = {
             Column {
-                Text(localized("赞助后请输入您收到的 16 位激活码以永久关闭赞助提醒并解锁 Materials Project 检索。", "Enter the 16-char activation code you received after sponsoring to dismiss this prompt permanently and unlock Materials Project search."), style = MaterialTheme.typography.bodySmall)
+                Text(localized("赞助后请输入您收到的 16 位激活码。", "Enter the 16-char activation code you received after sponsoring."), style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(code, { code = it.uppercase() }, label = { Text(localized("激活码", "Activation code")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
             }
@@ -1810,7 +1810,7 @@ private fun MpPremiumDialog(onDismiss: () -> Unit, onSponsor: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text(localized("高级内容", "Premium content")) },
         text = {
-            Text(localized("materials project中导入晶体需要获取apikey，属于高级内容，使用COD数据库完全可以解决大部分问题。\n · 如果需要使用，请赞助一点点以支持开发！", "Importing crystals from Materials Project requires an API key and is a premium feature — the COD database handles most needs.\n · To use it, please sponsor a little to support development!"))
+            Text(localized("Materials Project中导入晶体需要获取apikey，属于高级内容，并且尚未完全开发，使用COD数据库完全可以解决大部分问题。\n · 如果需要使用，请赞助一点点以支持开发！", "Importing crystals from Materials Project requires an API key and is a premium feature, and has not been developed compeletely yet — the COD handles most needs.\n · To use it, please sponsor a little to support development!"))
         },
         confirmButton = { TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(localized("再考虑一下…", "Maybe later…")) } },
@@ -1827,8 +1827,8 @@ private fun MpCautionDialog(preferences: SharedPreferences, onDismiss: () -> Uni
             Column {
                 Text(
                     localized(
-                        "由于Materials Project官方接口存在两种API，其中新API需要apikey才能使用，旧API可以直接接入；但旧API只能返回对称性为P1的非对称晶胞。因此Krystals的Materials Project接口需要新API使用。\n\n· 由于新API不时有bug，所以有时会回退成旧API。\n\n· 如果旧API被mp官方废除，将导致部分晶体无法下载，请及时更新软件。\n\n· API的获取方法见下个窗口。",
-                        "Materials Project exposes two APIs: the new one (requires an API key) and a legacy one (direct access) that only returns P1 asymmetric cells. Krystals therefore requires the new API.\n\n· The new API is occasionally buggy and may fall back to the legacy API.\n\n· If the legacy API is retired by MP, some crystals will no longer be downloadable — please update the app.\n\n· How to obtain an API key is shown in the next dialog."
+                        "由于Materials Project官方接口存在两种API，其中新API需要apikey才能使用，旧API可以直接接入；但旧API只能返回对称性为P1的非对称晶胞。因此Krystals的Materials Project接口需要新API使用。\n\n· 由于新API不时有bug，所以有时会回退成旧API。\n\n· 如果旧API被mp官方废除，将导致部分晶体无法下载，请及时更新软件。\n\n· 若查找到旧API数据库截止结果，将自动转入新API，存在丢失正当晶胞的问题",
+                        "Materials Project exposes two APIs: the new one (requires an API key) and a legacy one (direct access) that only returns P1 asymmetric cells. Krystals therefore requires the new API.\n\n· The new API is occasionally buggy and may fall back to the legacy API.\n\n· If the legacy API is retired by MP, some crystals will no longer be downloadable — please update the app.\n\n· If the searched results do NOT contain in the legacy API's data, will automatically transmit to the new-gen API. Some symmetry information will be discarded."
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -1843,7 +1843,7 @@ private fun MpCautionDialog(preferences: SharedPreferences, onDismiss: () -> Uni
             TextButton(onClick = {
                 if (dontShow) preferences.edit().putBoolean("mp_caution_dismissed", true).apply()
                 onContinue()
-            }) { Text(localized("我知道了", "Got it")) }
+            }) { Text(localized("我知道了", "Comfirm")) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
