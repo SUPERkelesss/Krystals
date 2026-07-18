@@ -25,60 +25,111 @@ object BondValence {
      *  the structure couldn't be analysed (caller should fall back to bonding radii). */
     data class SmartIonicResult(val rules: List<BondRule>, val success: Boolean)
 
+    /** Per-site resolution shared by rule generation and BVS reporting. */
+    private data class SiteValence(
+        val radius: Double?,      // Shannon crystal radius; null → caller falls back to bonding radius
+        val valence: Int?,        // cation: BVS-estimated; anion: fixed; null: unresolved
+        val isAnion: Boolean,     // element has a fixed anion valence (O/S/F/Cl/…)
+    )
+
     /**
-     * Generate per-site-pair bond rules from estimated Shannon crystal radii. Returns
-     * [SmartIonicResult.success] = false when no cation–anion pair could be analysed at all (e.g. a
-     * pure metal or an all-covalent structure); in that case [rules] is empty and the caller should
-     * fall back to [RadiusSource.BONDING].
+     * Generate per-site-pair bond rules from estimated Shannon crystal radii. [epsilon] is the bond
+     * threshold added to rA+rB (max = rA + rB + epsilon). Anion–anion site pairs (e.g. O–O) are
+     * skipped — in an ionic model anions don't bond each other, and their wide radius sum would
+     * otherwise flag non-bonding O–O distances as bonds.
+     *
+     * Returns [SmartIonicResult.success] = false when no cation–anion pair could be analysed at all
+     * (e.g. a pure metal or an all-covalent structure); the caller should fall back to BONDING.
      */
-    fun smartIonicRules(structure: CrystalStructure): SmartIonicResult {
+    fun smartIonicRules(structure: CrystalStructure, epsilon: Double = 0.45): SmartIonicResult {
+        val analysis = analyze(structure, epsilon)
+        if (analysis == null || !analysis.anyResolved) return SmartIonicResult(emptyList(), success = false)
+
+        val rules = structure.sites.flatMapIndexed { i, siteA ->
+            structure.sites.drop(i).mapNotNull { siteB ->
+                // Skip anion–anion pairs (O–O, O–F, …): no ionic bond between two anions.
+                if (analysis.siteValence[siteA.id]?.isAnion == true &&
+                    analysis.siteValence[siteB.id]?.isAnion == true) return@mapNotNull null
+                val rA = analysis.siteValence[siteA.id]?.radius ?: PeriodicTable.radius(siteA.element, RadiusSource.BONDING)
+                val rB = analysis.siteValence[siteB.id]?.radius ?: PeriodicTable.radius(siteB.element, RadiusSource.BONDING)
+                BondRule(siteA.id, siteB.id, 0.1, rA + rB + epsilon, BondRuleSource.CUSTOM)
+            }
+        }
+        return SmartIonicResult(rules, success = true)
+    }
+
+    /**
+     * Per-site bond-valence sum (BVS). Cation sites use the BVS from their estimated valence; anion
+     * sites sum the bond valences of their bonds to neighbouring cations (using each cation's
+     * resolved valence to look up R0/B). Sites without a resolvable valence are omitted.
+     */
+    fun bondValenceSums(structure: CrystalStructure, epsilon: Double = 0.45): Map<String, Double> {
+        val analysis = analyze(structure, epsilon) ?: return emptyMap()
+        val siteValence = analysis.siteValence
+        val atomById = analysis.atoms.associateBy { it.id }
+        val bvsBySite = HashMap<String, Double>()
+        for ((a, b, d) in analysis.neighbours) {
+            val atomA = atomById[a] ?: continue
+            val atomB = atomById[b] ?: continue
+            if (atomA.element == atomB.element) continue // same-element pairs carry no ionic valence info
+            val svA = siteValence[atomA.siteId] ?: continue
+            val svB = siteValence[atomB.siteId] ?: continue
+            val vA = svA.valence ?: continue
+            val vB = svB.valence ?: continue
+            // Look up R0/B for the (cation, anion) pair in either order.
+            val param = if (!svA.isAnion && svB.isAnion) {
+                PeriodicTable.bondValenceParam(atomA.element, vA, atomB.element, vB)
+            } else if (svA.isAnion && !svB.isAnion) {
+                PeriodicTable.bondValenceParam(atomB.element, vB, atomA.element, vA)
+            } else continue
+            val s = param?.let { exp((it.r0 - d) / it.b) } ?: continue
+            bvsBySite[atomA.siteId] = (bvsBySite[atomA.siteId] ?: 0.0) + s
+            bvsBySite[atomB.siteId] = (bvsBySite[atomB.siteId] ?: 0.0) + s
+        }
+        return bvsBySite
+    }
+
+    /** Shared analysis: expand, build the (anion–anion-skipping) neighbour table, resolve each site. */
+    private data class Analysis(
+        val atoms: List<ExpandedAtom>,
+        val neighbours: List<Triple<Long, Long, Double>>,
+        val siteValence: Map<String, SiteValence>,
+        val anyResolved: Boolean,
+    )
+
+    private fun analyze(structure: CrystalStructure, epsilon: Double): Analysis? {
         val atoms = CrystalEngine.expandAsymmetricUnit(structure)
-        if (atoms.size < 2) return SmartIonicResult(emptyList(), success = false)
+        if (atoms.size < 2) return null
+        val neighbours = bondingNeighbours(structure, atoms, epsilon)
+        if (neighbours.isEmpty()) return null
 
-        // 1. Build the bonding-radius neighbour table (real Cartesian distances, closest image).
-        val neighbours = bondingNeighbours(structure, atoms)
-        if (neighbours.isEmpty()) return SmartIonicResult(emptyList(), success = false)
-
-        // 2. Coordination number per expanded atom (count of bonding-radius neighbours).
         val cnByAtom = HashMap<Long, Int>()
         for ((a, b, _) in neighbours) {
             cnByAtom[a] = (cnByAtom[a] ?: 0) + 1
             cnByAtom[b] = (cnByAtom[b] ?: 0) + 1
         }
 
-        // 3. Estimate an oxidation state + Shannon radius per *site* (not per expanded atom):
-        //    every expanded atom of a site shares its site's resolution.
-        val radiusBySite = HashMap<String, Double?>()
+        val siteValence = HashMap<String, SiteValence>()
         var anyResolved = false
         for (site in structure.sites) {
-            val resolved = resolveSiteRadius(site, atoms, neighbours, cnByAtom)
-            radiusBySite[site.id] = resolved
-            if (resolved != null) anyResolved = true
+            val sv = resolveSite(site, atoms, neighbours, cnByAtom)
+            siteValence[site.id] = sv
+            if (sv.radius != null || sv.valence != null) anyResolved = true
         }
-        // No site could be resolved → the structure isn't analysable as ionic.
-        if (!anyResolved) return SmartIonicResult(emptyList(), success = false)
-
-        // 4. Emit one rule per site pair (including same-site pairs via drop(i), matching
-        //    bondingRules), falling back to the bonding radius for unresolved sites.
-        val rules = structure.sites.flatMapIndexed { i, siteA ->
-            structure.sites.drop(i).map { siteB ->
-                val rA = radiusBySite[siteA.id] ?: PeriodicTable.radius(siteA.element, RadiusSource.BONDING)
-                val rB = radiusBySite[siteB.id] ?: PeriodicTable.radius(siteB.element, RadiusSource.BONDING)
-                BondRule(siteA.id, siteB.id, 0.1, rA + rB + 0.45, BondRuleSource.CUSTOM)
-            }
-        }
-        return SmartIonicResult(rules, success = true)
+        return Analysis(atoms, neighbours, siteValence, anyResolved)
     }
 
     /** Bonding-radius neighbour pairs (atomA id, atomB id, real distance) using the minimum-image
-     *  convention, matching [CrystalEngine.inferBonds]. */
-    private fun bondingNeighbours(structure: CrystalStructure, atoms: List<ExpandedAtom>): List<Triple<Long, Long, Double>> {
+     *  convention, matching [CrystalEngine.inferBonds]. Anion–anion pairs are skipped so anion CN
+     *  counts only cation neighbours. */
+    private fun bondingNeighbours(structure: CrystalStructure, atoms: List<ExpandedAtom>, epsilon: Double): List<Triple<Long, Long, Double>> {
         if (atoms.size < 2) return emptyList()
-        // One temporary bonding-radius rule per unordered site pair drives inferBonds' window.
         val tempRules = structure.sites.flatMapIndexed { i, a ->
-            structure.sites.drop(i + 1).map { b ->
+            structure.sites.drop(i + 1).mapNotNull { b ->
+                // Skip anion–anion temp rules so O–O etc. don't inflate anion coordination numbers.
+                if (PeriodicTable.anionValence(a.element) != null && PeriodicTable.anionValence(b.element) != null) return@mapNotNull null
                 BondRule(a.id, b.id, 0.1,
-                    PeriodicTable.radius(a.element, RadiusSource.BONDING) + PeriodicTable.radius(b.element, RadiusSource.BONDING) + 0.45,
+                    PeriodicTable.radius(a.element, RadiusSource.BONDING) + PeriodicTable.radius(b.element, RadiusSource.BONDING) + epsilon,
                     BondRuleSource.AUTO)
             }
         }
@@ -87,32 +138,27 @@ object BondValence {
     }
 
     /**
-     * Resolve a Shannon crystal radius for [site] at its coordination number. Anion sites (elements
-     * with a fixed anion valence — O, S, F, Cl, …) are looked up directly at that valence; cation
-     * sites estimate their valence by minimising |BVS(V) − V| against the most-electronegative anion
-     * neighbour. Returns null when the site has no analysable bonds or no Shannon entry (the caller
-     * then falls back to the bonding radius for that site).
+     * Resolve a site's Shannon radius, valence, and anion/cation role. Anion sites (elements with a
+     * fixed anion valence — O, S, F, Cl, …) take that valence and look up the radius directly;
+     * cation sites estimate their valence by minimising |BVS(V) − V| against the most-electronegative
+     * anion neighbour. Returns a [SiteValence] with nulls when the site can't be analysed.
      */
-    private fun resolveSiteRadius(
+    private fun resolveSite(
         site: AtomSite,
         atoms: List<ExpandedAtom>,
         neighbours: List<Triple<Long, Long, Double>>,
         cnByAtom: Map<Long, Int>,
-    ): Double? {
-        // Gather this site's expanded atoms and their bond distances to *other-element* partners.
+    ): SiteValence {
         val siteAtoms = atoms.filter { it.siteId == site.id }
-        if (siteAtoms.isEmpty()) return null
+        if (siteAtoms.isEmpty()) return SiteValence(null, null, false)
+        val cn = siteAtoms.mapNotNull { cnByAtom[it.id] }.ifEmpty { return SiteValence(null, null, false) }.average().toInt().coerceAtLeast(1)
 
-        // Coordination number: average CN across the site's expanded atoms (symmetry-equivalent).
-        val cn = siteAtoms.mapNotNull { cnByAtom[it.id] }.ifEmpty { return null }.average().toInt().coerceAtLeast(1)
-
-        // Anion site (O/S/F/Cl/…): look up its Shannon radius at the fixed anion valence directly.
         val fixedAnionV = PeriodicTable.anionValence(site.element)
         if (fixedAnionV != null) {
-            return PeriodicTable.shannonCrystalRadius(site.element, fixedAnionV, cn)
+            val radius = PeriodicTable.shannonCrystalRadius(site.element, fixedAnionV, cn)
+            return SiteValence(radius, fixedAnionV, isAnion = true)
         }
 
-        // Bond distances from this site to each neighbouring element.
         val distByElement = HashMap<String, MutableList<Double>>()
         val atomById = atoms.associateBy { it.id }
         for ((a, b, d) in neighbours) {
@@ -124,23 +170,19 @@ object BondValence {
                 distByElement.getOrPut(atomA.element) { mutableListOf() }.add(d)
             }
         }
-        if (distByElement.isEmpty()) return null
+        if (distByElement.isEmpty()) return SiteValence(null, null, false)
 
-        // The anion partner is the most electronegative neighbouring element that has a fixed
-        // anion valence; the site itself must be the cation (less electronegative).
         val anionElement = distByElement.keys
             .filter { PeriodicTable.anionValence(it) != null && PeriodicTable.isAnion(it, site.element) }
             .maxByOrNull { PeriodicTable.electronegativityPublic(it) }
-            ?: return null
-        val anionV = PeriodicTable.anionValence(anionElement) ?: return null
+            ?: return SiteValence(null, null, false)
+        val anionV = PeriodicTable.anionValence(anionElement) ?: return SiteValence(null, null, false)
         val distances = distByElement.getValue(anionElement)
 
-        // Candidate cation valences tabulated for this (cation, anion, anionValence) pair.
         val candidates = PeriodicTable.cationValences(site.element)
             .filter { v -> PeriodicTable.bondValenceParam(site.element, v, anionElement, anionV) != null }
-        if (candidates.isEmpty()) return null
+        if (candidates.isEmpty()) return SiteValence(null, null, false)
 
-        // Pick the valence whose BVS is closest to itself.
         var bestV = candidates.first()
         var bestErr = Double.POSITIVE_INFINITY
         for (v in candidates) {
@@ -149,7 +191,7 @@ object BondValence {
             val err = abs(bvs - v)
             if (err < bestErr) { bestErr = err; bestV = v }
         }
-
-        return PeriodicTable.shannonCrystalRadius(site.element, bestV, cn)
+        val radius = PeriodicTable.shannonCrystalRadius(site.element, bestV, cn)
+        return SiteValence(radius, bestV, isAnion = false)
     }
 }

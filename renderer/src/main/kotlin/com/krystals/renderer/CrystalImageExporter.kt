@@ -116,6 +116,7 @@ object CrystalImageExporter {
         inspectedAtomId: Long? = null,
         lockedMeasurements: List<LockedMeasurement> = emptyList(),
         lockedInspectedAtomIds: List<Long> = emptyList(),
+        bondValenceBySite: Map<String, Double> = emptyMap(),
     ): Bitmap {
         val width = controller.viewportWidth.coerceIn(512, 4096)
         val height = controller.viewportHeight.coerceIn(512, 4096)
@@ -216,8 +217,8 @@ object CrystalImageExporter {
         // Per v0.3.0: draw locked (persistent) + active measurement/info windows.
         lockedMeasurements.forEach { m -> drawMeasurement(canvas, snapshot, points, m.atomIds, m.mode, true) }
         drawMeasurement(canvas, snapshot, points, selectedAtomIds, measurementMode, false)
-        lockedInspectedAtomIds.forEach { id -> drawAtomInfo(canvas, points, id, true) }
-        if (inspectedAtomId != null && inspectedAtomId !in lockedInspectedAtomIds) drawAtomInfo(canvas, points, inspectedAtomId, false)
+        lockedInspectedAtomIds.forEach { id -> drawAtomInfo(canvas, points, id, true, bondValenceBySite) }
+        if (inspectedAtomId != null && inspectedAtomId !in lockedInspectedAtomIds) drawAtomInfo(canvas, points, inspectedAtomId, false, bondValenceBySite)
         return bitmap
     }
 
@@ -624,9 +625,11 @@ object CrystalImageExporter {
         canvas.drawText(label, anchorX + 10f, anchorY - 10f, paint)
     }
 
-    private fun drawAtomInfo(canvas: Canvas, points: List<Point>, inspectedAtomId: Long?, locked: Boolean) {
+    private fun drawAtomInfo(canvas: Canvas, points: List<Point>, inspectedAtomId: Long?, locked: Boolean, bondValenceBySite: Map<String, Double> = emptyMap()) {
         val atom = inspectedAtomId?.let { id -> points.firstOrNull { it.atomId == id } } ?: return
-        val label = "${atom.element}  ${atom.siteLabel}  occ ${atom.occupancy}\n(${atom.fractional.x.formatFract()}, ${atom.fractional.y.formatFract()}, ${atom.fractional.z.formatFract()})"
+        val bvs = bondValenceBySite[atom.siteId]
+        val bvsText = bvs?.let { "  s = %.2f".format(it) } ?: ""
+        val label = "${atom.element}  ${atom.siteLabel}  occ ${atom.occupancy}$bvsText\n(${atom.fractional.x.formatFract()}, ${atom.fractional.y.formatFract()}, ${atom.fractional.z.formatFract()})"
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 40f; setShadowLayer(4f, 1f, 1f, Color.BLACK) }
         val lines = label.split('\n')
         val widths = lines.map { line -> paint.measureText(line) }

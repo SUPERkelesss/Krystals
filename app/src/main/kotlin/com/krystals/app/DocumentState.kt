@@ -11,6 +11,7 @@ import com.krystals.core.CrystalEditor
 import com.krystals.core.CrystalStructure
 import com.krystals.core.Expansion
 import com.krystals.core.ParsedStructure
+import com.krystals.core.RadiusSource
 import com.krystals.core.ViewerAppearance
 import com.krystals.renderer.LockedMeasurement
 import com.krystals.renderer.MeasurementMode
@@ -48,6 +49,11 @@ class DocumentTab(
     // Per v0.2.4: multiple atom-info windows can be locked at once. Each locked window survives
     // starting a new inspection or moving the view. See CrystalViewport.onInspectionLockToggle.
     var lockedInspectedAtomIds by mutableStateOf(emptyList<Long>())
+    // Per v0.5.0: bond-rule threshold ε (max = rA + rB + ε). Per-tab UI setting, not persisted to
+    // CIF; new files default to 0.45. lastRadiusSource remembers which source the ε slider should
+    // reapply when adjusted (default smart-ionic).
+    var bondEpsilon by mutableStateOf(0.45)
+    var lastRadiusSource by mutableStateOf(RadiusSource.SMART_IONIC)
 }
 
 class KrystalsViewModel : ViewModel() {

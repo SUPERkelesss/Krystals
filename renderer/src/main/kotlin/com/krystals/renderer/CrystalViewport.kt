@@ -162,6 +162,7 @@ fun CrystalViewport(
     onMeasurementLockToggle: (measurement: LockedMeasurement?, isLocked: Boolean) -> Unit = { _, _ -> },
     inspectedAtomId: Long? = null,
     lockedInspectedAtomIds: List<Long> = emptyList(),
+    bondValenceBySite: Map<String, Double> = emptyMap(),
     onInspectAtom: (ExpandedAtom) -> Unit = {},
     onInspectionLockToggle: (atomId: Long, isLocked: Boolean) -> Unit = { _, _ -> },
     onAtomTap: (ExpandedAtom) -> Unit = {},
@@ -371,10 +372,10 @@ fun CrystalViewport(
         measurementBoundsList = bounds
         val infoBounds = mutableListOf<Triple<Rect, Boolean, Long>>()
         lockedInspectedAtomIds.forEach { id ->
-            drawAtomInfo(projected, id, true, appearance)?.let { infoBounds += Triple(it, true, id) }
+            drawAtomInfo(projected, id, true, appearance, bondValenceBySite)?.let { infoBounds += Triple(it, true, id) }
         }
         if (inspectedAtomId != null && inspectedAtomId !in lockedInspectedAtomIds) {
-            drawAtomInfo(projected, inspectedAtomId, false, appearance)?.let { infoBounds += Triple(it, false, inspectedAtomId) }
+            drawAtomInfo(projected, inspectedAtomId, false, appearance, bondValenceBySite)?.let { infoBounds += Triple(it, false, inspectedAtomId) }
         }
         atomInfoBoundsList = infoBounds
         controller.projectedAtoms = visibleProjected
@@ -653,9 +654,13 @@ private fun DrawScope.drawAtomInfo(
     inspectedAtomId: Long?,
     locked: Boolean,
     appearance: ViewerAppearance,
+    bondValenceBySite: Map<String, Double> = emptyMap(),
 ): Rect? {
     val atom = inspectedAtomId?.let { id -> projected.firstOrNull { it.atom.id == id } } ?: return null
-    val label = "${atom.atom.element}  ${atom.atom.siteLabel}  occ ${atom.atom.occupancy}\n(${atom.atom.fractional.x.formatFract()}, ${atom.atom.fractional.y.formatFract()}, ${atom.atom.fractional.z.formatFract()})"
+    // Per v0.5.0: append the atom's bond-valence sum (s = X.XX) after occupancy when available.
+    val bvs = bondValenceBySite[atom.atom.siteId]
+    val bvsText = bvs?.let { "  s = %.2f".format(it) } ?: ""
+    val label = "${atom.atom.element}  ${atom.atom.siteLabel}  occ ${atom.atom.occupancy}$bvsText\n(${atom.atom.fractional.x.formatFract()}, ${atom.atom.fractional.y.formatFract()}, ${atom.atom.fractional.z.formatFract()})"
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.WHITE
         textSize = 40f

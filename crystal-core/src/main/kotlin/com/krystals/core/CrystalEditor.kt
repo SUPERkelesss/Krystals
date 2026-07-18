@@ -70,9 +70,9 @@ object CrystalEditor {
         is EditCommand.Transform -> transform(structure, command.rows, command.translation)
     }
 
-    fun ensureAutoBondRules(structure: CrystalStructure): EditResult {
+    fun ensureAutoBondRules(structure: CrystalStructure, epsilon: Double = 0.45): EditResult {
         val existingKeys = structure.bondRules.map { it.key }.toSet()
-        val generated = smartOrBondingRules(structure)
+        val generated = smartOrBondingRules(structure, epsilon)
         val newRules = generated.filterNot { it.key in existingKeys }
         return EditResult(structure.copy(bondRules = structure.bondRules + newRules))
     }
@@ -84,24 +84,26 @@ object CrystalEditor {
      * (performance guard), fall back to the bonding-radius rule set. Backs [ensureAutoBondRules]
      * (default path, size-guarded). The manual menu item goes through [rebuildBondRules].
      */
-    private fun smartOrBondingRules(structure: CrystalStructure): List<BondRule> {
+    private fun smartOrBondingRules(structure: CrystalStructure, epsilon: Double): List<BondRule> {
         val sizeGuarded = CrystalEngine.expandAsymmetricUnit(structure).size > BondValence.SMART_IONIC_ATOM_LIMIT
         if (!sizeGuarded) {
-            val result = BondValence.smartIonicRules(structure)
+            val result = BondValence.smartIonicRules(structure, epsilon)
             if (result.success) return result.rules
         }
-        return bondingRules(structure)
+        return bondingRules(structure, epsilon)
     }
 
     /** Plain bonding-radius rule per site pair (the v0.4.1 default; now the smart-ionic fallback).
      *  Uses drop(i) so same-site pairs (a site bonded to itself across a cell image) are included —
-     *  a single-site structure must still get a self-bond rule, matching the v0.4.1 generator. */
-    private fun bondingRules(structure: CrystalStructure): List<BondRule> =
+     *  a single-site structure must still get a self-bond rule, matching the v0.4.1 generator.
+     *  Anion–anion pairs are skipped (no ionic bond between two anions). */
+    private fun bondingRules(structure: CrystalStructure, epsilon: Double = 0.45): List<BondRule> =
         structure.sites.flatMapIndexed { i, siteA ->
-            structure.sites.drop(i).map { siteB ->
+            structure.sites.drop(i).mapNotNull { siteB ->
+                if (PeriodicTable.anionValence(siteA.element) != null && PeriodicTable.anionValence(siteB.element) != null) return@mapNotNull null
                 BondRule(
                     siteA.id, siteB.id, 0.1,
-                    PeriodicTable.radius(siteA.element, RadiusSource.BONDING) + PeriodicTable.radius(siteB.element, RadiusSource.BONDING) + 0.45,
+                    PeriodicTable.radius(siteA.element, RadiusSource.BONDING) + PeriodicTable.radius(siteB.element, RadiusSource.BONDING) + epsilon,
                     BondRuleSource.CUSTOM,
                 )
             }
@@ -109,27 +111,28 @@ object CrystalEditor {
 
     /**
      * Per v0.4.1/v0.5.0: clear every existing bond rule (and the disabled-pair record) and
-     * regenerate a rule for every site pair using the given [source]. Used by the bond editor's
-     * "auto-apply radii" button. SMART_IONIC is not size-guarded here (the user explicitly asked
-     * for it) but still falls back to bonding radii when the structure cannot be analysed; in that
-     * case [EditResult.warnings] carries [SMART_IONIC_UNAVAILABLE] for the UI.
+     * regenerate a rule for every site pair using the given [source] and bond threshold [epsilon].
+     * Used by the bond editor's "auto-apply radii" button. SMART_IONIC is not size-guarded here (the
+     * user explicitly asked for it) but still falls back to bonding radii when the structure cannot
+     * be analysed; in that case [EditResult.warnings] carries [SMART_IONIC_UNAVAILABLE] for the UI.
      */
-    fun rebuildBondRules(structure: CrystalStructure, source: RadiusSource): EditResult {
+    fun rebuildBondRules(structure: CrystalStructure, source: RadiusSource, epsilon: Double = 0.45): EditResult {
         if (source == RadiusSource.SMART_IONIC) {
-            val result = BondValence.smartIonicRules(structure)
+            val result = BondValence.smartIonicRules(structure, epsilon)
             if (result.success) {
                 return EditResult(structure.copy(bondRules = result.rules, disabledBondPairs = emptySet()))
             }
             return EditResult(
-                structure.copy(bondRules = bondingRules(structure), disabledBondPairs = emptySet()),
+                structure.copy(bondRules = bondingRules(structure, epsilon), disabledBondPairs = emptySet()),
                 warnings = listOf(SMART_IONIC_UNAVAILABLE),
             )
         }
         val newRules = structure.sites.flatMapIndexed { i, siteA ->
-            structure.sites.drop(i).map { siteB ->
+            structure.sites.drop(i).mapNotNull { siteB ->
+                if (PeriodicTable.anionValence(siteA.element) != null && PeriodicTable.anionValence(siteB.element) != null) return@mapNotNull null
                 BondRule(
                     siteA.id, siteB.id, 0.1,
-                    PeriodicTable.radius(siteA.element, source) + PeriodicTable.radius(siteB.element, source) + 0.45,
+                    PeriodicTable.radius(siteA.element, source) + PeriodicTable.radius(siteB.element, source) + epsilon,
                     BondRuleSource.CUSTOM,
                 )
             }
