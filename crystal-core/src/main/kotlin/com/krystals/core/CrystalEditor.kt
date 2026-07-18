@@ -93,10 +93,12 @@ object CrystalEditor {
         return bondingRules(structure)
     }
 
-    /** Plain bonding-radius rule per site pair (the v0.4.1 default; now the smart-ionic fallback). */
+    /** Plain bonding-radius rule per site pair (the v0.4.1 default; now the smart-ionic fallback).
+     *  Uses drop(i) so same-site pairs (a site bonded to itself across a cell image) are included —
+     *  a single-site structure must still get a self-bond rule, matching the v0.4.1 generator. */
     private fun bondingRules(structure: CrystalStructure): List<BondRule> =
         structure.sites.flatMapIndexed { i, siteA ->
-            structure.sites.drop(i + 1).map { siteB ->
+            structure.sites.drop(i).map { siteB ->
                 BondRule(
                     siteA.id, siteB.id, 0.1,
                     PeriodicTable.radius(siteA.element, RadiusSource.BONDING) + PeriodicTable.radius(siteB.element, RadiusSource.BONDING) + 0.45,
@@ -124,7 +126,7 @@ object CrystalEditor {
             )
         }
         val newRules = structure.sites.flatMapIndexed { i, siteA ->
-            structure.sites.drop(i + 1).map { siteB ->
+            structure.sites.drop(i).map { siteB ->
                 BondRule(
                     siteA.id, siteB.id, 0.1,
                     PeriodicTable.radius(siteA.element, source) + PeriodicTable.radius(siteB.element, source) + 0.45,

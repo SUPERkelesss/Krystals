@@ -58,9 +58,10 @@ object BondValence {
         // No site could be resolved → the structure isn't analysable as ionic.
         if (!anyResolved) return SmartIonicResult(emptyList(), success = false)
 
-        // 4. Emit one rule per site pair, falling back to the bonding radius for unresolved sites.
+        // 4. Emit one rule per site pair (including same-site pairs via drop(i), matching
+        //    bondingRules), falling back to the bonding radius for unresolved sites.
         val rules = structure.sites.flatMapIndexed { i, siteA ->
-            structure.sites.drop(i + 1).map { siteB ->
+            structure.sites.drop(i).map { siteB ->
                 val rA = radiusBySite[siteA.id] ?: PeriodicTable.radius(siteA.element, RadiusSource.BONDING)
                 val rB = radiusBySite[siteB.id] ?: PeriodicTable.radius(siteB.element, RadiusSource.BONDING)
                 BondRule(siteA.id, siteB.id, 0.1, rA + rB + 0.45, BondRuleSource.CUSTOM)
