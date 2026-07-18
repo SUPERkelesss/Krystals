@@ -108,6 +108,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -819,11 +820,18 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
     // Per v0.2.3: per-site atom color overrides, edited in the ATOMS sub-menu.
     var colorPickerOpen by remember { mutableStateOf(false) }
     var colorPickerTarget by remember { mutableStateOf<String?>(null) }
+    // Per v0.3.44: ATOMS/POLYHEDRA group color override — when set, the chosen color is applied to
+    // every site of the target element (written into siteArgbOverrides for each site of that element).
+    var groupColorPickerElement by remember { mutableStateOf<String?>(null) }
     val rules = tab.structure.bondRules
     val allSitesVisible = siteIds.isNotEmpty() && tab.visibility.hiddenSites.intersect(siteIds).isEmpty()
     val allBondsVisible = tab.visibility.showBonds && tab.visibility.hiddenBondPairs.none { key -> rules.any { it.key == key } }
     val allPolyhedraEnabled = siteIds.isNotEmpty() && siteIds.all { it in tab.visibility.polyhedronSites }
     var selected by remember { mutableStateOf(DisplayTab.ATOMS) }
+    // Per v0.3.44: per-group collapse state for the ATOMS/POLYHEDRA/BONDS grouped lists. Keyed by
+    // element (ATOMS/POLYHEDRA) or element-pair (BONDS). A group is expanded when its key is absent
+    // (default expanded); toggling inserts/removes the key.
+    val collapsedGroups = remember { mutableStateMapOf<String, Boolean>() }
     // Per v0.2.3: resizable panel — drag the handle to change how much of the screen the panel
     // occupies. Portrait: bottom sheet height fraction; landscape: right sheet width fraction.
     // Per v0.3.43: default area raised to 0.4.
@@ -894,19 +902,44 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                     TextButton(onClick = { tab.visibility = tab.visibility.copy(hiddenSites = siteIds - tab.visibility.hiddenSites) }) { Text(localized("反选", "Invert")) }
                                 }
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                                // Per v0.2.4: one row per site = visibility checkbox + label + color swatch.
-                                // The swatch opens the per-site color picker (overrides siteArgbOverrides).
-                                sites.forEach { site ->
-                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                                        val visible = site.id !in tab.visibility.hiddenSites
-                                        Checkbox(visible, onCheckedChange = { checked ->
-                                            tab.visibility = tab.visibility.copy(hiddenSites = if (checked) tab.visibility.hiddenSites - site.id else tab.visibility.hiddenSites + site.id)
-                                        })
-                                        Text("${site.label} (${site.element})", modifier = Modifier.weight(1f))
-                                        val argb = PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides)
+                                // Per v0.3.44: group sites by element. Each group is a collapsible header
+                                // (expand/collapse + group checkbox + element label + group color swatch +
+                                // count) followed by the per-site rows when expanded.
+                                val groupedSites = remember(sites) { sites.groupBy { it.element }.toSortedMap() }
+                                groupedSites.forEach { (element, groupSites) ->
+                                    val expanded = collapsedGroups["A:$element"] != true
+                                    val allGroupVisible = groupSites.all { it.id !in tab.visibility.hiddenSites }
+                                    CollapsibleGroupHeader(
+                                        title = "$element (${groupSites.size})",
+                                        expanded = expanded,
+                                        onToggle = { collapsedGroups["A:$element"] = expanded },
+                                        checked = allGroupVisible,
+                                        onCheckChange = { checked ->
+                                            tab.visibility = tab.visibility.copy(
+                                                hiddenSites = if (checked) tab.visibility.hiddenSites - groupSites.map { it.id }.toSet()
+                                                else tab.visibility.hiddenSites + groupSites.map { it.id }.toSet(),
+                                            )
+                                        },
+                                    ) {
+                                        val argb = PeriodicTable.resolveSiteArgb(groupSites.first().id, element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides)
                                         Box(
-                                            Modifier.size(22.dp).background(Color(argb), CircleShape).clickable { colorPickerTarget = site.id; colorPickerOpen = true }
+                                            Modifier.size(22.dp).background(Color(argb), CircleShape).clickable { groupColorPickerElement = element; colorPickerOpen = true }
                                         )
+                                    }
+                                    if (expanded) {
+                                        groupSites.forEach { site ->
+                                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 28.dp, vertical = 2.dp)) {
+                                                val visible = site.id !in tab.visibility.hiddenSites
+                                                Checkbox(visible, onCheckedChange = { checked ->
+                                                    tab.visibility = tab.visibility.copy(hiddenSites = if (checked) tab.visibility.hiddenSites - site.id else tab.visibility.hiddenSites + site.id)
+                                                })
+                                                Text(site.label, modifier = Modifier.weight(1f))
+                                                val siteArgb = PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides)
+                                                Box(
+                                                    Modifier.size(20.dp).background(Color(siteArgb), CircleShape).clickable { colorPickerTarget = site.id; colorPickerOpen = true }
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -955,30 +988,56 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                                 if (visibleRules.isEmpty()) {
                                     Text(localized("无化学键规则", "No bond rules"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
-                                } else visibleRules.forEach { rule ->
-                                    val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
-                                    val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
-                                    val label = "$labelA—$labelB"
-                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                        val visible = tab.visibility.showBonds && rule.key !in tab.visibility.hiddenBondPairs
-                                        Checkbox(visible, onCheckedChange = { checked ->
-                                            tab.visibility = tab.visibility.copy(
-                                                showBonds = true,
-                                                hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - rule.key else tab.visibility.hiddenBondPairs + rule.key,
-                                            )
-                                        })
-                                        Text(label, modifier = Modifier.weight(1f))
-                                        // Per v0.3.4: per-rule "extend across cell" toggle (persisted on the
-                                        // rule). Cross-cell bonds (bonds to a shell atom in a neighbour cell)
-                                        // render only when this is checked; the bonded neighbour-cell atom is
-                                        // drawn alongside. Polyhedra always use full coordination regardless of
-                                        // this toggle.
-                                        Text(stringResource(R.string.extend_across_cell), style = MaterialTheme.typography.bodySmall)
-                                        Spacer(Modifier.width(4.dp))
-                                        Checkbox(rule.extendAcrossCell, onCheckedChange = { extend ->
-                                            val updated = rule.copy(extendAcrossCell = extend)
-                                            viewModel.updateStructure(tab, CrystalEditor.apply(tab.structure, EditCommand.SetBondRule(updated)).structure)
-                                        })
+                                } else {
+                                    // Per v0.3.44: group bond rules by element pair (e.g. C-O, Cs-Cl). Each
+                                    // group is a collapsible header (group visibility checkbox) + per-rule rows.
+                                    val elementOf = remember(sites) { sites.associate { it.id to it.element } }
+                                    val groupedRules = remember(visibleRules, elementOf) {
+                                        visibleRules.groupBy { rule ->
+                                            val ea = elementOf[rule.siteA] ?: "?"
+                                            val eb = elementOf[rule.siteB] ?: "?"
+                                            if (ea <= eb) "$ea—$eb" else "$eb—$ea"
+                                        }.toSortedMap()
+                                    }
+                                    groupedRules.forEach { (pairLabel, groupRules) ->
+                                        val expanded = collapsedGroups["B:$pairLabel"] != true
+                                        val allGroupVisible = groupRules.all { it.key !in tab.visibility.hiddenBondPairs }
+                                        CollapsibleGroupHeader(
+                                            title = "$pairLabel (${groupRules.size})",
+                                            expanded = expanded,
+                                            onToggle = { collapsedGroups["B:$pairLabel"] = expanded },
+                                            checked = allGroupVisible,
+                                            onCheckChange = { checked ->
+                                                tab.visibility = tab.visibility.copy(
+                                                    showBonds = true,
+                                                    hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - groupRules.map { it.key }.toSet()
+                                                    else tab.visibility.hiddenBondPairs + groupRules.map { it.key }.toSet(),
+                                                )
+                                            },
+                                        ) { Spacer(Modifier.width(22.dp)) }
+                                        if (expanded) {
+                                            groupRules.forEach { rule ->
+                                                val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
+                                                val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
+                                                val label = "$labelA—$labelB"
+                                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(start = 28.dp)) {
+                                                    val visible = tab.visibility.showBonds && rule.key !in tab.visibility.hiddenBondPairs
+                                                    Checkbox(visible, onCheckedChange = { checked ->
+                                                        tab.visibility = tab.visibility.copy(
+                                                            showBonds = true,
+                                                            hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - rule.key else tab.visibility.hiddenBondPairs + rule.key,
+                                                        )
+                                                    })
+                                                    Text(label, modifier = Modifier.weight(1f))
+                                                    Text(stringResource(R.string.extend_across_cell), style = MaterialTheme.typography.bodySmall)
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Checkbox(rule.extendAcrossCell, onCheckedChange = { extend ->
+                                                        val updated = rule.copy(extendAcrossCell = extend)
+                                                        viewModel.updateStructure(tab, CrystalEditor.apply(tab.structure, EditCommand.SetBondRule(updated)).structure)
+                                                    })
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -992,11 +1051,34 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                     TextButton(onClick = { tab.visibility = tab.visibility.copy(polyhedronSites = siteIds - tab.visibility.polyhedronSites) }) { Text(localized("反选", "Invert")) }
                                 }
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                                sites.forEach { site -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                    val enabled = site.id in tab.visibility.polyhedronSites
-                                    Checkbox(enabled, onCheckedChange = { checked -> tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) tab.visibility.polyhedronSites + site.id else tab.visibility.polyhedronSites - site.id) })
-                                    Text(site.label)
-                                } }
+                                // Per v0.3.44: polyhedra sites grouped by element, same collapse/group-toggle
+                                // pattern as ATOMS but without a color swatch.
+                                val groupedPoly = remember(sites) { sites.groupBy { it.element }.toSortedMap() }
+                                groupedPoly.forEach { (element, groupSites) ->
+                                    val expanded = collapsedGroups["P:$element"] != true
+                                    val allGroupEnabled = groupSites.all { it.id in tab.visibility.polyhedronSites }
+                                    CollapsibleGroupHeader(
+                                        title = "$element (${groupSites.size})",
+                                        expanded = expanded,
+                                        onToggle = { collapsedGroups["P:$element"] = expanded },
+                                        checked = allGroupEnabled,
+                                        onCheckChange = { checked ->
+                                            tab.visibility = tab.visibility.copy(
+                                                polyhedronSites = if (checked) tab.visibility.polyhedronSites + groupSites.map { it.id }.toSet()
+                                                else tab.visibility.polyhedronSites - groupSites.map { it.id }.toSet(),
+                                            )
+                                        },
+                                    ) { Spacer(Modifier.width(22.dp)) }
+                                    if (expanded) {
+                                        groupSites.forEach { site ->
+                                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 28.dp)) {
+                                                val enabled = site.id in tab.visibility.polyhedronSites
+                                                Checkbox(enabled, onCheckedChange = { checked -> tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) tab.visibility.polyhedronSites + site.id else tab.visibility.polyhedronSites - site.id) })
+                                                Text(site.label)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1015,24 +1097,71 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
             }
         }
     }
-    // Per v0.2.3: per-site color picker, driven from the ATOMS sub-menu.
+    // Per v0.2.3: per-site color picker, driven from the ATOMS sub-menu. Per v0.3.44: also driven
+    // from an element-group swatch (groupColorPickerElement) — the chosen color is applied to every
+    // site of that element.
     if (colorPickerOpen) {
         val target = colorPickerTarget
+        val element = groupColorPickerElement
         val site = sites.firstOrNull { it.id == target }
-        val initial = if (site != null) PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides) else 0xFFCCCCCC
+        val initial = when {
+            site != null -> PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides)
+            element != null -> {
+                val firstOfElement = sites.firstOrNull { it.element == element }
+                if (firstOfElement != null) PeriodicTable.resolveSiteArgb(firstOfElement.id, element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides) else 0xFFCCCCCC
+            }
+            else -> 0xFFCCCCCC
+        }
         ColorPickerDialog(
             initialArgb = initial,
-            onDismiss = { colorPickerOpen = false; colorPickerTarget = null },
+            onDismiss = { colorPickerOpen = false; colorPickerTarget = null; groupColorPickerElement = null },
             onColorSelected = { color ->
-                if (target != null) tab.structure = tab.structure.copy(siteArgbOverrides = tab.structure.siteArgbOverrides + (target to color))
+                when {
+                    target != null -> tab.structure = tab.structure.copy(siteArgbOverrides = tab.structure.siteArgbOverrides + (target to color))
+                    element != null -> {
+                        val additions = sites.filter { it.element == element }.associate { it.id to color }
+                        tab.structure = tab.structure.copy(siteArgbOverrides = tab.structure.siteArgbOverrides + additions)
+                    }
+                }
                 colorPickerOpen = false
                 colorPickerTarget = null
+                groupColorPickerElement = null
             },
         )
     }
 }
 
 private enum class DisplayTab { ATOMS, BONDS, POLYHEDRA }
+
+/**
+ * Per v0.3.44: a collapsible group header used by the ATOMS/POLYHEDRA/BONDS sub-menus. A row with an
+ * expand/collapse arrow, a group checkbox (select/deselect all items in the group), the title, and
+ * an optional trailing slot (e.g. the ATOMS element color swatch).
+ */
+@Composable
+private fun CollapsibleGroupHeader(
+    title: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    checked: Boolean,
+    onCheckChange: (Boolean) -> Unit,
+    trailing: @Composable () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 2.dp),
+    ) {
+        Icon(
+            if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+            null,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(2.dp))
+        Checkbox(checked, onCheckedChange = onCheckChange)
+        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        trailing()
+    }
+}
 
 @Composable
 private fun InfoDialog(tab: DocumentTab, onDismiss: () -> Unit) {
