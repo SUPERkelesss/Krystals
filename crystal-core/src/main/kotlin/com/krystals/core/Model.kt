@@ -163,10 +163,10 @@ enum class AxisMode { ABC, XYZ }
 data class ViewerAppearance(
     val backgroundArgb: Long = 0xFF101014,
     val reflectionEnabled: Boolean = true,
-    val lightAzimuth: Float = 35f,
+    val lightAzimuth: Float = 25f,
     val lightElevation: Float = 45f,
-    val lightIntensity: Float = 0.8f,
-    val diffusion: Float = 0.35f,
+    val lightIntensity: Float = 0.4f,
+    val diffusion: Float = 0.7f,
     val atomOpacity: Float = 1.0f,
     val frameMode: FrameMode = FrameMode.SINGLE_CELL,
     val lineStyle: LineStyle = LineStyle.SOLID,
@@ -180,14 +180,14 @@ data class ViewerAppearance(
     val polyhedronReflectionEnabled: Boolean = true,
     val showAxes: Boolean = true,
     val axisMode: AxisMode = AxisMode.ABC,
-    // Per v0.5.2: depth of field. Focal is the focus position as a normalized offset (0..1) across
-    // the scene's depth range; Range is the in-focus half-width; Blur/Fog scale the out-of-focus
-    // atom blur (BlurMaskFilter) and the far blend toward the background colour.
+    // Per v0.5.3: depth cueing via a linear alpha fog. Near/Far are signed distances in scene
+    // units (1 unit = 1/5 of the visible depth span): negative = toward the camera, positive = away,
+    // 0 = the crystal centre. Atoms/bonds/polyhedra fade to transparent (alpha -> 0) linearly across
+    // [near, far]; their RGB is untouched so colours stay true. Defaults 0.5 / 3.5 fog only the far
+    // side. Replaces the v0.5.2 blur+fog model.
     val depthOfFieldEnabled: Boolean = false,
-    val dofFocal: Float = 0.45f,
-    val dofRange: Float = 0.30f,
-    val dofBlur: Float = 0.6f,
-    val dofFog: Float = 0.35f,
+    val dofNear: Float = 0.5f,
+    val dofFar: Float = 3.5f,
 )
 
 data class SceneSnapshot(

@@ -1,9 +1,6 @@
 package com.krystals.renderer
 
-import android.graphics.BlurMaskFilter
 import android.graphics.Paint
-import android.graphics.RadialGradient
-import android.graphics.Shader
 import android.os.SystemClock
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -54,6 +51,7 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 enum class MeasurementMode { NONE, LENGTH, ANGLE, DIHEDRAL }
 
@@ -371,30 +369,44 @@ fun CrystalViewport(
             }
         }.sortedBy { it.depth }
 
-        // Per v0.5.2: depth-of-field. Compute the visible depth span once, then map each renderable's
-        // camera-space depth to a blur/fog factor. Far atoms blur (BlurMaskFilter) and all far
-        // objects blend toward the background colour (fog); near-in-focus objects are unchanged.
+        // Per v0.5.3: depth cueing via linear alpha fog. Near/Far are signed distances in scene
+        // units (1 unit = 1/5 of the visible depth span): negative = toward the camera, positive =
+        // away, 0 = crystal centre. Objects fade to transparent (alpha -> 0) across [near, far];
+        // their RGB is untouched so colours stay true. No blur — only alpha attenuation.
         val depthRange = run {
             val ds = visibleProjected.map { it.depth }
             if (ds.isEmpty()) null else (ds.min() to ds.max())
         }
-        fun dofFactor(depth: Double): DofFactor {
-            if (!appearance.depthOfFieldEnabled || depthRange == null) return DofFactor.NONE
+        // The centre depth (camera-space z through the bounding centre) maps to the user's 0. One
+        // scene unit = 1/5 of the depth span, matching the -5..5 slider.
+        fun dofAlpha(depth: Double): Float {
+            if (!appearance.depthOfFieldEnabled || depthRange == null) return 1f
             val (dMin, dMax) = depthRange
             val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
-            val focal = dMin + appearance.dofFocal.toDouble() * dSpan
-            val dist = abs(depth - focal) / dSpan
-            val halfRange = (appearance.dofRange * 0.5f).toDouble().coerceIn(0.0, 0.999)
-            val over = ((dist - halfRange) / (1.0 - halfRange)).coerceIn(0.0, 1.0)
-            return DofFactor((appearance.dofBlur * over).toFloat(), (appearance.dofFog * over).toFloat())
+            val centre = (dMin + dMax) / 2.0
+            val d = ((depth - centre) / dSpan * 10.0).toFloat() // signed distance, ~-5..5 range
+            val near = appearance.dofNear
+            val far = appearance.dofFar
+            if (far <= near) return if (d <= near) 1f else 0f
+            if (d <= near) return 1f
+            if (d >= far) return 0f
+            return 1f - (d - near) / (far - near)
+        }
+
+        // Per v0.5.3: simulated contact shadows. When the world light is on, each visible atom
+        // casts a soft dark ellipse on the plane through the crystal centre perpendicular to the
+        // light's screen direction. Drawn under every atom (after frames/axes, before the sorted
+        // renderables) so atoms/bonds/polyhedra paint over them. Default-on, no UI option.
+        if (appearance.reflectionEnabled) {
+            drawContactShadows(visibleProjected, appearance, depthRange)
         }
 
         renderables.forEach { renderable ->
-            val dof = dofFactor(renderable.depth)
+            val alpha = dofAlpha(renderable.depth)
             when (renderable) {
-                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, dof)
-                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites, dof)
-                is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance, dof)
+                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, alpha)
+                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites, alpha)
+                is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance, alpha)
             }
         }
         // Per v0.2.3: draw the locked (persistent) measurement/info windows first, then the active
@@ -418,36 +430,22 @@ fun CrystalViewport(
     }
 }
 
-private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), dof: DofFactor = DofFactor.NONE) {
-    val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
-    // Per v0.5.2: fog the base colour toward the background before shading so far atoms fade out.
-    val rawBase = colorFromArgb(PeriodicTable.resolveSiteArgb(atom.atom.siteId, atom.atom.element, siteArgbOverrides, elementArgbOverrides))
-    val base = rawBase.blend(colorFromArgb(appearance.backgroundArgb), dof.fog).copy(alpha = opacity)
+private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), dofAlpha: Float = 1f) {
+    // Per v0.5.3: depth cueing fades only alpha — RGB stays the true element colour.
+    val opacity = (appearance.atomOpacity.coerceIn(0f, 1f) * dofAlpha.coerceIn(0f, 1f))
+    if (opacity < 0.01f) {
+        // Still draw the selection ring if needed (rare for fully-faded atoms); otherwise skip.
+        if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))
+        return
+    }
+    val base = colorFromArgb(PeriodicTable.resolveSiteArgb(atom.atom.siteId, atom.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacity)
     val sphere = Brush.radialGradient(
         listOf(base, base.darken(0.65f)),
         center = atom.point,
         radius = atom.radius,
     )
-    if (dof.blur > 0f) {
-        // Per v0.5.2: out-of-focus atoms use a real Gaussian blur via the native canvas. Compose's
-        // drawCircle has no mask-filter path, so draw through android.graphics.Canvas+Paint with a
-        // RadialGradient shader matching the Compose sphere gradient.
-        val r = atom.radius
-        val blurRadius = (dof.blur * r * 0.5f).coerceAtMost(r * 0.5f)
-        val cx = atom.point.x; val cy = atom.point.y
-        val lightArgb = (base.alpha * 255).toInt() shl 24 or ((base.red * 255).toInt() shl 16) or ((base.green * 255).toInt() shl 8) or (base.blue * 255).toInt()
-        val darkArgb = (base.alpha * 255).toInt() shl 24 or ((base.red * 0.65f * 255).toInt() shl 16) or ((base.green * 0.65f * 255).toInt() shl 8) or (base.blue * 0.65f * 255).toInt()
-        drawIntoCanvas { c ->
-            val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                maskFilter = BlurMaskFilter(blurRadius, BlurMaskFilter.Blur.NORMAL)
-                shader = RadialGradient(cx, cy, r, intArrayOf(lightArgb, darkArgb), null, Shader.TileMode.CLAMP)
-            }
-            c.nativeCanvas.drawCircle(cx, cy, r, p)
-        }
-    } else {
-        drawCircle(sphere, atom.radius, atom.point)
-    }
-    if (appearance.reflectionEnabled && opacity > 0.01f) {
+    drawCircle(sphere, atom.radius, atom.point)
+    if (appearance.reflectionEnabled) {
         val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
         val offset = atom.radius * 0.38f * light.z.toFloat()
         val highlightCenter = atom.point - Offset(light.x.toFloat() * offset, light.y.toFloat() * offset)
@@ -465,8 +463,9 @@ private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearanc
     if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))
 }
 
-private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dof: DofFactor = DofFactor.NONE) {
-    val opacity = appearance.bondOpacity.coerceIn(0f, 1f)
+private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dofAlpha: Float = 1f) {
+    // Per v0.5.3: depth cueing fades only alpha (RGB untouched).
+    val opacity = appearance.bondOpacity.coerceIn(0f, 1f) * dofAlpha.coerceIn(0f, 1f)
     if (opacity < 0.01f) return
     val delta = b.point - a.point
     val length = delta.getDistance()
@@ -485,16 +484,14 @@ private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float,
 
     val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
     val lightOnPerp = (light.x.toFloat() * perp.x + light.y.toFloat() * perp.y).toDouble()
-    val fog = dof.fog
 
     if (appearance.bondColorMode == BondColorMode.UNICOLOR) {
-        val base = colorFromArgb(appearance.uniformBondArgb).copy(alpha = opacity).let { if (fog > 0f) it.blend(colorFromArgb(appearance.backgroundArgb), fog) else it }
+        val base = colorFromArgb(appearance.uniformBondArgb).copy(alpha = opacity)
         drawBondCylinder(start, end, width / 2f, perp, lightOnPerp, base, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
     } else {
         val midpoint = Offset((start.x + end.x) / 2f, (start.y + end.y) / 2f)
-        val bg = if (fog > 0f) colorFromArgb(appearance.backgroundArgb) else Color.Transparent
-        val baseA = colorFromArgb(PeriodicTable.resolveSiteArgb(a.atom.siteId, a.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacity).let { if (fog > 0f) it.blend(bg, fog) else it }
-        val baseB = colorFromArgb(PeriodicTable.resolveSiteArgb(b.atom.siteId, b.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacity).let { if (fog > 0f) it.blend(bg, fog) else it }
+        val baseA = colorFromArgb(PeriodicTable.resolveSiteArgb(a.atom.siteId, a.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacity)
+        val baseB = colorFromArgb(PeriodicTable.resolveSiteArgb(b.atom.siteId, b.atom.element, siteArgbOverrides, elementArgbOverrides)).copy(alpha = opacity)
         drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
     }
@@ -553,8 +550,8 @@ private fun Color.lighten(factor: Float) = Color(
     blue + (1f - blue) * factor,
     alpha,
 )
-// Per v0.5.2: blend this colour toward [target] by [t] (0..1) — used by depth-of-field fog so far
-// objects fade toward the background colour. Mirrors CrystalImageExporter.blend on Int ARGB.
+// Per v0.5.2: blend this colour toward [target] by [t] (0..1). Kept for the axis arrowhead
+// gradient interpolation; depth cueing now uses pure alpha fade (no colour blend).
 private fun Color.blend(target: Color, t: Float) = Color(
     red + (target.red - red) * t,
     green + (target.green - green) * t,
@@ -562,9 +559,63 @@ private fun Color.blend(target: Color, t: Float) = Color(
     alpha,
 )
 
-/** Per v0.5.2: depth-of-field factors for a single renderable, derived from its camera-space depth. */
-internal data class DofFactor(val blur: Float, val fog: Float) {
-    companion object { val NONE = DofFactor(0f, 0f) }
+/**
+ * Per v0.5.3: simulated contact shadows. Each visible atom casts a soft dark ellipse offset along
+ * the light's screen direction onto the plane through the crystal centre. The ellipse is squashed
+ * along the light direction (a grazing shadow) and its alpha falls off with the atom's height above
+ * the centre plane. Drawn under the atoms so they sit on top. Default-on whenever the world light is
+ * enabled; no user-facing option.
+ */
+private fun DrawScope.drawContactShadows(
+    atoms: List<ProjectedAtom>,
+    appearance: ViewerAppearance,
+    depthRange: Pair<Double, Double>?,
+) {
+    if (atoms.isEmpty() || depthRange == null) return
+    val (dMin, dMax) = depthRange
+    val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
+    val centre = (dMin + dMax) / 2.0
+    val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+    // Screen-space light direction (X right, Y down). The shadow is cast opposite to the light.
+    val sx = light.x.toFloat()
+    val sy = light.y.toFloat()
+    val sLen = sqrt(sx * sx + sy * sy)
+    if (sLen < 1e-3f) return
+    val ux = sx / sLen
+    val uy = sy / sLen
+    // Intensity drives shadow darkness; cap so it never fully blacks out the background.
+    val strength = appearance.lightIntensity.coerceIn(0f, 1f) * 0.22f
+    if (strength < 0.005f) return
+    atoms.forEach { a ->
+        // Height above the centre plane, in scene units (±5). Shadows only for atoms on the camera
+        // side of the centre (positive height); deeper atoms contribute nothing.
+        val h = ((a.depth - centre) / dSpan * 10.0).toFloat()
+        if (h <= 0.1f) return@forEach
+        val drop = h.coerceIn(0f, 5f) / 5f
+        // Cast distance grows with height; alpha fades as the atom lifts off the plane.
+        val cast = a.radius * (1.2f + drop * 2.0f)
+        val cx = a.point.x - ux * cast
+        val cy = a.point.y - uy * cast
+        val rx = a.radius * (1.0f + drop * 0.3f)
+        val ry = a.radius * 0.42f
+        val alpha = (strength * (1f - drop * 0.5f)).coerceIn(0f, strength)
+        if (alpha < 0.005f) return@forEach
+        // Orient the ellipse so its short axis aligns with the light direction.
+        val angle = atan2(uy.toDouble(), ux.toDouble()).toFloat()
+        rotateDegShadow(cx, cy, angle, rx, ry, alpha)
+    }
+}
+
+private fun DrawScope.rotateDegShadow(cx: Float, cy: Float, angle: Float, rx: Float, ry: Float, alpha: Float) {
+    drawIntoCanvas { c ->
+        c.nativeCanvas.save()
+        c.nativeCanvas.rotate(angle * 180f / PI.toFloat(), cx, cy)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb((alpha * 255).toInt().coerceIn(0, 255), 0, 0, 0)
+        }
+        c.nativeCanvas.drawOval(cx - rx, cy - ry, cx + rx, cy + ry, p)
+        c.nativeCanvas.restore()
+    }
 }
 
 /**
@@ -655,14 +706,14 @@ private fun polyhedronFaceRenderables(
     return result
 }
 
-private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appearance: ViewerAppearance, dof: DofFactor = DofFactor.NONE) {
+private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appearance: ViewerAppearance, dofAlpha: Float = 1f) {
     if (face.screenVerts.size < 3) return
     // Per v0.3.44: back faces are emitted outline-only — skip the fill and just draw the edges at
     // a lower alpha so the polyhedron's back silhouette is faintly visible.
     if (!face.outlineOnly) {
-        // Per v0.5.2: fog the face colour toward the background before lighting, so far faces fade
-        // out consistent with atoms/bonds.
-        val foggedBase = if (dof.fog > 0f) face.baseColor.blend(colorFromArgb(appearance.backgroundArgb), dof.fog) else face.baseColor
+        // Per v0.5.3: depth cueing fades only alpha (RGB untouched); apply it to the base colour's
+        // alpha so far faces fade out without changing hue.
+        val fadedBase = face.baseColor.copy(alpha = (face.baseColor.alpha * dofAlpha.coerceIn(0f, 1f)).coerceIn(0f, 1f))
         val fill = if (appearance.polyhedronReflectionEnabled) {
             // Screen-space Lambert: light direction in camera space (matches atom highlight which is
             // fixed relative to the screen). +Z toward viewer, so faces pointing at the light brighten.
@@ -672,12 +723,12 @@ private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appeara
             // contrast), intensity 1 → ambient 0.4 with full Lambert range.
             val ambient = (1f - 0.6f * appearance.lightIntensity).coerceIn(0.4f, 1f)
             val factor = (ambient + (1f - ambient) * dot.toFloat()).coerceIn(0f, 1f)
-            foggedBase.copy(
-                red = (foggedBase.red * factor).coerceIn(0f, 1f),
-                green = (foggedBase.green * factor).coerceIn(0f, 1f),
-                blue = (foggedBase.blue * factor).coerceIn(0f, 1f),
+            fadedBase.copy(
+                red = (fadedBase.red * factor).coerceIn(0f, 1f),
+                green = (fadedBase.green * factor).coerceIn(0f, 1f),
+                blue = (fadedBase.blue * factor).coerceIn(0f, 1f),
             )
-        } else foggedBase
+        } else fadedBase
         val path = Path().apply {
             moveTo(face.screenVerts[0].x, face.screenVerts[0].y)
             for (i in 1 until face.screenVerts.size) lineTo(face.screenVerts[i].x, face.screenVerts[i].y)
@@ -687,7 +738,7 @@ private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appeara
     }
     // Outline polygon edges, deduplicated across adjacent faces via the caller's shared set is not
     // possible here (per-face), so dedupe within the face by sorted endpoint pair.
-    val outlineColor = Color.White.copy(alpha = face.outlineAlpha)
+    val outlineColor = Color.White.copy(alpha = face.outlineAlpha * dofAlpha.coerceIn(0f, 1f))
     val drawn = mutableSetOf<List<Long>>()
     for (i in face.screenVerts.indices) {
         val a = face.vertexIds[i]

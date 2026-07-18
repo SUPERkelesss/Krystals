@@ -1,7 +1,6 @@
 package com.krystals.renderer
 
 import android.graphics.Bitmap
-import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
@@ -24,6 +23,7 @@ import com.krystals.core.dihedralDegrees
 import com.krystals.core.distance
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -31,11 +31,6 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 object CrystalImageExporter {
-
-    /** Per v0.5.2: depth-of-field factors for a single primitive (mirror of CrystalViewport.DofFactor). */
-    private data class DofFactor(val blur: Float, val fog: Float) {
-        companion object { val NONE = DofFactor(0f, 0f) }
-    }
 
     private data class Point(val atomId: Long, val element: String, val siteId: String, val siteLabel: String, val x: Float, val y: Float, val z: Double, val radius: Float, val occupancy: Double, val fractional: Vec3, val cartesian: Vec3, val isShell: Boolean, val isBoundaryImage: Boolean = false) {
         val isExternalShell: Boolean get() = isShell && !isBoundaryImage
@@ -203,31 +198,38 @@ object CrystalImageExporter {
             }
         }.sortedBy { it.depth }
 
-        // Per v0.5.2: depth-of-field. Mirror CrystalViewport — compute the visible depth span once,
-        // map each primitive's camera-space z to a blur/fog factor. Atoms get a real BlurMaskFilter;
-        // all objects fog toward the background colour.
+        // Per v0.5.3: depth cueing via linear alpha fog — mirror CrystalViewport. Near/Far are signed
+        // distances (1 unit = 1/5 of the depth span): negative = toward camera, positive = away,
+        // 0 = crystal centre. Only alpha fades; RGB stays true. No blur.
         val depthRange = run {
             val ds = points.map { it.z }
             if (ds.isEmpty()) null else (ds.min() to ds.max())
         }
-        val backgroundArgb = appearance.backgroundArgb.toInt()
-        fun dofFactor(depth: Double): DofFactor {
-            if (!appearance.depthOfFieldEnabled || depthRange == null) return DofFactor.NONE
+        fun dofAlpha(depth: Double): Float {
+            if (!appearance.depthOfFieldEnabled || depthRange == null) return 1f
             val (dMin, dMax) = depthRange
             val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
-            val focal = dMin + appearance.dofFocal.toDouble() * dSpan
-            val dist = abs(depth - focal) / dSpan
-            val halfRange = (appearance.dofRange * 0.5f).toDouble().coerceIn(0.0, 0.999)
-            val over = ((dist - halfRange) / (1.0 - halfRange)).coerceIn(0.0, 1.0)
-            return DofFactor((appearance.dofBlur * over).toFloat(), (appearance.dofFog * over).toFloat())
+            val centre = (dMin + dMax) / 2.0
+            val d = ((depth - centre) / dSpan * 10.0).toFloat()
+            val near = appearance.dofNear
+            val far = appearance.dofFar
+            if (far <= near) return if (d <= near) 1f else 0f
+            if (d <= near) return 1f
+            if (d >= far) return 0f
+            return 1f - (d - near) / (far - near)
+        }
+
+        // Per v0.5.3: simulated contact shadows — mirror CrystalViewport (default-on with the light).
+        if (appearance.reflectionEnabled) {
+            drawContactShadows(canvas, visiblePoints, appearance, depthRange)
         }
 
         renderables.forEach { primitive ->
-            val dof = dofFactor(primitive.depth)
+            val alpha = dofAlpha(primitive.depth)
             when (primitive) {
-                is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, selectedAtomIds, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, dof)
-                is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites, dof, backgroundArgb)
-                is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.rotation, dof, backgroundArgb)
+                is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, selectedAtomIds, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, alpha)
+                is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites, alpha)
+                is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.rotation, alpha)
             }
         }
         // Per v0.3.0: draw locked (persistent) + active measurement/info windows.
@@ -238,30 +240,32 @@ object CrystalImageExporter {
         return bitmap
     }
 
-    private fun drawAtom(canvas: Canvas, point: Point, appearance: ViewerAppearance, selectedAtomIds: List<Long>, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), dof: DofFactor = DofFactor.NONE) {
-        // Per v0.5.2: fog the base colour toward the background before shading.
+    private fun drawAtom(canvas: Canvas, point: Point, appearance: ViewerAppearance, selectedAtomIds: List<Long>, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), dofAlpha: Float = 1f) {
+        // Per v0.5.3: depth cueing fades only alpha — RGB stays the true element colour.
         val baseArgb = PeriodicTable.resolveSiteArgb(point.siteId, point.element, siteArgbOverrides, elementArgbOverrides).toInt()
-        val base = if (dof.fog > 0f) blend(baseArgb, appearance.backgroundArgb.toInt(), dof.fog) else baseArgb
-        val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
+        val opacity = (appearance.atomOpacity.coerceIn(0f, 1f) * dofAlpha.coerceIn(0f, 1f)).coerceIn(0f, 1f)
+        if (opacity < 0.01f) {
+            if (point.atomId in selectedAtomIds) {
+                val sp = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 4f; color = 0xFF9966CC.toInt() }
+                canvas.drawCircle(point.x, point.y, point.radius + 3f, sp)
+            }
+            return
+        }
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             alpha = (opacity * 255).toInt()
-            // Per v0.5.2: real Gaussian blur for out-of-focus atoms. Android Paint already exposes
-            // maskFilter, so this is a one-liner (no drawIntoCanvas needed, unlike the viewport).
-            maskFilter = if (dof.blur > 0f) BlurMaskFilter((dof.blur * point.radius * 0.5f).coerceAtMost(point.radius * 0.5f), BlurMaskFilter.Blur.NORMAL) else null
             shader = RadialGradient(
                 point.x, point.y, point.radius,
-                intArrayOf(base, darken(base, 0.65f)),
+                intArrayOf(baseArgb, darken(baseArgb, 0.65f)),
                 null,
                 Shader.TileMode.CLAMP,
             )
         }
         canvas.drawCircle(point.x, point.y, point.radius, paint)
-        if (appearance.reflectionEnabled && opacity > 0.01f) {
+        if (appearance.reflectionEnabled) {
             val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
             val offset = point.radius * .38f * light.z.toFloat()
             val highlightAlpha = (appearance.lightIntensity.coerceIn(.05f, 1f) * opacity * 255).toInt()
             val highlight = Color.argb(highlightAlpha, 255, 255, 255)
-            paint.maskFilter = null
             paint.shader = RadialGradient(
                 point.x - light.x.toFloat() * offset,
                 point.y - light.y.toFloat() * offset,
@@ -272,13 +276,14 @@ object CrystalImageExporter {
             )
             canvas.drawCircle(point.x, point.y, point.radius, paint)
         }
-        paint.shader = null; paint.maskFilter = null; paint.style = Paint.Style.STROKE; paint.strokeWidth = if (point.atomId in selectedAtomIds) 4f else 1f
+        paint.shader = null; paint.style = Paint.Style.STROKE; paint.strokeWidth = if (point.atomId in selectedAtomIds) 4f else 1f
         paint.color = if (point.atomId in selectedAtomIds) 0xFF9966CC.toInt() else 0x55000000
         canvas.drawCircle(point.x, point.y, point.radius + if (point.atomId in selectedAtomIds) 3f else 0f, paint)
     }
 
-    private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dof: DofFactor = DofFactor.NONE, backgroundArgb: Int = 0xFF101014.toInt()) {
-        val opacity = appearance.bondOpacity.coerceIn(0f, 1f)
+    private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dofAlpha: Float = 1f) {
+        // Per v0.5.3: depth cueing fades only alpha (RGB untouched).
+        val opacity = (appearance.bondOpacity.coerceIn(0f, 1f) * dofAlpha.coerceIn(0f, 1f)).coerceIn(0f, 1f)
         if (opacity < 0.01f) return
         val dx = b.x - a.x
         val dy = b.y - a.y
@@ -305,9 +310,11 @@ object CrystalImageExporter {
 
         val start = Point(0L, a.element, a.siteId, a.siteLabel, startX, startY, a.z, a.radius, a.occupancy, a.fractional, a.cartesian, a.isShell, a.isBoundaryImage)
         val end = Point(0L, b.element, b.siteId, b.siteLabel, endX, endY, b.z, b.radius, b.occupancy, b.fractional, b.cartesian, b.isShell, b.isBoundaryImage)
+        // Per v0.5.3: pack opacity into the bond colour's alpha so depth cueing fades the bond
+        // without recolouring it (drawBondCylinder builds its gradient from baseArgb).
+        fun packAlpha(argb: Int) = (argb and 0x00FFFFFF) or ((opacity * 255).toInt().coerceIn(0, 255) shl 24)
         if (appearance.bondColorMode == BondColorMode.UNICOLOR) {
-            val base = if (dof.fog > 0f) blend(appearance.uniformBondArgb.toInt(), backgroundArgb, dof.fog) else appearance.uniformBondArgb.toInt()
-            drawBondCylinder(canvas, start, end, width, perpX, perpY, lightOnPerp, base, opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+            drawBondCylinder(canvas, start, end, width, perpX, perpY, lightOnPerp, packAlpha(appearance.uniformBondArgb.toInt()), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         } else {
             val mx = (startX + endX) / 2f
             val my = (startY + endY) / 2f
@@ -315,10 +322,8 @@ object CrystalImageExporter {
             val midB = Point(0L, b.element, b.siteId, b.siteLabel, mx, my, (a.z + b.z) / 2.0, 0f, b.occupancy, b.fractional, b.cartesian, b.isShell, b.isBoundaryImage)
             val baseA = PeriodicTable.resolveSiteArgb(a.siteId, a.element, siteArgbOverrides, elementArgbOverrides).toInt()
             val baseB = PeriodicTable.resolveSiteArgb(b.siteId, b.element, siteArgbOverrides, elementArgbOverrides).toInt()
-            val fa = if (dof.fog > 0f) blend(baseA, backgroundArgb, dof.fog) else baseA
-            val fb = if (dof.fog > 0f) blend(baseB, backgroundArgb, dof.fog) else baseB
-            drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, fa, opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
-            drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, fb, opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+            drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, packAlpha(baseA), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+            drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, packAlpha(baseB), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         }
     }
 
@@ -338,11 +343,13 @@ object CrystalImageExporter {
         lightIntensity: Float,
         diffusion: Float,
     ) {
+        @Suppress("UNUSED_PARAMETER") val op = opacity // alpha is already packed into baseArgb by the caller
         val halfWidth = width / 2f
         val mx = (a.x + b.x) / 2f
         val my = (a.y + b.y) / 2f
         val highlightPos = (0.5 - lightOnPerp * 0.35).toFloat().coerceIn(0.1f, 0.9f)
-        val base = Color.argb((opacity * 255).toInt(), Color.red(baseArgb), Color.green(baseArgb), Color.blue(baseArgb))
+        // baseArgb already carries the bond opacity (packed by the caller); reuse its alpha directly.
+        val base = baseArgb
         val shadowA = darken(baseArgb, 1f - 0.45f * lightIntensity)
         val shadowB = darken(baseArgb, 1f - 0.35f * lightIntensity)
         val highlight = if (reflectionEnabled) lighten(baseArgb, 0.55f * lightIntensity) else base
@@ -370,16 +377,15 @@ object CrystalImageExporter {
         elementArgbOverrides: Map<String, Long>,
         siteArgbOverrides: Map<String, Long>,
         rotation: Mat3,
-        // Per v0.5.2: depth-of-field fog (faces are not blurred, only faded toward the background).
-        dof: DofFactor = DofFactor.NONE,
-        backgroundArgb: Int = 0xFF101014.toInt(),
+        // Per v0.5.3: depth cueing fades only alpha (RGB untouched).
+        dofAlpha: Float = 1f,
     ) {
         val verts = face.faceVerts
         if (verts.size < 3) return
-        val rawArgb = PeriodicTable.resolveSiteArgb(face.center.siteId, face.center.element, siteArgbOverrides, elementArgbOverrides).toInt()
-        // Per v0.5.2: fog the base colour toward the background before lighting.
-        val baseArgb = if (dof.fog > 0f) blend(rawArgb, backgroundArgb, dof.fog) else rawArgb
-        val baseColor = Color.argb((appearance.polyhedronOpacity.coerceIn(0f, 1f) * 255).toInt(), Color.red(baseArgb), Color.green(baseArgb), Color.blue(baseArgb))
+        val baseArgb = PeriodicTable.resolveSiteArgb(face.center.siteId, face.center.element, siteArgbOverrides, elementArgbOverrides).toInt()
+        // Per v0.5.3: polyhedron opacity × depth-cueing alpha — RGB stays the true colour.
+        val alpha = (appearance.polyhedronOpacity.coerceIn(0f, 1f) * dofAlpha.coerceIn(0f, 1f)).coerceIn(0f, 1f)
+        val baseColor = Color.argb((alpha * 255).toInt(), Color.red(baseArgb), Color.green(baseArgb), Color.blue(baseArgb))
         val cam = rotation * face.normal
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         // Per v0.3.44: outline-only back faces skip the fill and draw edges at low alpha.
@@ -411,7 +417,7 @@ object CrystalImageExporter {
             paint.color = fill
             canvas.drawPath(path, paint)
         }
-        paint.color = Color.argb((face.outlineAlpha * 255).toInt().coerceIn(0, 255), 255, 255, 255)
+        paint.color = Color.argb((face.outlineAlpha * dofAlpha.coerceIn(0f, 1f) * 255).toInt().coerceIn(0, 255), 255, 255, 255)
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 1.2f
         val drawn = mutableSetOf<List<Long>>()
@@ -454,6 +460,44 @@ object CrystalImageExporter {
             (Color.green(a) * inv + Color.green(b) * ratio).toInt(),
             (Color.blue(a) * inv + Color.blue(b) * ratio).toInt(),
         )
+    }
+
+    /**
+     * Per v0.5.3: simulated contact shadows — mirror CrystalViewport.drawContactShadows. Each visible
+     * atom casts a soft dark ellipse offset along the light's screen direction; alpha fades with the
+     * atom's height above the centre plane. Drawn before the atoms so they sit on top.
+     */
+    private fun drawContactShadows(canvas: Canvas, atoms: List<Point>, appearance: ViewerAppearance, depthRange: Pair<Double, Double>?) {
+        if (atoms.isEmpty() || depthRange == null) return
+        val (dMin, dMax) = depthRange
+        val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
+        val centre = (dMin + dMax) / 2.0
+        val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+        val sx = light.x.toFloat(); val sy = light.y.toFloat()
+        val sLen = sqrt(sx * sx + sy * sy)
+        if (sLen < 1e-3f) return
+        val ux = sx / sLen; val uy = sy / sLen
+        val strength = appearance.lightIntensity.coerceIn(0f, 1f) * 0.22f
+        if (strength < 0.005f) return
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        for (a in atoms) {
+            val h = ((a.z - centre) / dSpan * 10.0).toFloat()
+            if (h <= 0.1f) continue
+            val drop = h.coerceIn(0f, 5f) / 5f
+            val cast = a.radius * (1.2f + drop * 2.0f)
+            val cx = a.x - ux * cast
+            val cy = a.y - uy * cast
+            val rx = a.radius * (1.0f + drop * 0.3f)
+            val ry = a.radius * 0.42f
+            val alpha = (strength * (1f - drop * 0.5f)).coerceIn(0f, strength)
+            if (alpha < 0.005f) continue
+            val angle = Math.toDegrees(atan2(uy.toDouble(), ux.toDouble())).toFloat()
+            canvas.save()
+            canvas.rotate(angle, cx, cy)
+            paint.color = Color.argb((alpha * 255).toInt().coerceIn(0, 255), 0, 0, 0)
+            canvas.drawOval(cx - rx, cy - ry, cx + rx, cy + ry, paint)
+            canvas.restore()
+        }
     }
 
     private fun drawAxes(canvas: Canvas, snapshot: SceneSnapshot, appearance: ViewerAppearance, controller: ViewerController, width: Int, height: Int) {
