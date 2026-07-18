@@ -425,8 +425,8 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     // the distance window), not just rules whose sites are gone.
     val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        // Per v0.4.1: "自动应用半径" (auto-apply radii) clears every bond rule and regenerates them
-        // from one of two radius sources (bonding/vdW).
+        // Per v0.5.0: "自动应用半径" (auto-apply radii) clears every bond rule and regenerates them
+        // from one of three radius sources (smart-ionic default / bonding / vdW).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { addOpen = true }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建规则", "New rule")) }
             Box(Modifier.weight(1f)) {
@@ -434,6 +434,15 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
                     Text(localized("自动应用半径", "Auto-apply radii"))
                 }
                 DropdownMenu(expanded = radiiMenuOpen, onDismissRequest = { radiiMenuOpen = false }) {
+                    DropdownMenuItem(text = { Text(localized("智能离子", "Smart ionic")) }, onClick = {
+                        radiiMenuOpen = false
+                        val result = CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.SMART_IONIC)
+                        // Per v0.5.0: when smart ionic can't analyse the structure the UI warns the user.
+                        if (CrystalEditor.SMART_IONIC_UNAVAILABLE in result.warnings) {
+                            onMessage(localized("智能离子规则在该晶体下不可用", "Smart ionic rules are unavailable for this crystal"))
+                        }
+                        onStructure(result.structure)
+                    })
                     DropdownMenuItem(text = { Text(localized("键合半径", "Bonding radius")) }, onClick = {
                         radiiMenuOpen = false
                         onStructure(CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.BONDING).structure)
