@@ -40,10 +40,12 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Dialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -61,6 +63,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -96,10 +99,6 @@ import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.graphics.Color as UiColor
-import kotlin.coroutines.CoroutineContext
 
 private enum class EditorTab { BASIC, ATOMS, BONDS, EXPANSION }
 
@@ -420,6 +419,7 @@ private fun cell(w: androidx.compose.ui.unit.Dp, h: androidx.compose.ui.unit.Dp,
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit) {
     val sites = tab.structure.sites
@@ -517,7 +517,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
         }
     }
     if (loading) {
-        Dialog(onDismissRequest = {}) {
+        BasicAlertDialog(onDismissRequest = {}) {
             Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
                 Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     CircularProgressIndicator()
