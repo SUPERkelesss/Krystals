@@ -420,6 +420,9 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     var addOpen by remember { mutableStateOf(false) }
     var editingRule by remember { mutableStateOf<BondRule?>(null) }
     var radiiMenuOpen by remember { mutableStateOf(false) }
+    // Per v0.5.0: smart-ionic unavailable warning. localized() is @Composable, so resolve it here
+    // in the composable body and reuse it inside the non-composable onClick lambda below.
+    val unavailableMessage = localized("智能离子规则在该晶体下不可用", "Smart ionic rules are unavailable for this crystal")
     val rules = tab.structure.bondRules
     // Per v0.2.3: hide rules that produce no bond in the current structure (no atom pair within
     // the distance window), not just rules whose sites are gone.
@@ -438,8 +441,9 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
                         radiiMenuOpen = false
                         val result = CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.SMART_IONIC)
                         // Per v0.5.0: when smart ionic can't analyse the structure the UI warns the user.
+                        // localized() is @Composable, so resolve the string before the onClick lambda runs.
                         if (CrystalEditor.SMART_IONIC_UNAVAILABLE in result.warnings) {
-                            onMessage(localized("智能离子规则在该晶体下不可用", "Smart ionic rules are unavailable for this crystal"))
+                            onMessage(unavailableMessage)
                         }
                         onStructure(result.structure)
                     })
