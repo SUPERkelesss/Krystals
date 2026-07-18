@@ -94,6 +94,7 @@ import com.krystals.core.UnitCell
 import com.krystals.core.Vec3
 import kotlin.math.max
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
@@ -703,6 +704,7 @@ private fun ExpansionCluster(label: String, value: Int, onValue: (Int) -> Unit) 
 fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.krystals.core.ViewerAppearance) -> Unit = {}) {
     var appearance by remember { mutableStateOf(tab.appearance) }
     var colorPickerOpen by remember { mutableStateOf(false) }
+    var bondColorPickerOpen by remember { mutableStateOf(false) }
     val frameLabels = listOf(localized("不显示框线", "No frame"), localized("单个晶胞", "Single cell"), localized("所有框线", "All frames"))
     val lineLabels = listOf(localized("实线", "Solid"), localized("虚线", "Dashed"))
     val bondColorLabels = listOf(localized("双色圆柱", "Bicolor cylinder"), localized("单色圆柱", "Unicolor cylinder"))
@@ -727,22 +729,23 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("框线", "Frame"), fontWeight = FontWeight.Bold)
-            Row(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Column(Modifier.weight(1f)) {
                     DropdownField(localized("模式", "Mode"), frameLabels[appearance.frameMode.ordinal], frameLabels) { appearance = appearance.copy(frameMode = FrameMode.entries[frameLabels.indexOf(it)]) }
                 }
-                Column(Modifier.weight(1f)) {
+                // Per v0.5.3: line style is meaningless when no frame is drawn, so hide it.
+                if (appearance.frameMode != FrameMode.NONE) Column(Modifier.weight(1f)) {
                     DropdownField(localized("线型", "Line"), lineLabels[appearance.lineStyle.ordinal], lineLabels) { appearance = appearance.copy(lineStyle = LineStyle.entries[lineLabels.indexOf(it)]) }
                 }
             }
             Spacer(Modifier.height(8.dp))
             val axisLabels = listOf("abc", "XYZ")
             Text(localized("坐标轴", "Axes"), style = MaterialTheme.typography.bodySmall)
-            Row(Modifier.fillMaxWidth()) {
-                Column(Modifier.weight(1f)) {
-                    ToggleRow(localized("显示", "Show"), appearance.showAxes) { appearance = appearance.copy(showAxes = it) }
-                }
-                if (appearance.showAxes) Column(Modifier.weight(1f)) {
+            // Per v0.5.3: switch left, system dropdown right, both vertically centred and spaced.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.Switch(checked = appearance.showAxes, onCheckedChange = { appearance = appearance.copy(showAxes = it) })
+                if (appearance.showAxes) {
+                    Spacer(Modifier.weight(1f))
                     DropdownField(localized("坐标系", "System"), axisLabels[appearance.axisMode.ordinal], axisLabels) {
                         appearance = appearance.copy(axisMode = com.krystals.core.AxisMode.entries[axisLabels.indexOf(it)])
                     }
@@ -758,7 +761,14 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
             LabeledSlider(localized("键半径", "Bond radius"), appearance.bondRadius, 0.02f..0.4f) { appearance = appearance.copy(bondRadius = it) }
             LabeledSlider(localized("化学键不透明度", "Bond opacity"), appearance.bondOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(bondOpacity = it) }
             DropdownField(localized("键颜色", "Bond color"), bondColorLabels[appearance.bondColorMode.ordinal], bondColorLabels) { appearance = appearance.copy(bondColorMode = BondColorMode.entries[bondColorLabels.indexOf(it)]) }
-            if (appearance.bondColorMode == BondColorMode.UNICOLOR) FlowRow { listOf(0xFF9A90A0, 0xFF9966CC, 0xFFFFFFFF, 0xFF333333).forEach { argb -> Box(Modifier.padding(5.dp).size(38.dp).background(colorFromArgb(argb), CircleShape).clickable { appearance = appearance.copy(uniformBondArgb = argb) }) } }
+            if (appearance.bondColorMode == BondColorMode.UNICOLOR) FlowRow {
+                listOf(0xFF9A90A0, 0xFF9966CC, 0xFFFFFFFF, 0xFF333333).forEach { argb -> Box(Modifier.padding(5.dp).size(38.dp).background(colorFromArgb(argb), CircleShape).clickable { appearance = appearance.copy(uniformBondArgb = argb) }) }
+                // Per v0.5.3: custom colour swatch opens the colour wheel for the uniform bond colour.
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 5.dp, vertical = 5.dp)) {
+                    Box(Modifier.size(38.dp).background(colorFromArgb(appearance.uniformBondArgb), CircleShape).clickable { bondColorPickerOpen = true })
+                    Text(localized("自定义", "Custom"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("多面体", "Polyhedra"), fontWeight = FontWeight.Bold)
             ToggleRow(localized("显示多面体", "Show polyhedra"), appearance.polyhedronEnabled) { appearance = appearance.copy(polyhedronEnabled = it) }
@@ -778,13 +788,18 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
                 AtomAppearancePreview(appearance, Modifier.padding(start = 10.dp).size(112.dp))
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
-            Text(localized("景深", "Depth of field"), fontWeight = FontWeight.Bold)
-            ToggleRow(localized("景深", "Depth of field"), appearance.depthOfFieldEnabled) { appearance = appearance.copy(depthOfFieldEnabled = it) }
+            Text(localized("景深", "Depth cueing"), fontWeight = FontWeight.Bold)
+            ToggleRow(localized("景深", "Depth cueing"), appearance.depthOfFieldEnabled) { appearance = appearance.copy(depthOfFieldEnabled = it) }
             if (appearance.depthOfFieldEnabled) {
-                LabeledSlider(localized("焦点", "Focal"), appearance.dofFocal, 0f..1f, percentage = true) { appearance = appearance.copy(dofFocal = it) }
-                LabeledSlider(localized("清晰范围", "In-focus range"), appearance.dofRange, 0f..1f, percentage = true) { appearance = appearance.copy(dofRange = it) }
-                LabeledSlider(localized("模糊", "Blur"), appearance.dofBlur, 0f..1f, percentage = true) { appearance = appearance.copy(dofBlur = it) }
-                LabeledSlider(localized("雾化", "Fog"), appearance.dofFog, 0f..1f, percentage = true) { appearance = appearance.copy(dofFog = it) }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        // Per v0.5.3: near/far signed distances in scene units (-5..5). Negative =
+                        // toward the camera, positive = away, 0 = crystal centre. Integer step.
+                        LabeledSlider(localized("起始值", "Near"), appearance.dofNear, -5f..5f, steps = 9) { appearance = appearance.copy(dofNear = it) }
+                        LabeledSlider(localized("终止值", "Far"), appearance.dofFar, -5f..5f, steps = 9) { appearance = appearance.copy(dofFar = it) }
+                    }
+                    DepthCueingPreview(appearance, Modifier.padding(start = 10.dp).size(112.dp))
+                }
             }
         }
     }, confirmButton = { TextButton(onClick = { tab.appearance = appearance; onApplied(appearance); onDismiss() }) { Text(stringResource(R.string.confirm)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })
@@ -804,7 +819,7 @@ fun AppearanceDialog(tab: DocumentTab, onDismiss: () -> Unit, onApplied: (com.kr
 @Composable
 private fun ToggleRow(label: String, checked: Boolean, onChecked: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().clickable { onChecked(!checked) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Text(label, modifier = Modifier.weight(1f)); androidx.compose.material3.Switch(checked, onChecked) } }
 @Composable
-private fun LabeledSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, percentage: Boolean = false, onValue: (Float) -> Unit) { Text("$label  ${if (percentage) "%.0f%%".format(value * 100) else "%.2f".format(value)}"); Slider(value, onValue, valueRange = range) }
+private fun LabeledSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, percentage: Boolean = false, steps: Int = 0, onValue: (Float) -> Unit) { Text("$label  ${if (percentage) "%.0f%%".format(value * 100) else "%.1f".format(value)}"); Slider(value, onValue, valueRange = range, steps = steps) }
 
 @Composable
 private fun AtomAppearancePreview(appearance: com.krystals.core.ViewerAppearance, modifier: Modifier = Modifier) {
@@ -813,7 +828,8 @@ private fun AtomAppearancePreview(appearance: com.krystals.core.ViewerAppearance
             val radius = size.minDimension * 0.38f
             val center = Offset(size.width / 2f, size.height / 2f)
             val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
-            val gray = Color(0xFF8E8E94).copy(alpha = opacity)
+            // Per v0.5.3: slightly lower the preview sphere's own lightness so the highlight reads.
+            val gray = Color(0xFF747479).copy(alpha = opacity)
             val azimuth = appearance.lightAzimuth / 180f * PI.toFloat()
             val elevation = appearance.lightElevation / 180f * PI.toFloat()
             val lightOffset = radius * .38f * cos(elevation)
@@ -830,6 +846,51 @@ private fun AtomAppearancePreview(appearance: com.krystals.core.ViewerAppearance
             drawCircle(Color.Black.copy(alpha = .3f * opacity), radius, center, style = androidx.compose.ui.graphics.drawscope.Stroke(1.5f))
         }
     }
+}
+
+/**
+ * Per v0.5.3: depth-cueing preview — a vertical column of sample atoms spanning the near→far range,
+ * faded by the same linear alpha fog the renderer applies. Colours stay true; only alpha drops with
+ * distance. Near (top) is full-opacity, far (bottom) is fully faded, matching [CrystalViewport]'s
+ * `dofAlpha(near..far)` ramp.
+ */
+@Composable
+private fun DepthCueingPreview(appearance: com.krystals.core.ViewerAppearance, modifier: Modifier = Modifier) {
+    Surface(modifier, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Canvas(Modifier.fillMaxSize().padding(8.dp)) {
+            val near = appearance.dofNear.coerceIn(-5f, 5f)
+            val far = appearance.dofFar.coerceIn(-5f, 5f)
+            val span = (far - near).let { if (abs(it) < 1e-3f) 1e-3f else it }
+            val samples = 5
+            val r = size.minDimension * 0.11f
+            val top = size.height * 0.14f
+            val bottom = size.height * 0.86f
+            // Sample colours across the palette so the fade is visible on varied atoms.
+            val colors = listOf(0xFFE57373L, 0xFF81C784L, 0xFF64B5F6L, 0xFFFFD54FL, 0xFFBA68C8L)
+            for (i in 0 until samples) {
+                // i=0 at the near value (top, full opacity), i=last at the far value (bottom, faded).
+                val t = if (samples == 1) 0f else i.toFloat() / (samples - 1)
+                val d = near + t * span
+                val alpha = depthCueAlpha(d, near, far)
+                val y = top + t * (bottom - top)
+                val cx = size.width / 2f
+                val base = colorFromArgb(colors[i]).copy(alpha = alpha)
+                drawCircle(base, r, Offset(cx, y))
+            }
+        }
+    }
+}
+
+/**
+ * Per v0.5.3: linear alpha fog. [d] is the signed distance in scene units (negative = near camera,
+ * positive = far, 0 = crystal centre). Returns alpha in 0..1: 1 at/below [near], ramping linearly
+ * to 0 at/above [far]. RGB is left untouched by the caller. Mirrors [CrystalViewport.dofAlpha].
+ */
+private fun depthCueAlpha(d: Float, near: Float, far: Float): Float {
+    if (far <= near) return if (d <= near) 1f else 0f
+    if (d <= near) return 1f
+    if (d >= far) return 0f
+    return 1f - (d - near) / (far - near)
 }
 
 @Composable
