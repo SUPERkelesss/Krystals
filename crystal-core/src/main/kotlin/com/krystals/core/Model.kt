@@ -268,43 +268,41 @@ object PeriodicTable {
         "Pt" to 1.30, "Au" to 1.31, "Hg" to 1.37, "Tl" to 1.52, "Pb" to 1.76, "Bi" to 1.60,
         "Th" to 1.77, "U" to 1.08, "Np" to 1.15, "Pu" to 1.04,
     )
-    // vdW radii in Å, sourced from .todos/elements.ini column 3.
+    // vdW radii in Å, sourced from .todos/atomic_radii.md (Wikipedia "Atomic radii of the elements"
+    // data page, vdW column). Elements with no tabulated vdW value (most transition metals and
+    // lanthanides; see the source table) fall back to [covalentRadius] at lookup time.
     private val vdwRadii = mapOf(
-        "H" to 1.20, "He" to 1.40, "Li" to 1.40, "Be" to 1.40, "B" to 1.40, "C" to 1.70,
-        "N" to 1.55, "O" to 1.52, "F" to 1.47, "Ne" to 1.54, "Na" to 1.54, "Mg" to 1.54,
-        "Al" to 1.54, "Si" to 2.10, "P" to 1.80, "S" to 1.80, "Cl" to 1.75, "Ar" to 1.88,
-        "K" to 1.88, "Ca" to 1.88, "Sc" to 1.88, "Ti" to 1.88, "V" to 1.88, "Cr" to 1.88,
-        "Mn" to 1.88, "Fe" to 1.88, "Co" to 1.88, "Ni" to 1.88, "Cu" to 1.88, "Zn" to 1.88,
-        "Ga" to 1.88, "Ge" to 1.88, "As" to 1.85, "Se" to 1.90, "Br" to 1.85, "Kr" to 2.02,
-        "Rb" to 2.02, "Sr" to 2.02, "Y" to 2.02, "Zr" to 2.02, "Nb" to 2.02, "Mo" to 2.02,
-        "Tc" to 2.02, "Ru" to 2.02, "Rh" to 2.02, "Pd" to 2.02, "Ag" to 2.02, "Cd" to 2.02,
-        "In" to 2.02, "Sn" to 2.02, "Sb" to 2.00, "Te" to 2.06, "I" to 1.98, "Xe" to 2.16,
-        "Cs" to 2.16, "Ba" to 2.16, "La" to 2.16, "Ce" to 2.16, "Pr" to 2.16, "Nd" to 2.16,
-        "Pm" to 2.16, "Sm" to 2.16, "Eu" to 2.16, "Gd" to 2.16, "Tb" to 2.16, "Dy" to 2.16,
-        "Ho" to 2.16, "Er" to 2.16, "Tm" to 2.16, "Yb" to 2.16, "Lu" to 2.16, "Hf" to 2.16,
-        "Ta" to 2.16, "W" to 2.16, "Re" to 2.16, "Os" to 2.16, "Ir" to 2.16, "Pt" to 2.16,
-        "Au" to 2.16, "Hg" to 2.16, "Tl" to 2.16, "Pb" to 2.16, "Bi" to 2.16, "Po" to 2.16,
-        "At" to 2.16, "Rn" to 2.16, "Fr" to 2.16, "Ra" to 2.16, "Ac" to 2.16, "Th" to 2.16,
-        "Pa" to 2.16, "U" to 2.16, "Np" to 2.16, "Pu" to 2.16, "Am" to 2.16,
+        "H" to 1.20, "He" to 1.40, "Li" to 1.82, "Be" to 1.53, "B" to 1.92, "C" to 1.70,
+        "N" to 1.55, "O" to 1.52, "F" to 1.47, "Ne" to 1.54, "Na" to 2.27, "Mg" to 1.73,
+        "Al" to 1.84, "Si" to 2.10, "P" to 1.80, "S" to 1.80, "Cl" to 1.75, "Ar" to 1.88,
+        "K" to 2.75, "Ca" to 2.31, "Sc" to 2.11, "Ni" to 1.63, "Cu" to 1.40, "Zn" to 1.39,
+        "Ga" to 1.87, "Ge" to 2.11, "As" to 1.85, "Se" to 1.90, "Br" to 1.85, "Kr" to 2.02,
+        "Rb" to 3.03, "Sr" to 2.49, "Pd" to 1.63, "Ag" to 1.72, "Cd" to 1.58, "In" to 1.93,
+        "Sn" to 2.17, "Sb" to 2.06, "Te" to 2.06, "I" to 1.98, "Xe" to 2.16, "Cs" to 3.43,
+        "Ba" to 2.68, "Pt" to 1.75, "Au" to 1.66, "Hg" to 1.55, "Tl" to 1.96, "Pb" to 2.02,
+        "Bi" to 2.07, "Po" to 1.97, "At" to 2.02, "Rn" to 2.20, "Fr" to 3.48, "Ra" to 2.83,
+        "U" to 1.86,
     )
-    // Covalent radii in Å, sourced from .todos/elements.ini column 2.
+    // Covalent (single-bond) radii in Å, sourced from .todos/atomic_radii.md (Wikipedia "Atomic
+    // radii of the elements" data page, Covalant(single bond) column). Elements with no tabulated
+    // single-bond value (Fr, Bk…Og) fall back to [covalentRadius] at lookup time.
     private val iniCovalentRadii = mapOf(
-        "H" to 0.46, "He" to 1.22, "Li" to 1.57, "Be" to 1.12, "B" to 0.81, "C" to 0.77,
-        "N" to 0.74, "O" to 0.74, "F" to 0.72, "Ne" to 1.60, "Na" to 1.91, "Mg" to 1.60,
-        "Al" to 1.43, "Si" to 1.18, "P" to 1.10, "S" to 1.04, "Cl" to 0.99, "Ar" to 1.92,
-        "K" to 2.35, "Ca" to 1.97, "Sc" to 1.64, "Ti" to 1.47, "V" to 1.35, "Cr" to 1.29,
-        "Mn" to 1.37, "Fe" to 1.26, "Co" to 1.25, "Ni" to 1.25, "Cu" to 1.28, "Zn" to 1.37,
-        "Ga" to 1.53, "Ge" to 1.22, "As" to 1.21, "Se" to 1.04, "Br" to 1.14, "Kr" to 1.98,
-        "Rb" to 2.50, "Sr" to 2.15, "Y" to 1.82, "Zr" to 1.60, "Nb" to 1.47, "Mo" to 1.40,
-        "Tc" to 1.35, "Ru" to 1.34, "Rh" to 1.34, "Pd" to 1.37, "Ag" to 1.44, "Cd" to 1.52,
-        "In" to 1.67, "Sn" to 1.58, "Sb" to 1.41, "Te" to 1.37, "I" to 1.33, "Xe" to 2.18,
-        "Cs" to 2.72, "Ba" to 2.24, "La" to 1.88, "Ce" to 1.82, "Pr" to 1.82, "Nd" to 1.82,
-        "Pm" to 1.81, "Sm" to 1.81, "Eu" to 2.06, "Gd" to 1.79, "Tb" to 1.77, "Dy" to 1.77,
-        "Ho" to 1.76, "Er" to 1.75, "Tm" to 1.00, "Yb" to 1.94, "Lu" to 1.72, "Hf" to 1.59,
-        "Ta" to 1.47, "W" to 1.41, "Re" to 1.37, "Os" to 1.35, "Ir" to 1.36, "Pt" to 1.39,
-        "Au" to 1.44, "Hg" to 1.55, "Tl" to 1.71, "Pb" to 1.75, "Bi" to 1.82, "Po" to 1.77,
-        "At" to 0.62, "Rn" to 0.80, "Fr" to 1.00, "Ra" to 2.35, "Ac" to 2.03, "Th" to 1.80,
-        "Pa" to 1.63, "U" to 1.56, "Np" to 1.56, "Pu" to 1.64, "Am" to 1.73,
+        "H" to 0.32, "He" to 0.46, "Li" to 1.33, "Be" to 1.02, "B" to 0.85, "C" to 0.75,
+        "N" to 0.71, "O" to 0.63, "F" to 0.64, "Ne" to 0.67, "Na" to 1.55, "Mg" to 1.39,
+        "Al" to 1.26, "Si" to 1.16, "P" to 1.11, "S" to 1.03, "Cl" to 0.99, "Ar" to 0.96,
+        "K" to 1.96, "Ca" to 1.71, "Sc" to 1.48, "Ti" to 1.36, "V" to 1.34, "Cr" to 1.22,
+        "Mn" to 1.19, "Fe" to 1.16, "Co" to 1.11, "Ni" to 1.10, "Cu" to 1.12, "Zn" to 1.18,
+        "Ga" to 1.24, "Ge" to 1.21, "As" to 1.21, "Se" to 1.16, "Br" to 1.14, "Kr" to 1.17,
+        "Rb" to 2.10, "Sr" to 1.85, "Y" to 1.63, "Zr" to 1.54, "Nb" to 1.47, "Mo" to 1.38,
+        "Tc" to 1.28, "Ru" to 1.25, "Rh" to 1.25, "Pd" to 1.20, "Ag" to 1.28, "Cd" to 1.36,
+        "In" to 1.42, "Sn" to 1.40, "Sb" to 1.40, "Te" to 1.36, "I" to 1.33, "Xe" to 1.31,
+        "Cs" to 2.32, "Ba" to 1.96, "La" to 1.80, "Ce" to 1.63, "Pr" to 1.76, "Nd" to 1.74,
+        "Pm" to 1.73, "Sm" to 1.72, "Eu" to 1.68, "Gd" to 1.69, "Tb" to 1.68, "Dy" to 1.67,
+        "Ho" to 1.66, "Er" to 1.65, "Tm" to 1.64, "Yb" to 1.70, "Lu" to 1.62, "Hf" to 1.52,
+        "Ta" to 1.46, "W" to 1.37, "Re" to 1.31, "Os" to 1.29, "Ir" to 1.22, "Pt" to 1.23,
+        "Au" to 1.24, "Hg" to 1.33, "Tl" to 1.44, "Pb" to 1.44, "Bi" to 1.51, "Po" to 1.45,
+        "At" to 1.47, "Rn" to 1.42, "Ra" to 2.01, "Ac" to 1.86, "Th" to 1.75, "Pa" to 1.69,
+        "U" to 1.70, "Np" to 1.71, "Pu" to 1.72, "Am" to 1.66, "Cm" to 1.66,
     )
 
     /** Radius for bond-rule generation under [source]; falls back to [covalentRadius] when the
