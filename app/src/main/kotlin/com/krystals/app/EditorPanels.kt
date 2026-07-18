@@ -437,7 +437,6 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     val confirmMessage = localized("当前晶胞原子数过多，计算时间可能较长。确认自动计算化学键规则吗？", "This cell has many atoms; computation may take a while. Recompute bond rules anyway?")
     val computingMessage = localized("计算中...", "Computing...")
     val epsilonHint = localized("max = rA + rB + ε，建议在 0.35–0.45 之间", "max = rA + rB + ε, suggested 0.35–0.45")
-    val epsilonLabel = localized("成键阈值 ε (Å)", "Bond threshold ε (Å)")
     val rules = tab.structure.bondRules
     // Per v0.2.3: hide rules that produce no bond in the current structure (no atom pair within
     // the distance window), not just rules whose sites are gone.
@@ -490,14 +489,37 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
                 }
             }
         }
-        // Per v0.5.0: bond-threshold ε slider. Adjusting it re-runs the last-used source so the
-        // scene re-renders immediately; the 100-atom confirm does not re-prompt on ε changes.
-        DistanceControl(epsilonLabel, tab.bondEpsilon.toFloat(), 0f..0.5f) {
-            tab.bondEpsilon = it.toDouble()
-            rebuildAsync(tab.lastRadiusSource, tab.bondEpsilon, skipConfirm = true)
+        // Per v0.5.0: bond-threshold ε — slider and two-decimal input side by side. Adjusting it
+        // re-runs the last-used source so the scene re-renders immediately; the 100-atom confirm
+        // does not re-prompt on ε changes.
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            var epsilonText by remember(tab.bondEpsilon) { mutableStateOf("%.2f".format(tab.bondEpsilon)) }
+            OutlinedTextField(
+                value = epsilonText,
+                onValueChange = { input ->
+                    epsilonText = input
+                    input.toFloatOrNull()?.let { v ->
+                        val clamped = v.coerceIn(0.0f, 0.5f)
+                        if (clamped.toDouble() != tab.bondEpsilon) {
+                            tab.bondEpsilon = clamped.toDouble()
+                            rebuildAsync(tab.lastRadiusSource, tab.bondEpsilon, skipConfirm = true)
+                        }
+                    }
+                },
+                singleLine = true,
+                modifier = Modifier.width(88.dp),
+            )
+            Slider(
+                value = tab.bondEpsilon.toFloat(),
+                onValueChange = { v ->
+                    tab.bondEpsilon = v.toDouble()
+                    rebuildAsync(tab.lastRadiusSource, tab.bondEpsilon, skipConfirm = true)
+                },
+                valueRange = 0f..0.5f,
+                modifier = Modifier.weight(1f),
+            )
         }
         Text(epsilonHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(localized("选择两个原子并设置最小/最大距离", "Select two atoms and set the min/max distance"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
         LazyColumn(Modifier.fillMaxSize()) {
             items(visibleRules, key = { it.key }) { rule ->
                 val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
