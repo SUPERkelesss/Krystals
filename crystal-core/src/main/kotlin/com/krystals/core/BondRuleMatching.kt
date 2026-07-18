@@ -37,11 +37,23 @@ object BondRuleMatching {
             }
             return best
         }
-        // Same-site rule (siteA == siteB): any two distinct atoms of that site.
+        // Same-site rule (siteA == siteB): any two distinct atoms of that site, OR an atom bonded to
+        // its own periodic image (the common case when the ASU has only one atom of that site, e.g.
+        // Cs in CsCl — the Cs-Cs bond is Cs@origin to its own lattice image at distance |a|/|b|/|c|).
+        // inferPrimaryShellBonds allows same-site periodic-image pairs when an explicit rule exists,
+        // so hasMatchingBond must agree or the rule gets hidden from the editor/display lists.
         if (rule.siteA == rule.siteB) {
             for (i in a.indices) for (j in i + 1 until a.size) {
                 val d = minImage(a[i].cartesian, a[j].cartesian)
                 if (d > 0.0 && d >= rule.minAngstrom && d <= rule.maxAngstrom) return true
+            }
+            // Atom-to-own-image: distance to each non-zero lattice translation.
+            for (x in a) {
+                for (off in offsets) {
+                    if (off.lengthSquared() < 1e-18) continue
+                    val d = distance(x.cartesian, x.cartesian + off)
+                    if (d >= rule.minAngstrom && d <= rule.maxAngstrom) return true
+                }
             }
             return false
         }
