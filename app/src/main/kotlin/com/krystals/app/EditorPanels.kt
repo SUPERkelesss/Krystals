@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Dialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -74,7 +75,9 @@ import com.krystals.core.BondColorMode
 import com.krystals.core.BondRule
 import com.krystals.core.BondRuleMatching
 import com.krystals.core.BondRuleSource
+import com.krystals.core.BondValence
 import com.krystals.core.CrystalEditor
+import com.krystals.core.CrystalEngine
 import com.krystals.core.CrystalStructure
 import com.krystals.core.EditCommand
 import com.krystals.core.Expansion
@@ -90,6 +93,13 @@ import kotlin.math.max
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.Color as UiColor
+import kotlin.coroutines.CoroutineContext
 
 private enum class EditorTab { BASIC, ATOMS, BONDS, EXPANSION }
 
@@ -417,13 +427,42 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     var addOpen by remember { mutableStateOf(false) }
     var editingRule by remember { mutableStateOf<BondRule?>(null) }
     var radiiMenuOpen by remember { mutableStateOf(false) }
-    // Per v0.5.0: smart-ionic unavailable warning. localized() is @Composable, so resolve it here
-    // in the composable body and reuse it inside the non-composable onClick lambda below.
+    var loading by remember { mutableStateOf(false) }
+    var confirmSmartIonic by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    // Per v0.5.0: smart-ionic unavailable warning + ε hint. localized() is @Composable, so resolve
+    // them here in the composable body and reuse inside non-composable lambdas below.
     val unavailableMessage = localized("智能离子规则在该晶体下不可用", "Smart ionic rules are unavailable for this crystal")
+    val confirmTitle = localized("确认计算", "Confirm")
+    val confirmMessage = localized("当前晶胞原子数过多，计算时间可能较长。确认自动计算化学键规则吗？", "This cell has many atoms; computation may take a while. Recompute bond rules anyway?")
+    val computingMessage = localized("计算中...", "Computing...")
+    val epsilonHint = localized("max = rA + rB + ε，建议在 0.35–0.45 之间", "max = rA + rB + ε, suggested 0.35–0.45")
+    val epsilonLabel = localized("成键阈值 ε (Å)", "Bond threshold ε (Å)")
     val rules = tab.structure.bondRules
     // Per v0.2.3: hide rules that produce no bond in the current structure (no atom pair within
     // the distance window), not just rules whose sites are gone.
     val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
+
+    // Rebuild rules off the UI thread, showing a "computing" dialog while it runs.
+    fun rebuildAsync(source: RadiusSource, epsilon: Double, skipConfirm: Boolean) {
+        // Per v0.5.0: large cells prompted to confirm before a manual smart-ionic rebuild.
+        if (source == RadiusSource.SMART_IONIC && !skipConfirm &&
+            CrystalEngine.expandAsymmetricUnit(tab.structure).size > BondValence.SMART_IONIC_ATOM_LIMIT) {
+            confirmSmartIonic = true
+            return
+        }
+        loading = true
+        scope.launch(Dispatchers.Default) {
+            val result = CrystalEditor.rebuildBondRules(tab.structure, source, epsilon)
+            withContext(Dispatchers.Main) {
+                loading = false
+                tab.lastRadiusSource = source
+                if (CrystalEditor.SMART_IONIC_UNAVAILABLE in result.warnings) onMessage(unavailableMessage)
+                onStructure(result.structure)
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         // Per v0.5.0: "自动应用半径" (auto-apply radii) clears every bond rule and regenerates them
         // from one of three radius sources (smart-ionic default / bonding / vdW).
@@ -436,27 +475,28 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
                 DropdownMenu(expanded = radiiMenuOpen, onDismissRequest = { radiiMenuOpen = false }) {
                     DropdownMenuItem(text = { Text(localized("智能离子", "Smart ionic")) }, onClick = {
                         radiiMenuOpen = false
-                        val result = CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.SMART_IONIC)
-                        // Per v0.5.0: when smart ionic can't analyse the structure the UI warns the user.
-                        // localized() is @Composable, so resolve the string before the onClick lambda runs.
-                        if (CrystalEditor.SMART_IONIC_UNAVAILABLE in result.warnings) {
-                            onMessage(unavailableMessage)
-                        }
-                        onStructure(result.structure)
+                        rebuildAsync(RadiusSource.SMART_IONIC, tab.bondEpsilon, skipConfirm = false)
                     })
                     DropdownMenuItem(text = { Text(localized("键合半径", "Bonding radius")) }, onClick = {
                         radiiMenuOpen = false
-                        onStructure(CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.BONDING).structure)
+                        rebuildAsync(RadiusSource.BONDING, tab.bondEpsilon, skipConfirm = true)
                     })
                     DropdownMenuItem(text = { Text(localized("vdW 半径", "vdW radius")) }, onClick = {
                         radiiMenuOpen = false
-                        onStructure(CrystalEditor.rebuildBondRules(tab.structure, RadiusSource.VDW).structure)
+                        rebuildAsync(RadiusSource.VDW, tab.bondEpsilon, skipConfirm = true)
                     })
                     HorizontalDivider()
                     DropdownMenuItem(text = { Text(localized("取消", "Cancel")) }, onClick = { radiiMenuOpen = false })
                 }
             }
         }
+        // Per v0.5.0: bond-threshold ε slider. Adjusting it re-runs the last-used source so the
+        // scene re-renders immediately; the 100-atom confirm does not re-prompt on ε changes.
+        DistanceControl(epsilonLabel, tab.bondEpsilon.toFloat(), 0f..0.5f) {
+            tab.bondEpsilon = it.toDouble()
+            rebuildAsync(tab.lastRadiusSource, tab.bondEpsilon, skipConfirm = true)
+        }
+        Text(epsilonHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(localized("选择两个原子并设置最小/最大距离", "Select two atoms and set the min/max distance"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
         LazyColumn(Modifier.fillMaxSize()) {
             items(visibleRules, key = { it.key }) { rule ->
@@ -475,6 +515,28 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
                 HorizontalDivider()
             }
         }
+    }
+    if (loading) {
+        Dialog(onDismissRequest = {}) {
+            Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
+                Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    CircularProgressIndicator()
+                    Text(computingMessage)
+                }
+            }
+        }
+    }
+    if (confirmSmartIonic) {
+        AlertDialog(
+            onDismissRequest = { confirmSmartIonic = false },
+            title = { Text(confirmTitle) },
+            text = { Text(confirmMessage) },
+            confirmButton = { TextButton(onClick = {
+                confirmSmartIonic = false
+                rebuildAsync(RadiusSource.SMART_IONIC, tab.bondEpsilon, skipConfirm = true)
+            }) { Text(stringResource(R.string.confirm)) } },
+            dismissButton = { TextButton(onClick = { confirmSmartIonic = false }) { Text(stringResource(R.string.cancel)) } },
+        )
     }
     if (addOpen) BondRuleDialog(sites, editingRule = null, onDismiss = { addOpen = false }) { siteA, siteB, min, max, extend ->
         runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extend))).structure }

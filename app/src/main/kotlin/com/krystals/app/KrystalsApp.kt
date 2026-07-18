@@ -128,6 +128,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.krystals.app.ui.KrystalsTheme
 import com.krystals.app.ui.ThemeMode
 import com.krystals.core.CifCodec
+import com.krystals.core.BondValence
 import com.krystals.core.CrystalEditor
 import com.krystals.core.BondRuleMatching
 import com.krystals.core.CrystalEngine
@@ -540,6 +541,9 @@ private fun ViewerScreen(
     val offChoice = localized("关闭", "Off")
     val controller = rememberViewerController()
     val sceneResult = remember(tab.structure, tab.expansion) { runCatching { CrystalEngine.buildScene(tab.structure, tab.expansion) } }
+    // Per v0.5.0: per-site bond-valence sums for the atom-info window (s = X.XX). Recomputed when
+    // the structure changes; cheap relative to scene build.
+    val bondValenceBySite = remember(tab.structure, tab.bondEpsilon) { BondValence.bondValenceSums(tab.structure, tab.bondEpsilon) }
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
@@ -554,7 +558,7 @@ private fun ViewerScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
                     menuOpen = false
                     sceneResult.getOrNull()?.let { snapshot ->
-                        onExport(CrystalImageExporter.render(snapshot, tab.appearance, controller, tab.visibility, tab.selectedAtomIds, tab.measurementMode, tab.inspectedAtomId, tab.lockedMeasurements, tab.lockedInspectedAtomIds))
+                        onExport(CrystalImageExporter.render(snapshot, tab.appearance, controller, tab.visibility, tab.selectedAtomIds, tab.measurementMode, tab.inspectedAtomId, tab.lockedMeasurements, tab.lockedInspectedAtomIds, bondValenceBySite))
                     } ?: onMessage("Unable to export current crystal")
                 })
                 HorizontalDivider()
@@ -599,6 +603,7 @@ private fun ViewerScreen(
                     },
                     inspectedAtomId = tab.inspectedAtomId,
                     lockedInspectedAtomIds = tab.lockedInspectedAtomIds,
+                    bondValenceBySite = bondValenceBySite,
                     onInspectAtom = { atom ->
                         // Per v0.2.4: double-tap opens an unlocked info window for the atom. Any
                         // already-locked windows are preserved; the active window is replaceable.
