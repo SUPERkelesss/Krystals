@@ -86,11 +86,11 @@ object BondValence {
     }
 
     /**
-     * Resolve a Shannon crystal radius for [site]: pick the anion partner among its neighbours,
-     * estimate the cation valence by minimising |BVS(V) − V| over the tabulated candidate valences,
-     * then look up the radius at the site's coordination number. Returns null if the site has no
-     * analysable cation–anion bonds (e.g. an anion site itself, a pure covalent partner, or missing
-     * bvparm/Shannon data).
+     * Resolve a Shannon crystal radius for [site] at its coordination number. Anion sites (elements
+     * with a fixed anion valence — O, S, F, Cl, …) are looked up directly at that valence; cation
+     * sites estimate their valence by minimising |BVS(V) − V| against the most-electronegative anion
+     * neighbour. Returns null when the site has no analysable bonds or no Shannon entry (the caller
+     * then falls back to the bonding radius for that site).
      */
     private fun resolveSiteRadius(
         site: AtomSite,
@@ -101,6 +101,15 @@ object BondValence {
         // Gather this site's expanded atoms and their bond distances to *other-element* partners.
         val siteAtoms = atoms.filter { it.siteId == site.id }
         if (siteAtoms.isEmpty()) return null
+
+        // Coordination number: average CN across the site's expanded atoms (symmetry-equivalent).
+        val cn = siteAtoms.mapNotNull { cnByAtom[it.id] }.ifEmpty { return null }.average().toInt().coerceAtLeast(1)
+
+        // Anion site (O/S/F/Cl/…): look up its Shannon radius at the fixed anion valence directly.
+        val fixedAnionV = PeriodicTable.anionValence(site.element)
+        if (fixedAnionV != null) {
+            return PeriodicTable.shannonCrystalRadius(site.element, fixedAnionV, cn)
+        }
 
         // Bond distances from this site to each neighbouring element.
         val distByElement = HashMap<String, MutableList<Double>>()
@@ -140,8 +149,6 @@ object BondValence {
             if (err < bestErr) { bestErr = err; bestV = v }
         }
 
-        // Coordination number: average CN across the site's expanded atoms (symmetry-equivalent).
-        val cn = siteAtoms.mapNotNull { cnByAtom[it.id] }.ifEmpty { return null }.average().toInt().coerceAtLeast(1)
         return PeriodicTable.shannonCrystalRadius(site.element, bestV, cn)
     }
 }
