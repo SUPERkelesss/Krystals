@@ -450,7 +450,29 @@ private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearanc
         center = atom.point,
         radius = atom.radius,
     )
-    drawCircle(sphere, atom.radius, atom.point)
+    // Per v0.5.2b: partial-occupancy atoms render as a pie chart — the occ fraction is drawn solid,
+    // the remainder at low alpha, both as screen-space wedges starting at the top (12 o'clock) going
+    // clockwise. occ==1 keeps the fast full-circle path. The radial gradient's centre is the atom's
+    // absolute screen point, so it spans both wedges seamlessly.
+    val occ = atom.atom.occupancy.coerceIn(0.0, 1.0)
+    if (occ >= 0.999) {
+        drawCircle(sphere, atom.radius, atom.point)
+    } else {
+        val r = atom.radius
+        val rect = Rect(atom.point.x - r, atom.point.y - r, atom.point.x + r, atom.point.y + r)
+        val occSweep = (occ * 360.0).toFloat()
+        fun wedgePath(start: Float, sweep: Float) = Path().apply {
+            moveTo(atom.point.x, atom.point.y)
+            arcTo(rect, start, sweep, false)
+            close()
+        }
+        drawPath(wedgePath(-90f, occSweep), sphere)
+        val faded = Brush.radialGradient(
+            listOf(base.copy(alpha = opacity * 0.15f), base.darken(0.65f).copy(alpha = opacity * 0.15f)),
+            center = atom.point, radius = r,
+        )
+        drawPath(wedgePath(-90f + occSweep, 360f - occSweep), faded)
+    }
     if (appearance.reflectionEnabled) {
         val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
         val offset = atom.radius * 0.38f * light.z.toFloat()
@@ -463,7 +485,21 @@ private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearanc
             center = highlightCenter,
             radius = atom.radius * (0.35f + 0.75f * appearance.diffusion),
         )
-        drawCircle(highlight, atom.radius, atom.point)
+        // Highlight only on the solid wedge for partial-occ atoms (looks natural; the faded wedge
+        // stays matte). Full-occ atoms keep the full-circle highlight.
+        if (occ >= 0.999) {
+            drawCircle(highlight, atom.radius, atom.point)
+        } else {
+            val r = atom.radius
+            val rect = Rect(atom.point.x - r, atom.point.y - r, atom.point.x + r, atom.point.y + r)
+            val occSweep = (occ * 360.0).toFloat()
+            val solidWedge = Path().apply {
+                moveTo(atom.point.x, atom.point.y)
+                arcTo(rect, -90f, occSweep, false)
+                close()
+            }
+            drawPath(solidWedge, highlight)
+        }
     }
     drawCircle(Color.Black.copy(alpha = 0.28f * opacity), atom.radius, atom.point, style = Stroke(max(0.8f, atom.radius * 0.045f)))
     if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))

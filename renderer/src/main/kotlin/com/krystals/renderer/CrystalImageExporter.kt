@@ -5,9 +5,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PointF
 import android.graphics.RadialGradient
 import android.graphics.LinearGradient
+import android.graphics.RectF
 import android.graphics.Shader
 import com.krystals.core.AxisMode
 import com.krystals.core.BondColorMode
@@ -262,7 +264,27 @@ object CrystalImageExporter {
                 Shader.TileMode.CLAMP,
             )
         }
-        canvas.drawCircle(point.x, point.y, point.radius, paint)
+        // Per v0.5.2b: partial-occupancy atoms render as a pie chart — occ fraction solid, the rest
+        // at low alpha, as screen-space wedges from the top (12 o'clock) clockwise. The RadialGradient
+        // centre is the atom's absolute point, so it spans both wedges seamlessly.
+        val occ = point.occupancy.coerceIn(0.0, 1.0)
+        if (occ >= 0.999) {
+            canvas.drawCircle(point.x, point.y, point.radius, paint)
+        } else {
+            val r = point.radius
+            val rect = RectF(point.x - r, point.y - r, point.x + r, point.y + r)
+            val occSweep = (occ * 360.0).toFloat()
+            fun wedge(start: Float, sweep: Float) = Path().apply {
+                moveTo(point.x, point.y)
+                arcTo(rect, start, sweep, false)
+                lineTo(point.x, point.y)
+                close()
+            }
+            canvas.drawPath(wedge(-90f, occSweep), paint)
+            paint.alpha = ((opacity * 0.15f) * 255).toInt().coerceIn(0, 255)
+            canvas.drawPath(wedge(-90f + occSweep, 360f - occSweep), paint)
+            paint.alpha = (opacity * 255).toInt()
+        }
         if (appearance.reflectionEnabled) {
             val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
             val offset = point.radius * .38f * light.z.toFloat()
@@ -276,7 +298,21 @@ object CrystalImageExporter {
                 null,
                 Shader.TileMode.CLAMP,
             )
-            canvas.drawCircle(point.x, point.y, point.radius, paint)
+            // Highlight only on the solid wedge for partial-occ atoms; full circle otherwise.
+            if (occ >= 0.999) {
+                canvas.drawCircle(point.x, point.y, point.radius, paint)
+            } else {
+                val r = point.radius
+                val rect = RectF(point.x - r, point.y - r, point.x + r, point.y + r)
+                val occSweep = (occ * 360.0).toFloat()
+                val solidWedge = Path().apply {
+                    moveTo(point.x, point.y)
+                    arcTo(rect, -90f, occSweep, false)
+                    lineTo(point.x, point.y)
+                    close()
+                }
+                canvas.drawPath(solidWedge, paint)
+            }
         }
         paint.shader = null; paint.style = Paint.Style.STROKE; paint.strokeWidth = if (point.atomId in selectedAtomIds) 4f else 1f
         paint.color = if (point.atomId in selectedAtomIds) 0xFF9966CC.toInt() else 0x55000000
