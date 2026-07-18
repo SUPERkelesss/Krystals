@@ -71,9 +71,41 @@ class KrystalsViewModel : ViewModel() {
             it.appearance = defaultAppearance
             // Per v0.2: when opening a CIF that already carries bond rules (e.g. other software's settings),
             // import them verbatim and do not synthesize additional rules.
-            if (it.structure.bondRules.isEmpty()) it.structure = CrystalEditor.ensureAutoBondRules(it.structure).structure
+            // Per v0.5.0: bond-rule synthesis (smart-ionic) can be heavy, so it is NOT done here.
+            // Callers that need rules on a freshly opened tab should run addAsync / applyAutoBondRules.
         }
         selectedIndex = tabs.lastIndex
+    }
+
+    /**
+     * Per v0.5.0: open a parsed structure and, if it carries no bond rules, synthesize them off the
+     * UI thread via [onCompute] (which returns the structure with rules). The caller supplies the
+     * suspend compute so the UI can show a "computing" overlay around it. Returns once the tab is
+     * added (rules applied if needed).
+     */
+    suspend fun addAsync(
+        parsed: ParsedStructure,
+        name: String,
+        uri: Uri?,
+        isNew: Boolean = false,
+        onCompute: suspend (CrystalStructure) -> CrystalStructure,
+    ) {
+        val existing = uri?.let { target -> tabs.indexOfFirst { it.uri == target } } ?: -1
+        if (existing >= 0) { selectedIndex = existing; return }
+        val needsRules = parsed.structure.bondRules.isEmpty()
+        val structure = if (needsRules) onCompute(parsed.structure) else parsed.structure
+        tabs += DocumentTab(parsed = parsed, structure = structure, name = name, uri = uri, isNew = isNew).also {
+            it.appearance = defaultAppearance
+        }
+        selectedIndex = tabs.lastIndex
+    }
+
+    /** Per v0.5.0: synthesize bond rules for an already-added tab off the UI thread. */
+    suspend fun applyAutoBondRules(tab: DocumentTab, onCompute: suspend (CrystalStructure) -> CrystalStructure) {
+        if (tab.structure.bondRules.isNotEmpty()) return
+        val structure = onCompute(tab.structure)
+        tab.structure = structure
+        tab.dirty = true
     }
 
     fun createNew() {

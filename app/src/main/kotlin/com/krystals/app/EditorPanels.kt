@@ -108,6 +108,7 @@ fun EditorPanel(
     onDismiss: () -> Unit,
     onStructure: (CrystalStructure) -> Unit,
     onMessage: (String) -> Unit,
+    onRunBondComputation: ((() -> CrystalStructure?) -> Unit)? = null,
 ) {
     var selectedTab by remember { mutableStateOf(if (tab.editingSiteId != null) EditorTab.ATOMS else EditorTab.BASIC) }
     // Per v0.2.3: resizable panel (mirrors DisplayPanel).
@@ -165,10 +166,10 @@ fun EditorPanel(
                         Spacer(Modifier.weight(1f)); IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null) }
                     }
                     when (selectedTab) {
-                        EditorTab.BASIC -> BasicEditor(tab, onStructure, onMessage)
-                        EditorTab.ATOMS -> AtomEditor(tab, onDismiss, onStructure, onMessage)
+                        EditorTab.BASIC -> BasicEditor(tab, onStructure, onMessage, onRunBondComputation)
+                        EditorTab.ATOMS -> AtomEditor(tab, onDismiss, onStructure, onMessage, onRunBondComputation)
                         EditorTab.BONDS -> BondEditor(tab, onStructure, onMessage)
-                        EditorTab.EXPANSION -> ExpansionEditor(tab, onMessage)
+                        EditorTab.EXPANSION -> ExpansionEditor(tab, onMessage, onRunBondComputation)
                     }
                 }
             }
@@ -188,7 +189,7 @@ fun EditorPanel(
 }
 
 @Composable
-private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit) {
+private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((() -> CrystalStructure?) -> Unit)? = null) {
     val currentGroup = SpaceGroupCatalog.find(tab.structure.spaceGroupName) ?: SpaceGroupCatalog.all.first()
     var system by remember(tab.structure.spaceGroupName) { mutableStateOf(currentGroup.crystalSystem) }
     var pointGroup by remember(tab.structure.spaceGroupName) { mutableStateOf(currentGroup.pointGroup) }
@@ -258,7 +259,11 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Uni
             val toRhom = tab.structure.cell.gamma > 100.0
             OutlinedButton(onClick = {
                 runCatching { CrystalEditor.convertHexRhom(tab.structure, toRhom).structure }
-                    .onSuccess(onStructure).onFailure { onMessage(it.message ?: "Conversion failed") }
+                    .onSuccess { converted ->
+                        if (onRunBondComputation != null) onRunBondComputation { CrystalEditor.ensureAutoBondRules(converted).structure }
+                        else onStructure(CrystalEditor.ensureAutoBondRules(converted).structure)
+                    }
+                    .onFailure { onMessage(it.message ?: "Conversion failed") }
             }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 Text(localized("六方/菱方晶胞转换", "Hex/Rhombohedral conversion"))
             }
@@ -267,8 +272,12 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Uni
     }
     if (transformOpen) TransformDialog(onDismiss = { transformOpen = false }) { rows, translation ->
         runCatching { CrystalEditor.apply(tab.structure, EditCommand.Transform(rows, translation)).structure }
-            .mapCatching { CrystalEditor.ensureAutoBondRules(it).structure }
-            .onSuccess { onStructure(it); transformOpen = false }.onFailure { onMessage(it.message ?: "Invalid transformation") }
+            .onSuccess { transformed ->
+                if (onRunBondComputation != null) onRunBondComputation { CrystalEditor.ensureAutoBondRules(transformed).structure }
+                else onStructure(CrystalEditor.ensureAutoBondRules(transformed).structure)
+                transformOpen = false
+            }
+            .onFailure { onMessage(it.message ?: "Invalid transformation") }
     }
 }
 
@@ -278,7 +287,7 @@ private fun CellField(label: String, value: String, onValue: (String) -> Unit, e
 }
 
 @Composable
-private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit) {
+private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((() -> CrystalStructure?) -> Unit)? = null) {
     var atomDialog by remember { mutableStateOf<AtomSite?>(null) }
     var newElement by remember { mutableStateOf<String?>(null) }
     var periodicOpen by remember { mutableStateOf(false) }
@@ -295,7 +304,13 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Cr
                 Row(Modifier.fillMaxWidth().clickable { atomDialog = site }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(20.dp).background(colorFromArgb(PeriodicTable.resolveArgb(site.element, tab.structure.elementArgbOverrides)), CircleShape))
                     Text("${site.label}  ${site.element}   (${fmt(site.fractional.x)}, ${fmt(site.fractional.y)}, ${fmt(site.fractional.z)})", modifier = Modifier.weight(1f).padding(start = 10.dp))
-                    IconButton(onClick = { onStructure(CrystalEditor.apply(tab.structure, EditCommand.DeleteAtom(site.id)).structure) }) { Icon(Icons.Default.Delete, null) }
+                    IconButton(onClick = {
+                        val deleted = runCatching { CrystalEditor.apply(tab.structure, EditCommand.DeleteAtom(site.id)).structure }
+                            .onFailure { onMessage(it.message ?: "Delete failed") }.getOrNull() ?: return@IconButton
+                        // Per v0.5.0: deleting an atom changes bond partners → recompute rules with overlay.
+                        if (onRunBondComputation != null) onRunBondComputation { CrystalEditor.ensureAutoBondRules(deleted).structure }
+                        else onStructure(CrystalEditor.ensureAutoBondRules(deleted).structure)
+                    }) { Icon(Icons.Default.Delete, null) }
                 }
             }
         }
@@ -303,7 +318,14 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Cr
     if (periodicOpen) PeriodicTableDialog(onDismiss = { periodicOpen = false }) { element -> periodicOpen = false; newElement = element }
     newElement?.let { element -> AtomDialog(null, element, onDismiss = { newElement = null }) { label, chosen, frac, occupancy ->
         runCatching { CrystalEditor.apply(tab.structure, EditCommand.AddAtom(chosen, label, frac, occupancy)) }
-            .onSuccess { onStructure(it.structure); it.warnings.forEach(onMessage); newElement = null }.onFailure { onMessage(it.message ?: "Invalid atom") }
+            .onSuccess {
+                // Per v0.5.0: AddAtom already synthesizes rules inside the editor; recompute on a
+                // background thread with the overlay when available, else apply synchronously.
+                if (onRunBondComputation != null) {
+                    onRunBondComputation { CrystalEditor.ensureAutoBondRules(it.structure).structure }
+                } else onStructure(CrystalEditor.ensureAutoBondRules(it.structure).structure)
+                it.warnings.forEach(onMessage); newElement = null
+            }.onFailure { onMessage(it.message ?: "Invalid atom") }
     } }
     atomDialog?.let { site -> AtomDialog(site, site.element, onDismiss = { atomDialog = null }) { label, chosen, frac, occupancy ->
         runCatching { CrystalEditor.apply(tab.structure, EditCommand.UpdateAtom(site.id, chosen, label, frac, occupancy)) }
@@ -629,7 +651,7 @@ private fun DistanceControl(label: String, value: Float, range: ClosedFloatingPo
 }
 
 @Composable
-private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit) {
+private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRunBondComputation: ((() -> CrystalStructure?) -> Unit)? = null) {
     var x by remember(tab.expansion) { mutableStateOf(tab.expansion.x) }
     var y by remember(tab.expansion) { mutableStateOf(tab.expansion.y) }
     var z by remember(tab.expansion) { mutableStateOf(tab.expansion.z) }

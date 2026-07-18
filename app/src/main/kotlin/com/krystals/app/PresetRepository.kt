@@ -51,10 +51,9 @@ object PresetRepository {
         }
         val parsed = CifCodec.parseStructure(text)
         // Per v0.2: only synthesize bond rules when the CIF has none of its own.
-        val withRules = if (parsed.structure.bondRules.isEmpty()) {
-            parsed.copy(structure = CrystalEditor.ensureAutoBondRules(parsed.structure).structure)
-        } else parsed
-        return withRules
+        // Per v0.5.0: rule synthesis (smart-ionic) is deferred to the caller's async path so the UI
+        // can show a "computing" overlay — return the parsed structure as-is here.
+        return parsed
     }
 
     fun saveToPreset(context: Context, parsed: ParsedStructure, structure: CrystalStructure, name: String): File {
