@@ -2013,7 +2013,6 @@ object PeriodicTable {
         "O" to -2, "S" to -2, "Se" to -2, "Te" to -2,
         "F" to -1, "Cl" to -1, "Br" to -1, "I" to -1,
         "N" to -3, "P" to -3, "As" to -3,
-        "H" to -1, "C" to -4,
     )
 
     /** Fixed anion valence for [element], or null if the element is not treated as a simple anion. */
