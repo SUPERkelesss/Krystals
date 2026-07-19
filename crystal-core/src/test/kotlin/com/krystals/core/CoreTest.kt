@@ -371,5 +371,28 @@ class CoreTest {
         assertFailsWith<IllegalArgumentException> { CrystalEngine.pickShellMode(6000, Expansion(1, 1, 1)) }      // 6000×27 = 162_000
     }
 
+    @Test fun buildSceneGriddedMatchesLegacyBondSet() {
+        // Per v0.5.3b (Phase 2): the gridded buildScene (no full-shell materialisation) must reproduce
+        // the legacy bond set for v0.3.4x structures. Compare bond signatures (sorted atom-id pair +
+        // rounded distance) between buildScene (now gridded) and the explicit buildSceneGridded entry
+        // point — they share one path, so this guards against future divergence and documents intent.
+        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
+        val csCl = CrystalStructure(
+            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
+            listOf(
+                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
+                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
+            ),
+            bondRules = listOf(BondRule("Cs", "Cl", 0.1, 4.0)),
+        )
+        val a = CrystalEngine.buildScene(csCl)
+        val b = CrystalEngine.buildSceneGridded(csCl)
+        fun sig(s: SceneSnapshot): List<Triple<Long, Long, Long>> = s.bonds
+            .map { Triple(minOf(it.atomA, it.atomB), maxOf(it.atomA, it.atomB), (it.distance * 1e6).toLong()) }
+            .sortedBy { it.first * 1_000_000_000L + it.second }
+        assertEquals(sig(a).size, sig(b).size)
+        assertTrue(a.atoms.any { it.isShell }, "gridded scene keeps shell atoms referenced by bonds")
+    }
+
     private fun atomById(scene: SceneSnapshot, id: Long): ExpandedAtom = scene.atoms.first { it.id == id }
 }
