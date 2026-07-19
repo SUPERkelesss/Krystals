@@ -2,6 +2,7 @@ package com.krystals.core
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class CoreTest {
@@ -352,6 +353,22 @@ class CoreTest {
             bondRules = listOf(BondRule("Cs", "Cs", 0.1, 5.09)),
         )
         assertTrue(BondRuleMatching.hasMatchingBond(structure.bondRules.single { it.siteA == "Cs" && it.siteB == "Cs" }, structure))
+    }
+
+    @Test fun estimatePeakAtomCountMatchesShellMaterialisation() {
+        // Per v0.5.3b: a 1×1×1 cell materialises 5×5×5 cells (primary + 2-cell shell); 2×2×2 → 6×6×6.
+        assertEquals(1250L, CrystalEngine.estimatePeakAtomCount(10, Expansion(1, 1, 1)))
+        assertEquals(2160L, CrystalEngine.estimatePeakAtomCount(10, Expansion(2, 2, 2)))
+        assertEquals(0L, CrystalEngine.estimatePeakAtomCount(0, Expansion(1, 1, 1)))
+    }
+
+    @Test fun pickShellModeDegradesForLargeCells() {
+        // FULL at/below the degrade threshold; ONE_CELL above it (but under the hard limit); throws
+        // past the hard limit.
+        assertEquals(CrystalEngine.ShellMode.FULL, CrystalEngine.pickShellMode(480, Expansion(1, 1, 1)))   // 480×125 = 60_000
+        assertEquals(CrystalEngine.ShellMode.ONE_CELL, CrystalEngine.pickShellMode(481, Expansion(1, 1, 1)))
+        assertEquals(CrystalEngine.ShellMode.ONE_CELL, CrystalEngine.pickShellMode(1000, Expansion(1, 1, 1))) // 1000×27 = 27_000
+        assertFailsWith<IllegalArgumentException> { CrystalEngine.pickShellMode(6000, Expansion(1, 1, 1)) }      // 6000×27 = 162_000
     }
 
     private fun atomById(scene: SceneSnapshot, id: Long): ExpandedAtom = scene.atoms.first { it.id == id }

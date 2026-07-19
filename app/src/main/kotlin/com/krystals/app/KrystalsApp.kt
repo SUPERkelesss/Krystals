@@ -98,6 +98,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -140,6 +141,7 @@ import com.krystals.core.EditCommand
 import com.krystals.core.CrystalStructure
 import com.krystals.core.ParsedStructure
 import com.krystals.core.PeriodicTable
+import com.krystals.core.SceneSnapshot
 import com.krystals.renderer.CrystalViewport
 import com.krystals.renderer.CrystalImageExporter
 import com.krystals.renderer.LockedMeasurement
@@ -148,12 +150,24 @@ import com.krystals.renderer.rememberViewerController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private data class PendingOpen(val uri: Uri, val name: String, val text: String, val candidates: List<Int>)
+
+/** Per v0.5.3b: holds an open request whose expanded atom count exceeds the warn threshold until
+ *  the user confirms or cancels. */
+private data class PendingLargeOpen(val parsed: ParsedStructure, val name: String, val uri: Uri?, val expandedEstimate: Int)
+
+/** Per v0.5.3b: scene build runs off the UI thread with this cap; on timeout it fails with a
+ *  readable error instead of hanging the viewer. */
+private const val BUILD_SCENE_TIMEOUT_MS = 15_000L
+
+/** Per v0.5.3b: warn before opening a cell whose asymmetric expansion exceeds this many atoms. */
+private const val LARGE_CELL_WARN_THRESHOLD = 1000
 
 @Composable
 fun KrystalsRoot(
@@ -236,6 +250,11 @@ fun KrystalsRoot(
     // Per v0.5.2b: resolved string for the smart-ionic timeout snackbar (localized() is @Composable).
     val smartIonicTimeoutMessage = localized("智能离子计算超时，已回退键合半径", "Smart ionic timed out, fell back to bonding radii")
 
+    // Per v0.5.3b: when an opened cell expands to more than [LARGE_CELL_WARN_THRESHOLD] atoms the
+    // user is warned before the (possibly degraded) scene is built. Resolved once; reused below.
+    val largeCellWarningMessage = localized("原子数较多", "Many atoms")
+    var pendingLargeOpen by remember { mutableStateOf<PendingLargeOpen?>(null) }
+
     /**
      * Per v0.5.0: run a bond-recomputing operation off the UI thread with the global "计算中..."
      * overlay. [block] runs on Dispatchers.Default and returns the new structure (or null to abort
@@ -290,9 +309,10 @@ fun KrystalsRoot(
         runCatching { activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))) }.onFailure { showMessage("Unable to open browser") }
     }
 
-    /** Per v0.5.0: add a parsed structure, synthesizing bond rules off-UI with the computing overlay.
-     *  Defined before [loadUri] because local functions must be declared before use (no forward refs). */
-    fun openParsed(parsed: ParsedStructure, name: String, uri: Uri?) {
+    /** Per v0.5.3b: the actual tab insertion + bond computation, split out of [openParsed] so the
+     *  large-cell warning can re-enter here after the user confirms. Declared before [openParsed]
+     *  because Kotlin local functions have no forward references. */
+    fun doOpenParsed(parsed: ParsedStructure, name: String, uri: Uri?) {
         // Add the tab immediately (so the empty structure shows), then compute rules if needed.
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
@@ -300,6 +320,19 @@ fun KrystalsRoot(
             // Per v0.5.2b: open-file path uses the 5 s smart-ionic timeout variant.
             openWithBondComputation(tab.structure, tab.bondEpsilon)
         }
+    }
+
+    /** Per v0.5.0: add a parsed structure, synthesizing bond rules off-UI with the computing overlay.
+     *  Defined before [loadUri] because local functions must be declared before use (no forward refs).
+     *  Per v0.5.3b: cells expanding past [LARGE_CELL_WARN_THRESHOLD] atoms are gated behind a
+     *  confirm dialog; the user can still open them in degraded mode. */
+    fun openParsed(parsed: ParsedStructure, name: String, uri: Uri?) {
+        val expandedEstimate = CrystalEngine.expandAsymmetricUnit(parsed.structure).size
+        if (expandedEstimate > LARGE_CELL_WARN_THRESHOLD) {
+            pendingLargeOpen = PendingLargeOpen(parsed, name, uri, expandedEstimate)
+            return
+        }
+        doOpenParsed(parsed, name, uri)
     }
 
     fun loadUri(uri: Uri) {
@@ -453,6 +486,21 @@ fun KrystalsRoot(
             }) { Text(document.blocks[index].name) } } } },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { pendingOpen = null }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+
+    pendingLargeOpen?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { pendingLargeOpen = null },
+            title = { Text(largeCellWarningMessage) },
+            text = { Text(localized(
+                "该晶胞展开后约 ${pending.expandedEstimate} 个原子，可能卡顿或崩溃。确认继续？",
+                "This cell has ~${pending.expandedEstimate} expanded atoms; it may lag or crash. Continue?")) },
+            confirmButton = { TextButton(onClick = {
+                val p = pending; pendingLargeOpen = null
+                doOpenParsed(p.parsed, p.name, p.uri)
+            }) { Text(localized("继续", "Continue")) } },
+            dismissButton = { TextButton(onClick = { pendingLargeOpen = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
 
@@ -640,7 +688,19 @@ private fun ViewerScreen(
     val dihedralChoice = localized("二面角", "Dihedral")
     val offChoice = localized("关闭", "Off")
     val controller = rememberViewerController()
-    val sceneResult = remember(tab.structure, tab.expansion) { runCatching { CrystalEngine.buildScene(tab.structure, tab.expansion) } }
+    // Per v0.5.3b: build the scene off the UI thread with a timeout. Previously this ran synchronously
+    // on the Main thread inside `remember`, so a large cell (materialising ~77k shell atoms) froze
+    // the UI and OOM'd with no way to cancel. Now a key change cancels the prior build (the stale
+    // result is discarded) and shows a spinner while the new one computes.
+    var sceneResult by remember(tab.structure, tab.expansion) { mutableStateOf<Result<SceneSnapshot>?>(null) }
+    LaunchedEffect(tab.structure, tab.expansion) {
+        sceneResult = null
+        sceneResult = runCatching {
+            withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
+                withContext(Dispatchers.Default) { CrystalEngine.buildScene(tab.structure, tab.expansion) }
+            } ?: throw IllegalStateException("Scene build timed out after ${BUILD_SCENE_TIMEOUT_MS / 1000}s")
+        }
+    }
     // Per v0.5.0: per-site bond-valence sums for the atom-info window (s = X.XX). Recomputed when
     // the structure changes; cheap relative to scene build.
     val bondValenceBySite = remember(tab.structure, tab.bondEpsilon) { BondValence.bondValenceSums(tab.structure, tab.bondEpsilon) }
@@ -657,7 +717,7 @@ private fun ViewerScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = { menuOpen = false; onSaveToPreset() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
                     menuOpen = false
-                    sceneResult.getOrNull()?.let { snapshot ->
+                    sceneResult?.getOrNull()?.let { snapshot ->
                         onExport(CrystalImageExporter.render(snapshot, tab.appearance, controller, tab.visibility, tab.selectedAtomIds, tab.measurementMode, tab.inspectedAtomId, tab.lockedMeasurements, tab.lockedInspectedAtomIds, bondValenceBySite))
                     } ?: onMessage("Unable to export current crystal")
                 })
@@ -680,68 +740,78 @@ private fun ViewerScreen(
         )
         DocumentTabs(viewModel, onClose)
         Box(Modifier.fillMaxSize()) {
-            sceneResult.onSuccess { snapshot ->
-                CrystalViewport(
-                    snapshot = snapshot,
-                    appearance = previewAppearance ?: tab.appearance,
-                    controller = controller,
-                    visibility = tab.visibility,
-                    selectedAtomIds = tab.selectedAtomIds,
-                    measurementMode = tab.measurementMode,
-                    lockedMeasurements = tab.lockedMeasurements,
-                    onMeasurementLockToggle = { measurement, isLocked ->
-                        // Tapping an unlocked (active) measurement box locks it into the list and
-                        // clears the active selection; tapping a locked box removes just that one.
-                        if (isLocked && measurement != null) {
-                            tab.lockedMeasurements = tab.lockedMeasurements.filterNot { it == measurement }
-                        } else if (!isLocked) {
-                            if (tab.measurementMode != MeasurementMode.NONE && tab.selectedAtomIds.isNotEmpty()) {
-                                tab.lockedMeasurements = tab.lockedMeasurements + LockedMeasurement(tab.selectedAtomIds, tab.measurementMode)
-                                tab.selectedAtomIds = emptyList()
+            val current = sceneResult
+            when {
+                current == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                current.isSuccess -> {
+                    val snapshot = current.getOrThrow()
+                    CrystalViewport(
+                        snapshot = snapshot,
+                        appearance = previewAppearance ?: tab.appearance,
+                        controller = controller,
+                        visibility = tab.visibility,
+                        selectedAtomIds = tab.selectedAtomIds,
+                        measurementMode = tab.measurementMode,
+                        lockedMeasurements = tab.lockedMeasurements,
+                        onMeasurementLockToggle = { measurement, isLocked ->
+                            // Tapping an unlocked (active) measurement box locks it into the list and
+                            // clears the active selection; tapping a locked box removes just that one.
+                            if (isLocked && measurement != null) {
+                                tab.lockedMeasurements = tab.lockedMeasurements.filterNot { it == measurement }
+                            } else if (!isLocked) {
+                                if (tab.measurementMode != MeasurementMode.NONE && tab.selectedAtomIds.isNotEmpty()) {
+                                    tab.lockedMeasurements = tab.lockedMeasurements + LockedMeasurement(tab.selectedAtomIds, tab.measurementMode)
+                                    tab.selectedAtomIds = emptyList()
+                                }
                             }
-                        }
-                    },
-                    inspectedAtomId = tab.inspectedAtomId,
-                    lockedInspectedAtomIds = tab.lockedInspectedAtomIds,
-                    bondValenceBySite = bondValenceBySite,
-                    onInspectAtom = { atom ->
-                        // Per v0.2.4: double-tap opens an unlocked info window for the atom. Any
-                        // already-locked windows are preserved; the active window is replaceable.
-                        tab.inspectedAtomId = atom.id
-                    },
-                    onInspectionLockToggle = { atomId, isLocked ->
-                        // Tapping an unlocked (active) info box locks it into the persistent list and
-                        // clears the active window; tapping a locked box removes just that one.
-                        if (isLocked) {
-                            tab.lockedInspectedAtomIds = tab.lockedInspectedAtomIds - atomId
-                        } else {
-                            tab.lockedInspectedAtomIds = tab.lockedInspectedAtomIds + atomId
+                        },
+                        inspectedAtomId = tab.inspectedAtomId,
+                        lockedInspectedAtomIds = tab.lockedInspectedAtomIds,
+                        bondValenceBySite = bondValenceBySite,
+                        onInspectAtom = { atom ->
+                            // Per v0.2.4: double-tap opens an unlocked info window for the atom. Any
+                            // already-locked windows are preserved; the active window is replaceable.
+                            tab.inspectedAtomId = atom.id
+                        },
+                        onInspectionLockToggle = { atomId, isLocked ->
+                            // Tapping an unlocked (active) info box locks it into the persistent list and
+                            // clears the active window; tapping a locked box removes just that one.
+                            if (isLocked) {
+                                tab.lockedInspectedAtomIds = tab.lockedInspectedAtomIds - atomId
+                            } else {
+                                tab.lockedInspectedAtomIds = tab.lockedInspectedAtomIds + atomId
+                                tab.inspectedAtomId = null
+                            }
+                        },
+                        onViewMoved = {
+                            if (tab.measurementMode != MeasurementMode.NONE) tab.selectedAtomIds = emptyList()
+                            // Moving the view dismisses the unlocked info window; locked ones persist.
                             tab.inspectedAtomId = null
-                        }
-                    },
-                    onViewMoved = {
-                        if (tab.measurementMode != MeasurementMode.NONE) tab.selectedAtomIds = emptyList()
-                        // Moving the view dismisses the unlocked info window; locked ones persist.
-                        tab.inspectedAtomId = null
-                    },
-                    onAtomTap = { atom ->
-                        when (tab.atomEditMode) {
-                            AtomEditMode.DELETE_NEXT -> {
-                                tab.atomEditMode = AtomEditMode.NONE
-                                val deleted = runCatching { CrystalEditor.apply(tab.structure, EditCommand.DeleteAtom(atom.siteId)).structure }.getOrNull()
-                                if (deleted != null) onRunBondComputation { CrystalEditor.ensureAutoBondRules(deleted).structure }
+                        },
+                        onAtomTap = { atom ->
+                            when (tab.atomEditMode) {
+                                AtomEditMode.DELETE_NEXT -> {
+                                    tab.atomEditMode = AtomEditMode.NONE
+                                    val deleted = runCatching { CrystalEditor.apply(tab.structure, EditCommand.DeleteAtom(atom.siteId)).structure }.getOrNull()
+                                    if (deleted != null) onRunBondComputation { CrystalEditor.ensureAutoBondRules(deleted).structure }
+                                }
+                                AtomEditMode.MODIFY_NEXT -> {
+                                    tab.editingSiteId = atom.siteId; tab.atomEditMode = AtomEditMode.NONE; tab.editorOpen = true
+                                }
+                                AtomEditMode.NONE -> {
+                                    val expected = when (tab.measurementMode) { MeasurementMode.LENGTH -> 2; MeasurementMode.ANGLE -> 3; MeasurementMode.DIHEDRAL -> 4; else -> 1 }
+                                    tab.selectedAtomIds = if (tab.selectedAtomIds.size >= expected) listOf(atom.id) else tab.selectedAtomIds + atom.id
+                                }
                             }
-                            AtomEditMode.MODIFY_NEXT -> {
-                                tab.editingSiteId = atom.siteId; tab.atomEditMode = AtomEditMode.NONE; tab.editorOpen = true
-                            }
-                            AtomEditMode.NONE -> {
-                                val expected = when (tab.measurementMode) { MeasurementMode.LENGTH -> 2; MeasurementMode.ANGLE -> 3; MeasurementMode.DIHEDRAL -> 4; else -> 1 }
-                                tab.selectedAtomIds = if (tab.selectedAtomIds.size >= expected) listOf(atom.id) else tab.selectedAtomIds + atom.id
-                            }
-                        }
-                    },
-                )
-            }.onFailure { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(it.message ?: "Unable to build scene", color = MaterialTheme.colorScheme.error) } }
+                        },
+                    )
+                }
+                else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(current.exceptionOrNull()?.message ?: "Unable to build scene", color = MaterialTheme.colorScheme.error)
+                }
+            }
 
             // Legend groups by (element, resolved color), sourced from the edited structure (not the
             // rendered atoms) so it doesn't churn as visibility changes. Sites of the same element
