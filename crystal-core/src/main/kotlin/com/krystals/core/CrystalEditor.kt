@@ -77,6 +77,36 @@ object CrystalEditor {
         return EditResult(structure.copy(bondRules = structure.bondRules + newRules))
     }
 
+    /** Sentinel placed in [EditResult.warnings] when a smart-ionic computation timed out (open-file
+     *  path) and fell back to bonding radii. */
+    const val SMART_IONIC_TIMEOUT: String = "smart-ionic-timeout"
+
+    /**
+     * Per v0.5.2b: build an [EditResult] from a smart-ionic attempt that may have been cancelled by
+     * the caller's coroutine timeout. If [smartIonic] is null (timed out) or failed to analyse the
+     * structure, fall back to bonding-radius rules; on timeout add [SMART_IONIC_TIMEOUT] to the
+     * warnings so the UI can notify the user. The actual timeout is enforced by the caller
+     * (withTimeoutOrNull) because crystal-core has no coroutine dependency.
+     */
+    fun fromSmartIonicAttempt(
+        structure: CrystalStructure,
+        epsilon: Double,
+        smartIonic: BondValence.SmartIonicResult?,
+    ): EditResult {
+        val existingKeys = structure.bondRules.map { it.key }.toSet()
+        val sizeGuarded = CrystalEngine.expandAsymmetricUnit(structure).size > BondValence.SMART_IONIC_ATOM_LIMIT
+        var timedOut = false
+        val generated = if (!sizeGuarded && smartIonic != null && smartIonic.success) {
+            smartIonic.rules
+        } else {
+            if (!sizeGuarded && smartIonic == null) timedOut = true
+            bondingRules(structure, epsilon)
+        }
+        val rules = generated.filterNot { it.key in existingKeys }
+        val warnings = if (timedOut) listOf(SMART_IONIC_TIMEOUT) else emptyList()
+        return EditResult(structure.copy(bondRules = structure.bondRules + rules), warnings)
+    }
+
     /**
      * Per v0.5.0: the default rule set is "smart ionic" (智能离子) - per-site Shannon radii from a BVS
      * oxidation-state estimate ([BondValence.smartIonicRules]). When the structure cannot be
