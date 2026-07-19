@@ -66,8 +66,18 @@ object AppearanceStore {
             showAxes = o.optBoolean("showAxes", d.showAxes),
             axisMode = runCatching { AxisMode.valueOf(o.optString("axisMode", d.axisMode.name)) }.getOrDefault(d.axisMode),
             depthOfFieldEnabled = o.optBoolean("depthOfFieldEnabled", d.depthOfFieldEnabled),
-            dofNear = o.optDouble("dofNear", d.dofNear.toDouble()).toFloat(),
-            dofFar = o.optDouble("dofFar", d.dofFar.toDouble()).toFloat(),
+            // Per v0.5.4: 景深标度改为「近=正/远=负」(near>=far)。旧存档按「近=负」(near<far)存,
+            // 读入时翻符号迁移到新约定;新存档(near>=far)原样保留。
+            dofNear = run {
+                val rawNear = o.optDouble("dofNear", d.dofNear.toDouble()).toFloat()
+                val rawFar = o.optDouble("dofFar", d.dofFar.toDouble()).toFloat()
+                if (rawNear < rawFar) -rawNear else rawNear
+            },
+            dofFar = run {
+                val rawNear = o.optDouble("dofNear", d.dofNear.toDouble()).toFloat()
+                val rawFar = o.optDouble("dofFar", d.dofFar.toDouble()).toFloat()
+                if (rawNear < rawFar) -rawFar else rawFar
+            },
         )
     }.getOrNull()
 }

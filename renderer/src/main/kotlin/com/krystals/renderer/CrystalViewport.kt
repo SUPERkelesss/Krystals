@@ -24,7 +24,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import com.krystals.core.AxisMode
@@ -87,9 +86,9 @@ private data class BondRenderable(val a: ProjectedAtom, val b: ProjectedAtom, va
  * A single polygonal face of a polyhedron, emitted as its own renderable so it sorts against atoms
  * and bonds by its own face depth (rather than the whole polyhedron sorting as one block by
  * its center, which let back faces occlude front atoms). [screenVerts] are the projected 2D vertices
- * in draw order; [faceDepth] is the nearest-vertex rotated-Z of the face (largest z = closest to
- * camera, +Z toward viewer); [normal] is the outward face normal in camera space (after rotate) for
- * screen-space lighting + back-face culling.
+ * in draw order; [faceDepth] is the average-vertex rotated-Z of the face (geometric centre depth;
+ * larger z = closer to camera, +Z toward viewer); [normal] is the outward face normal in camera
+ * space (after rotate) for screen-space lighting + back-face culling.
  */
 private data class PolyhedronFaceRenderable(
     val baseColor: Color,
@@ -374,10 +373,10 @@ fun CrystalViewport(
             }
         }.sortedBy { it.depth }
 
-        // Per v0.5.3a: depth cueing now fades COLOUR toward the background (not alpha). dofFog
-        // returns a fog amount in 0..1 (0 = near / no fade, 1 = far / fully faded). Near/Far are
-        // signed distances in scene units (1 unit = 1/6 of the depth span, so nearest atom = -3,
-        // farthest = +3): negative = toward the camera, positive = away, 0 = crystal centre.
+        // Per v0.5.4: depth cueing fades COLOUR toward the background (not alpha). dofFog returns a
+        // fog amount in 0..1 (0 = near / no fade, 1 = far / fully faded). Near/Far are signed scene
+        // distances (1 unit = 1/6 of the depth span, so the NEAREST atom = +3, the FARTHEST = -3):
+        // near=正(toward camera)、far=负(away), 0 = crystal centre. Convention: near >= far.
         val depthRange = run {
             val ds = visibleProjected.map { it.depth }
             if (ds.isEmpty()) null else (ds.min() to ds.max())
@@ -388,23 +387,18 @@ fun CrystalViewport(
             val (dMin, dMax) = depthRange
             val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
             val centre = (dMin + dMax) / 2.0
-            // 1 unit = 1/6 of the depth span → nearest atom ≈ -3, farthest ≈ +3.
+            // d: 近(大z)=正、远(小z)=负;最近≈+3,最远≈-3。
             val d = ((depth - centre) / dSpan * 6.0).toFloat()
-            val near = appearance.dofNear
-            val far = appearance.dofFar
-            if (far <= near) return if (d <= near) 0f else 1f
-            if (d <= near) return 0f
-            if (d >= far) return 1f
-            return (d - near) / (far - near)
+            val near = appearance.dofNear   // 正,近端不淡化阈值
+            val far = appearance.dofFar     // 负,远端全淡化阈值
+            if (near <= far) return if (d >= near) 0f else 1f
+            if (d >= near) return 0f        // 近端不淡化
+            if (d <= far) return 1f         // 远端全淡化
+            return ((near - d) / (near - far)).coerceIn(0f, 1f)  // 中间线性(近→远,0→1)
         }
 
-        // Per v0.5.3: simulated contact shadows. When the world light is on, each visible atom
-        // casts a soft dark ellipse on the plane through the crystal centre perpendicular to the
-        // light's screen direction. Drawn under every atom (after frames/axes, before the sorted
-        // renderables) so atoms/bonds/polyhedra paint over them. Default-on, no UI option.
-        if (appearance.reflectionEnabled) {
-            drawContactShadows(visibleProjected, appearance, depthRange)
-        }
+        // Per v0.5.4: contact shadows removed (user request). The world light no longer casts a
+        // simulated ground shadow — only atom/bond/polyhedron shading remains.
 
         renderables.forEach { renderable ->
             when (renderable) {
@@ -478,7 +472,10 @@ private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearanc
     }
     if (appearance.reflectionEnabled) {
         val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
-        val offset = atom.radius * 0.38f * light.z.toFloat()
+        // Per v0.5.4: highlight偏移量用 cos(elevation)(=光在屏幕平面的分量长度 sqrt(x²+y²))而非 light.z(=sin e)。
+        // 掠射(e=0)→偏移最大(光从侧面打来,高光偏到背光侧);正射(e=90)→居中。与预览球一致。
+        val cosE = sqrt(light.x * light.x + light.y * light.y).toFloat()
+        val offset = atom.radius * 0.38f * cosE
         val highlightCenter = atom.point - Offset(light.x.toFloat() * offset, light.y.toFloat() * offset)
         // Per v0.5.3a: highlight alpha dims with fog so distant atoms lose their sheen naturally.
         val highlight = Brush.radialGradient(
@@ -613,65 +610,6 @@ private fun Color.blend(target: Color, t: Float) = Color(
 )
 
 /**
- * Per v0.5.3: simulated contact shadows. Each visible atom casts a soft dark ellipse offset along
- * the light's screen direction onto the plane through the crystal centre. The ellipse is squashed
- * along the light direction (a grazing shadow) and its alpha falls off with the atom's height above
- * the centre plane. Drawn under the atoms so they sit on top. Default-on whenever the world light is
- * enabled; no user-facing option.
- */
-private fun DrawScope.drawContactShadows(
-    atoms: List<ProjectedAtom>,
-    appearance: ViewerAppearance,
-    depthRange: Pair<Double, Double>?,
-) {
-    if (atoms.isEmpty() || depthRange == null) return
-    val (dMin, dMax) = depthRange
-    val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
-    val centre = (dMin + dMax) / 2.0
-    val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
-    // Screen-space light direction (X right, Y down). The shadow is cast opposite to the light.
-    val sx = light.x.toFloat()
-    val sy = light.y.toFloat()
-    val sLen = sqrt(sx * sx + sy * sy)
-    if (sLen < 1e-3f) return
-    val ux = sx / sLen
-    val uy = sy / sLen
-    // Intensity drives shadow darkness; cap so it never fully blacks out the background.
-    val strength = appearance.lightIntensity.coerceIn(0f, 1f) * 0.22f
-    if (strength < 0.005f) return
-    atoms.forEach { a ->
-        // Height above the centre plane, in scene units (±5). Shadows only for atoms on the camera
-        // side of the centre (positive height); deeper atoms contribute nothing.
-        val h = ((a.depth - centre) / dSpan * 10.0).toFloat()
-        if (h <= 0.1f) return@forEach
-        val drop = h.coerceIn(0f, 5f) / 5f
-        // Cast distance grows with height; alpha fades as the atom lifts off the plane.
-        val cast = a.radius * (1.2f + drop * 2.0f)
-        val cx = a.point.x - ux * cast
-        val cy = a.point.y - uy * cast
-        val rx = a.radius * (1.0f + drop * 0.3f)
-        val ry = a.radius * 0.42f
-        val alpha = (strength * (1f - drop * 0.5f)).coerceIn(0f, strength)
-        if (alpha < 0.005f) return@forEach
-        // Orient the ellipse so its short axis aligns with the light direction.
-        val angle = atan2(uy.toDouble(), ux.toDouble()).toFloat()
-        rotateDegShadow(cx, cy, angle, rx, ry, alpha)
-    }
-}
-
-private fun DrawScope.rotateDegShadow(cx: Float, cy: Float, angle: Float, rx: Float, ry: Float, alpha: Float) {
-    drawIntoCanvas { c ->
-        c.nativeCanvas.save()
-        c.nativeCanvas.rotate(angle * 180f / PI.toFloat(), cx, cy)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.argb((alpha * 255).toInt().coerceIn(0, 255), 0, 0, 0)
-        }
-        c.nativeCanvas.drawOval(cx - rx, cy - ry, cx + rx, cy + ry, p)
-        c.nativeCanvas.restore()
-    }
-}
-
-/**
  * Per v0.5.2: azimuth/elevation (degrees) → unit light direction in screen space. X right, Y down,
  * +Z toward the viewer. elevation is clamped to 0..90 so the light stays at/above the horizon —
  * below-horizon angles are meaningless for a reflection highlight (cos is even) and counter-intuitive.
@@ -735,15 +673,15 @@ private fun polyhedronFaceRenderables(
         // viewer (larger z = closer). v0.5.2a used the nearest vertex (maxOf), which sorted a large
         // face as if it were entirely at its near edge and let it occlude atoms in front of it. The
         // centre is the stable painter's-algorithm key for a convex face.
-        val nearestDepth = faceVerts.map { it.depth }.average()
+        val faceDepth = faceVerts.map { it.depth }.average()
         val vertexIds = faceVerts.map { it.atom.id }
         // Per v0.3.2: always cull back faces (camera looks down -Z).
         if (camNormal.z > 0.0) {
-            result += PolyhedronFaceRenderable(baseColor, screenVerts, vertexIds, nearestDepth, camNormal)
+            result += PolyhedronFaceRenderable(baseColor, screenVerts, vertexIds, faceDepth, camNormal)
         } else {
             // Per v0.3.44: back face — emit an outline-only renderable so the polyhedron's back edges
             // are still visible as faint lines (no fill).
-            result += PolyhedronFaceRenderable(baseColor, screenVerts, vertexIds, nearestDepth, camNormal, outlineOnly = true, outlineAlpha = 0.18f)
+            result += PolyhedronFaceRenderable(baseColor, screenVerts, vertexIds, faceDepth, camNormal, outlineOnly = true, outlineAlpha = 0.18f)
         }
         // Per v0.3.41: for flat coordinations, also emit the reversed face so the polygon is visible
         // from the centre-atom side. Rendered after (so it paints over) with lower alpha to look like
@@ -752,7 +690,7 @@ private fun polyhedronFaceRenderables(
             val reversedCamNormal = rotation * (normal * -1.0)
             if (reversedCamNormal.z > 0.0) {
                 val backColor = baseColor.copy(alpha = (baseColor.alpha * 0.4f).coerceIn(0f, 1f))
-                result += PolyhedronFaceRenderable(backColor, screenVerts.reversed(), vertexIds.reversed(), nearestDepth, reversedCamNormal)
+                result += PolyhedronFaceRenderable(backColor, screenVerts.reversed(), vertexIds.reversed(), faceDepth, reversedCamNormal)
             }
         }
     }
@@ -768,18 +706,22 @@ private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appeara
         // opacity) is unchanged.
         val fadedBase = face.baseColor.blend(bgColor, fog)
         val fill = if (appearance.polyhedronReflectionEnabled) {
-            // Screen-space Lambert: light direction in camera space (matches atom highlight which is
-            // fixed relative to the screen). +Z toward viewer, so faces pointing at the light brighten.
+            // Per v0.5.4: Blinn-Phong plastic shading. Lambert diffuse + a white specular highlight
+            // via the half vector (light+view, view=(0,0,1) since +Z is toward the viewer). The whole
+            // face shares one normal, so the specular term is uniform across the face — a flat
+            // reflective film look (plastic) rather than a per-pixel sheen. Shininess≈48 (plastic).
             val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
-            val dot = face.normalCam.dot(light).coerceIn(0.0, 1.0) // back faces already culled/handled
-            // Per v0.5.2: ambient floor scales with light intensity — intensity 0 → flat lit (no
-            // contrast), intensity 1 → ambient 0.4 with full Lambert range.
+            val view = Vec3(0.0, 0.0, 1.0)
+            val half = (light + view).normalized()
+            val diff = face.normalCam.dot(light).coerceIn(0.0, 1.0)
+            val spec = Math.pow(face.normalCam.dot(half).coerceIn(0.0, 1.0), 48.0)
             val ambient = (1f - 0.6f * appearance.lightIntensity).coerceIn(0.4f, 1f)
-            val factor = (ambient + (1f - ambient) * dot.toFloat()).coerceIn(0f, 1f)
+            val diffFactor = (ambient + (1f - ambient) * diff.toFloat()).coerceIn(0f, 1f)
+            val specAmount = (spec.toFloat() * appearance.lightIntensity * 0.6f).coerceIn(0f, 1f)
             fadedBase.copy(
-                red = (fadedBase.red * factor).coerceIn(0f, 1f),
-                green = (fadedBase.green * factor).coerceIn(0f, 1f),
-                blue = (fadedBase.blue * factor).coerceIn(0f, 1f),
+                red = (fadedBase.red * diffFactor + specAmount).coerceIn(0f, 1f),
+                green = (fadedBase.green * diffFactor + specAmount).coerceIn(0f, 1f),
+                blue = (fadedBase.blue * diffFactor + specAmount).coerceIn(0f, 1f),
             )
         } else fadedBase
         val path = Path().apply {
