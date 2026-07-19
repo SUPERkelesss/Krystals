@@ -472,11 +472,9 @@ private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearanc
     }
     if (appearance.reflectionEnabled) {
         val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
-        // Per v0.5.4: highlight偏移量用 cos(elevation)(=光在屏幕平面的分量长度 sqrt(x²+y²))而非 light.z(=sin e)。
-        // 掠射(e=0)→偏移最大(光从侧面打来,高光偏到背光侧);正射(e=90)→居中。与预览球一致。
-        val cosE = sqrt(light.x * light.x + light.y * light.y).toFloat()
-        val offset = atom.radius * 0.38f * cosE
-        val highlightCenter = atom.point - Offset(light.x.toFloat() * offset, light.y.toFloat() * offset)
+        // Per v0.5.4: highlight偏移沿光在屏幕平面的方向(light.xy 已含 cos(elevation) 因子),偏移量
+        // = r*0.38。掠射(e=0)→light.xy 模长最大→偏移最大;正射(e=90)→light.xy=0→居中。与预览球一致。
+        val highlightCenter = atom.point - Offset(light.x.toFloat(), light.y.toFloat()) * (atom.radius * 0.38f)
         // Per v0.5.3a: highlight alpha dims with fog so distant atoms lose their sheen naturally.
         val highlight = Brush.radialGradient(
             colors = listOf(
