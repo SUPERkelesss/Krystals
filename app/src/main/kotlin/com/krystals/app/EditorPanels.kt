@@ -667,6 +667,8 @@ private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRun
     var x by remember(tab.expansion) { mutableStateOf(tab.expansion.x) }
     var y by remember(tab.expansion) { mutableStateOf(tab.expansion.y) }
     var z by remember(tab.expansion) { mutableStateOf(tab.expansion.z) }
+    // Per v0.5.3b: pre-resolved so the degrade snackbar can fire from a non-@Composable onClick.
+    val degradeMessage = localized("原子数过多，已降级显示（边界多面体可能不完整）", "Many atoms; rendering in degraded mode (boundary polyhedra may be incomplete)")
     Column(Modifier.fillMaxSize().padding(18.dp)) {
         Text(localized("显示扩胞", "Display supercell"), fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
@@ -683,7 +685,13 @@ private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRun
                 val expansion = Expansion(x, y, z)
                 val base = com.krystals.core.CrystalEngine.expandAsymmetricUnit(tab.structure).size
                 require(base.toLong() * expansion.multiplier <= com.krystals.core.CrystalEngine.MAX_RENDERED_ATOMS) { "100,000 atom limit exceeded" }
+                // Per v0.5.3b: warn if the shell materialisation will degrade to avoid OOM.
+                val degrade = com.krystals.core.CrystalEngine.estimatePeakAtomCount(base, expansion) >
+                    com.krystals.core.CrystalEngine.SHELL_DEGRADE_THRESHOLD
                 tab.expansion = expansion
+                degrade
+            }.onSuccess { degrade ->
+                if (degrade) onMessage(degradeMessage)
             }.onFailure { onMessage(it.message ?: "Invalid expansion") }
         }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("应用", "Apply")) }
     }

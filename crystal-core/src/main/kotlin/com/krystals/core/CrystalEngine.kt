@@ -4,12 +4,57 @@ object CrystalEngine {
     const val MAX_RENDERED_ATOMS = 100_000
     private const val AVOGADRO = 6.02214076e23
 
+    // Per v0.5.3b: shell materialisation is the OOM hot spot. A 2-cell-thick shell covers
+    // (ex+4)(ey+4)(ez+4) cells worth of atoms; a 1-cell-thick shell covers (ex+2)(ey+2)(ez+2). The
+    // peak atom count (primary + shell) is materialised *before* the MAX_RENDERED_ATOMS check ran,
+    // so OOM hit large cells first. These guards choose the shell thickness up front and reject
+    // structures that would still overflow.
+    const val SHELL_DEGRADE_THRESHOLD = 60_000L
+    const val SHELL_HARD_LIMIT = 150_000L
+
+    /** v0.5.3b: how thick the neighbour shell is. FULL = 2 cells (v0.3.44 polyhedron complete);
+     *  ONE_CELL = 1 cell (boundary-image centres may miss their outward polyhedron face). */
+    enum class ShellMode { FULL, ONE_CELL }
+
+    /** Peak number of atoms materialised by [buildScene] = baseSize × shell-cell count (FULL mode). */
+    fun estimatePeakAtomCount(baseSize: Int, expansion: Expansion): Long {
+        if (baseSize == 0) return 0L
+        val ex = expansion.x
+        val ey = expansion.y
+        val ez = expansion.z
+        return baseSize.toLong() * (ex + 4).toLong() * (ey + 4).toLong() * (ez + 4).toLong()
+    }
+
+    /** Convenience overload that expands once; prefer the (baseSize, expansion) form when the
+     *  caller already has the expanded asymmetric unit. */
+    fun estimatePeakAtomCount(structure: CrystalStructure, expansion: Expansion): Long =
+        estimatePeakAtomCount(expandAsymmetricUnit(structure).size, expansion)
+
+    /** Choose the shell thickness for a structure. FULL unless its peak overflows
+     *  [SHELL_DEGRADE_THRESHOLD]; then ONE_CELL unless that too overflows [SHELL_HARD_LIMIT]
+     *  (throws so the caller can report the structure is too large). */
+    fun pickShellMode(baseSize: Int, expansion: Expansion): ShellMode {
+        if (estimatePeakAtomCount(baseSize, expansion) <= SHELL_DEGRADE_THRESHOLD) return ShellMode.FULL
+        val peakOneCell = baseSize.toLong() *
+            (expansion.x + 2).toLong() * (expansion.y + 2).toLong() * (expansion.z + 2).toLong()
+        require(peakOneCell <= SHELL_HARD_LIMIT) {
+            "Structure too large: ~$peakOneCell atoms even with a 1-cell shell (limit $SHELL_HARD_LIMIT). Try a smaller expansion."
+        }
+        return ShellMode.ONE_CELL
+    }
+
     fun buildScene(
         structure: CrystalStructure,
         expansion: Expansion = Expansion(),
         bondRules: List<BondRule> = structure.bondRules,
     ): SceneSnapshot {
         val base = expandAsymmetricUnit(structure)
+        // Per v0.5.3b: guard the primary atom count up front (was a post-hoc check on finalAtoms
+        // only, which never tripped for large-shell structures because finalAtoms stays small).
+        require(base.size.toLong() * expansion.multiplier <= MAX_RENDERED_ATOMS) {
+            "Expansion exceeds limit $MAX_RENDERED_ATOMS"
+        }
+        val shellMode = pickShellMode(base.size, expansion)
         val ex = expansion.x
         val ey = expansion.y
         val ez = expansion.z
@@ -50,7 +95,12 @@ object CrystalEngine {
         // so a corner-atom polyhedron was only complete at the primary (0,0,0) site. Atoms at offset
         // ±2 are external shell (outside the [0,ex] closure): hidden by default, but kept when a bond
         // references them so they can serve as polyhedron vertices.
-        for (ix in -2 until ex + 2) for (iy in -2 until ey + 2) for (iz in -2 until ez + 2) {
+        // Per v0.5.3b: large cells degrade to a 1-cell shell ([ShellMode.ONE_CELL]) to avoid OOM;
+        // boundary-image centres then miss their outward polyhedron face, but the primary centres
+        // stay complete and the structure is at least viewable.
+        val shellFrom = if (shellMode == ShellMode.FULL) -2 else -1
+        val shellUntil = { n: Int -> if (shellMode == ShellMode.FULL) n + 2 else n + 1 }
+        for (ix in shellFrom until shellUntil(ex)) for (iy in shellFrom until shellUntil(ey)) for (iz in shellFrom until shellUntil(ez)) {
             if (ix in 0 until ex && iy in 0 until ey && iz in 0 until ez) continue
             base.forEach { atom ->
                 val offset = Int3(ix, iy, iz)
@@ -110,6 +160,8 @@ object CrystalEngine {
             idMap[atom.id] = finalId
             finalAtoms += atom.copy(id = finalId++)
         }
+        // Per v0.5.3b: the primary count is already guarded up front; this remains as an
+        // invariant assertion (keptShell is bounded by bonds, so finalAtoms stays small).
         require(finalAtoms.size <= MAX_RENDERED_ATOMS) {
             "Expansion exceeds limit $MAX_RENDERED_ATOMS"
         }
