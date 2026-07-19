@@ -47,6 +47,240 @@ object CrystalEngine {
         structure: CrystalStructure,
         expansion: Expansion = Expansion(),
         bondRules: List<BondRule> = structure.bondRules,
+    ): SceneSnapshot = buildSceneGridded(structure, expansion, bondRules)
+
+    /**
+     * Per v0.5.3b (Phase 2): gridded scene build. Materialises only the primary region plus the
+     * boundary images (atoms on the primary-box faces, ≤ 7×base — the ones the renderer shows by
+     * default), then infers bonds by enumerating each centre's ±1 neighbour-cell offsets against a
+     * spatial hash of the primary atoms, creating cross-cell shell atoms on demand. This avoids
+     * materialising the 2-cell-thick external shell (the OOM source: 124×base for 1×1×1).
+     *
+     * Correctness rests on: every legacy bond (centre ∈ primary∪boundary, neighbour ∈ centre±1
+     * cell) corresponds to a primary atom pair (c, q) at offset off_b = c.cellOffset + delta,
+     * delta ∈ {-1,0,1}³ — so a ±1 offset sweep over primary atoms reproduces the full bond set,
+     * including a boundary centre's outward ±2 neighbour (delta=+1 on the boundary's face axis →
+     * off_b=2). v0.3.44 polyhedron completeness is thereby preserved without ±2 materialisation.
+     */
+    fun buildSceneGridded(
+        structure: CrystalStructure,
+        expansion: Expansion = Expansion(),
+        bondRules: List<BondRule> = structure.bondRules,
+    ): SceneSnapshot {
+        val base = expandAsymmetricUnit(structure)
+        require(base.size.toLong() * expansion.multiplier <= MAX_RENDERED_ATOMS) {
+            "Expansion exceeds limit $MAX_RENDERED_ATOMS"
+        }
+        val ex = expansion.x
+        val ey = expansion.y
+        val ez = expansion.z
+        val boundaryEps = 1e-6
+
+        val primaryAtoms = ArrayList<ExpandedAtom>(base.size * expansion.multiplier)
+        var tempId = 1L
+        fun nextTempId() = tempId++
+        for (ix in 0 until ex) for (iy in 0 until ey) for (iz in 0 until ez) {
+            base.forEach { atom ->
+                val offset = Int3(ix, iy, iz)
+                val fractional = atom.fractional + Vec3(offset.x.toDouble(), offset.y.toDouble(), offset.z.toDouble())
+                primaryAtoms += atom.copy(
+                    id = nextTempId(),
+                    fractional = fractional,
+                    cartesian = structure.cell.toCartesian(fractional),
+                    cellOffset = offset,
+                    isShell = false,
+                )
+            }
+        }
+
+        // Boundary images: shell atoms on the primary-box faces, within the [0,ex] closure. These
+        // are displayed by default (they complete visible cell edges/faces); genuine external
+        // neighbours are created on demand during bonding. Per v0.3.41 the boundary-image test is
+        // "image position is on a primary-box face AND within the closure" — uses the raw (unwrapped)
+        // fractional, so e.g. an atom at (0,0,0.25) imaged to offset (0,1,0) sits at (0,1,0.25),
+        // on the y=1 face and inside [0,1]³, hence a boundary image. A non-zero offset always makes
+        // the image distinct from the primary atom (even when its wrapped position coincides, e.g.
+        // Cs@(0,0,0) imaged to (1,0,0) — same wrapped position but a different lattice image that
+        // must act as a bond centre to reach its ±2 outward neighbour). The offset range is ±1; ±2
+        // outward ligands are created on demand by the bond sweep.
+        val boundaryImages = ArrayList<ExpandedAtom>()
+        for (ix in -1..ex + 1) for (iy in -1..ey + 1) for (iz in -1..ez + 1) {
+            if (ix in 0 until ex && iy in 0 until ey && iz in 0 until ez) continue
+            base.forEach { atom ->
+                val offset = Int3(ix, iy, iz)
+                val fractional = atom.fractional + Vec3(offset.x.toDouble(), offset.y.toDouble(), offset.z.toDouble())
+                val inPrimaryBox =
+                    fractional.x >= -boundaryEps && fractional.x <= ex + boundaryEps &&
+                        fractional.y >= -boundaryEps && fractional.y <= ey + boundaryEps &&
+                        fractional.z >= -boundaryEps && fractional.z <= ez + boundaryEps
+                val onFace =
+                    (fractional.x >= -boundaryEps && fractional.x <= boundaryEps) ||
+                        (fractional.x >= ex - boundaryEps && fractional.x <= ex + boundaryEps) ||
+                        (fractional.y >= -boundaryEps && fractional.y <= boundaryEps) ||
+                        (fractional.y >= ey - boundaryEps && fractional.y <= ey + boundaryEps) ||
+                        (fractional.z >= -boundaryEps && fractional.z <= boundaryEps) ||
+                        (fractional.z >= ez - boundaryEps && fractional.z <= ez + boundaryEps)
+                if (!inPrimaryBox || !onFace) return@forEach
+                boundaryImages += atom.copy(
+                    id = nextTempId(),
+                    fractional = fractional,
+                    cartesian = structure.cell.toCartesian(fractional),
+                    cellOffset = offset,
+                    isShell = true,
+                    isBoundaryImage = true,
+                )
+            }
+        }
+
+        val centers = primaryAtoms + boundaryImages
+        val custom = bondRules.associateBy { it.key }
+        val disabledPairs = structure.disabledBondPairs
+        val cellSize = BondRuleMatching.estimateCellSize(structure)
+        // Spatial hash of primary atoms by floor(cartesian / cellSize).
+        val buckets = HashMap<Int3, MutableList<ExpandedAtom>>()
+        for (a in primaryAtoms) {
+            val k = Int3(
+                Math.floor(a.cartesian.x / cellSize).toInt(),
+                Math.floor(a.cartesian.y / cellSize).toInt(),
+                Math.floor(a.cartesian.z / cellSize).toInt(),
+            )
+            buckets.getOrPut(k) { mutableListOf() }.add(a)
+        }
+        val la = structure.cell.matrix.a
+        val lb = structure.cell.matrix.b
+        val lc = structure.cell.matrix.c
+        val result = ArrayList<Bond>()
+        val seenBonds = HashSet<Pair<Long, Long>>()
+        val shellAtoms = ArrayList<ExpandedAtom>()
+        // Per v0.5.3b: shell atoms are deduplicated by (primary atom id, image offset). Boundary
+        // images pre-materialised above are indexed here too so the bond sweep reuses them instead of
+        // spawning duplicates at the same image position (e.g. Cs@(0,0,0) imaged to (1,0,0) is both a
+        // boundary image and a bond target — it must be a single atom, or boundary centres would be
+        // skipped and their ±2 outward neighbours never reached).
+        val shellByKey = HashMap<Pair<Long, Int3>, ExpandedAtom>()
+        for (b in boundaryImages) {
+            val primaryId = primaryAtoms.firstOrNull { it.siteId == b.siteId && it.fractional.almostEquals(Vec3(b.fractional.x - b.cellOffset.x.toDouble(), b.fractional.y - b.cellOffset.y.toDouble(), b.fractional.z - b.cellOffset.z.toDouble())) }?.id
+            if (primaryId != null) shellByKey[primaryId to b.cellOffset] = b
+        }
+
+        // Per v0.3.41: a shell atom is a boundary image iff its (raw, unwrapped) fractional
+        // position lies on a primary-box face AND within the [0,ex] closure. Testing the offset
+        // instead would mis-classify e.g. Cl(½,½,½) imaged to (0,0,1) → position (½,½,1.5), which is
+        // outside the closure (z=1.5 > 1) and therefore an external shell, not a boundary image —
+        // even though the offset (0,0,1) itself sits on the z=1 face.
+        fun isBoundaryPosition(fractional: Vec3): Boolean {
+            val inBox = fractional.x >= -boundaryEps && fractional.x <= ex + boundaryEps &&
+                fractional.y >= -boundaryEps && fractional.y <= ey + boundaryEps &&
+                fractional.z >= -boundaryEps && fractional.z <= ez + boundaryEps
+            if (!inBox) return false
+            return (fractional.x >= -boundaryEps && fractional.x <= boundaryEps) ||
+                (fractional.x >= ex - boundaryEps && fractional.x <= ex + boundaryEps) ||
+                (fractional.y >= -boundaryEps && fractional.y <= boundaryEps) ||
+                (fractional.y >= ey - boundaryEps && fractional.y <= ey + boundaryEps) ||
+                (fractional.z >= -boundaryEps && fractional.z <= boundaryEps) ||
+                (fractional.z >= ez - boundaryEps && fractional.z <= ez + boundaryEps)
+        }
+
+        fun getShellAtom(q: ExpandedAtom, off: Int3): ExpandedAtom {
+            shellByKey[q.id to off]?.let { return it }
+            val frac = q.fractional + Vec3(off.x.toDouble(), off.y.toDouble(), off.z.toDouble())
+            val atom = q.copy(
+                id = nextTempId(),
+                fractional = frac,
+                cartesian = structure.cell.toCartesian(frac),
+                cellOffset = off,
+                isShell = true,
+                isBoundaryImage = isBoundaryPosition(frac),
+            )
+            shellAtoms += atom
+            shellByKey[q.id to off] = atom
+            return atom
+        }
+
+        // For each centre, sweep its ±1 neighbour-cell offsets (delta ∈ {-1,0,1}³). off_b =
+        // c.cellOffset + delta; for a boundary centre (offset ±1) delta=+1 reaches off_b=±2, i.e.
+        // the outward external neighbour — no ±2 materialisation needed. Candidates q are primary
+        // atoms near c.cartesian - lat·off_b (so that |c − (q+off_b)| = |X − q| ≤ cellSize).
+        for (c in centers) {
+            for (dxx in -1..1) for (dyy in -1..1) for (dzz in -1..1) {
+                val offB = Int3(c.cellOffset.x + dxx, c.cellOffset.y + dyy, c.cellOffset.z + dzz)
+                val latOff = la * offB.x.toDouble() + lb * offB.y.toDouble() + lc * offB.z.toDouble()
+                val qx = c.cartesian.x - latOff.x
+                val qy = c.cartesian.y - latOff.y
+                val qz = c.cartesian.z - latOff.z
+                val bix = Math.floor(qx / cellSize).toInt()
+                val biy = Math.floor(qy / cellSize).toInt()
+                val biz = Math.floor(qz / cellSize).toInt()
+                for (bx in bix - 1..bix + 1) for (by in biy - 1..biy + 1) for (bz in biz - 1..biz + 1) {
+                    val bucket = buckets[Int3(bx, by, bz)] ?: continue
+                    for (q in bucket) {
+                        val bCartesian = q.cartesian + latOff
+                        val d = distance(c.cartesian, bCartesian)
+                        if (d <= 0.0) continue
+                        // Per v0.5.3b: BondRule.key sorts the two site ids and joins with NUL; reuse
+                        // it so custom-rule + disabled-pair lookups match the rest of the engine (the
+                        // legacy path built the same key inline — a plain-space join would miss rules).
+                        val key = if (c.siteId < q.siteId) "${c.siteId} ${q.siteId}" else "${q.siteId} ${c.siteId}"
+                        if (key in disabledPairs) continue
+                        val customRule = custom[key]
+                        val isPeriodicSameSite = c.siteId == q.siteId &&
+                            (c.fractional - (q.fractional + Vec3(offB.x.toDouble(), offB.y.toDouble(), offB.z.toDouble()))).isIntegerVector()
+                        if (customRule == null && isPeriodicSameSite) continue
+                        val rule = customRule ?: BondRule(
+                            c.siteId, q.siteId, 0.1,
+                            PeriodicTable.covalentRadius(c.element) + PeriodicTable.covalentRadius(q.element) + 0.45,
+                            BondRuleSource.AUTO,
+                        )
+                        if (d < rule.minAngstrom || d > rule.maxAngstrom) continue
+                        val bIsShell = offB != Int3(0, 0, 0)
+                        val bAtom = if (bIsShell) getShellAtom(q, offB) else q
+                        // Per v0.3.43: orient so the shell atom (when exactly one endpoint is shell) is atomB.
+                        val (atomA, atomB) = when {
+                            c.isShell && !bAtom.isShell -> bAtom to c
+                            bAtom.isShell && !c.isShell -> c to bAtom
+                            else -> c to bAtom
+                        }
+                        val bk = if (atomA.id < atomB.id) atomA.id to atomB.id else atomB.id to atomA.id
+                        if (!seenBonds.add(bk)) continue
+                        result += Bond(atomA.id, atomB.id, d, rule, Int3(0, 0, 0))
+                    }
+                }
+            }
+        }
+
+        // Keep shell atoms referenced by a bond; discard the rest (same filtering as the legacy path).
+        val referencedShellIds = HashSet<Long>()
+        for (bond in result) {
+            referencedShellIds += bond.atomA
+            referencedShellIds += bond.atomB
+        }
+        val keptShell = (boundaryImages + shellAtoms).filter { it.isShell && it.id in referencedShellIds }
+
+        val idMap = HashMap<Long, Long>()
+        var finalId = 1L
+        val finalAtoms = ArrayList<ExpandedAtom>(primaryAtoms.size + keptShell.size)
+        for (atom in primaryAtoms) {
+            idMap[atom.id] = finalId
+            finalAtoms += atom.copy(id = finalId++)
+        }
+        for (atom in keptShell) {
+            idMap[atom.id] = finalId
+            finalAtoms += atom.copy(id = finalId++)
+        }
+        require(finalAtoms.size <= MAX_RENDERED_ATOMS) {
+            "Expansion exceeds limit $MAX_RENDERED_ATOMS"
+        }
+        val finalBonds = result.map { bond ->
+            bond.copy(atomA = idMap.getValue(bond.atomA), atomB = idMap.getValue(bond.atomB))
+        }
+        return SceneSnapshot(finalAtoms, finalBonds, structure, expansion)
+    }
+
+    @Suppress("unused")
+    private fun buildSceneLegacy(
+        structure: CrystalStructure,
+        expansion: Expansion = Expansion(),
+        bondRules: List<BondRule> = structure.bondRules,
     ): SceneSnapshot {
         val base = expandAsymmetricUnit(structure)
         // Per v0.5.3b: guard the primary atom count up front (was a post-hoc check on finalAtoms
