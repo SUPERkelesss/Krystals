@@ -133,6 +133,7 @@ import com.krystals.app.ui.ThemeMode
 import com.krystals.core.CifCodec
 import com.krystals.core.BondValence
 import com.krystals.core.CrystalEditor
+import com.krystals.core.BondGrid
 import com.krystals.core.BondRuleMatching
 import com.krystals.core.CrystalEngine
 import com.krystals.core.EditCommand
@@ -232,6 +233,9 @@ fun KrystalsRoot(
 
     fun showMessage(message: String) { scope.launch { snackbar.showSnackbar(message) } }
 
+    // Per v0.5.2b: resolved string for the smart-ionic timeout snackbar (localized() is @Composable).
+    val smartIonicTimeoutMessage = localized("智能离子计算超时，已回退键合半径", "Smart ionic timed out, fell back to bonding radii")
+
     /**
      * Per v0.5.0: run a bond-recomputing operation off the UI thread with the global "计算中..."
      * overlay. [block] runs on Dispatchers.Default and returns the new structure (or null to abort
@@ -250,6 +254,33 @@ fun KrystalsRoot(
         }
     }
 
+    /**
+     * Per v0.5.2b: open-file bond computation with a 5 s smart-ionic timeout. Falls back to bonding
+     * radii on timeout and surfaces the [smartIonicTimeoutMessage] snackbar.
+     */
+    fun openWithBondComputation(structure: CrystalStructure, epsilon: Double) {
+        if (computing) return
+        computing = true
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.Default) {
+                    // Per v0.5.2b: cap smart-ionic at 5 s; on timeout pass null so the editor falls
+                    // back to bonding radii and flags the timeout.
+                    val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                        BondValence.smartIonicRules(structure, epsilon)
+                    }
+                    CrystalEditor.fromSmartIonicAttempt(structure, epsilon, smartIonic)
+                }
+            }
+            computing = false
+            result.onSuccess { editResult ->
+                if (CrystalEditor.SMART_IONIC_TIMEOUT in editResult.warnings) showMessage(smartIonicTimeoutMessage)
+                viewModel.current?.let { viewModel.updateStructure(it, editResult.structure) }
+            }.onFailure { showMessage(it.message ?: "Operation failed") }
+        }
+    }
+
+
     // Per v0.4.0: resume the MP flow after the caution dialog — hasKey ? search : enter key.
     fun proceedToMp() {
         if (MaterialsProject.hasKey(activity)) mpSearchOpen = true else mpKeyDialogOpen = true
@@ -266,9 +297,8 @@ fun KrystalsRoot(
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
         if (tab.structure.bondRules.isEmpty()) {
-            runWithBondComputation {
-                CrystalEditor.ensureAutoBondRules(tab.structure).structure
-            }
+            // Per v0.5.2b: open-file path uses the 5 s smart-ionic timeout variant.
+            openWithBondComputation(tab.structure, tab.bondEpsilon)
         }
     }
 
@@ -912,6 +942,11 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
     // every site of the target element (written into siteArgbOverrides for each site of that element).
     var groupColorPickerElement by remember { mutableStateOf<String?>(null) }
     val rules = tab.structure.bondRules
+    // Per v0.5.2b: expand + grid once for the BONDS tab's hasMatchingBond filter (MOF-scale cells).
+    val bondGrid = remember(tab.structure) {
+        val atoms = CrystalEngine.expandAsymmetricUnit(tab.structure)
+        BondGrid(atoms, tab.structure, BondRuleMatching.estimateCellSize(tab.structure)) to atoms
+    }
     val allSitesVisible = siteIds.isNotEmpty() && tab.visibility.hiddenSites.intersect(siteIds).isEmpty()
     val allBondsVisible = tab.visibility.showBonds && tab.visibility.hiddenBondPairs.none { key -> rules.any { it.key == key } }
     val allPolyhedraEnabled = siteIds.isNotEmpty() && siteIds.all { it in tab.visibility.polyhedronSites }
@@ -1033,7 +1068,9 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                             }
                             DisplayTab.BONDS -> {
                                 // Per v0.2.2: only list rules whose two sites still exist (others don't affect rendering).
-                                val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
+                                val visibleRules = rules.filter { rule ->
+                                    BondRuleMatching.hasMatchingBond(rule, tab.structure, bondGrid.second, bondGrid.first)
+                                }
                                 val allExtend = visibleRules.isNotEmpty() && visibleRules.all { it.extendAcrossCell }
                                 // Per v0.3.43: display select-all/invert and extend select-all/invert on one
                                 // row, mirroring the ATOMS/POLYHEDRA style (Checkbox + 全选 + 反选), placed

@@ -79,6 +79,7 @@ import com.krystals.core.AtomSite
 import com.krystals.core.BondColorMode
 import com.krystals.core.BondRule
 import com.krystals.core.BondRuleMatching
+import com.krystals.core.BondGrid
 import com.krystals.core.BondRuleSource
 import com.krystals.core.BondValence
 import com.krystals.core.CrystalEditor
@@ -465,7 +466,14 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     val rules = tab.structure.bondRules
     // Per v0.2.3: hide rules that produce no bond in the current structure (no atom pair within
     // the distance window), not just rules whose sites are gone.
-    val visibleRules = rules.filter { rule -> BondRuleMatching.hasMatchingBond(rule, tab.structure) }
+    // Per v0.5.2b: expand + grid once and reuse across all rules so MOF-scale cells don't freeze.
+    val bondGrid = remember(tab.structure) {
+        val atoms = CrystalEngine.expandAsymmetricUnit(tab.structure)
+        BondGrid(atoms, tab.structure, BondRuleMatching.estimateCellSize(tab.structure)) to atoms
+    }
+    val visibleRules = rules.filter { rule ->
+        BondRuleMatching.hasMatchingBond(rule, tab.structure, bondGrid.second, bondGrid.first)
+    }
 
     // Rebuild rules off the UI thread, showing a "computing" dialog while it runs.
     fun rebuildAsync(source: RadiusSource, epsilon: Double, skipConfirm: Boolean) {

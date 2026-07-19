@@ -69,6 +69,10 @@ object BondValence {
      * across all symmetry images, which would multiply the BVS by the site multiplicity.
      */
     fun bondValenceSums(structure: CrystalStructure, epsilon: Double = 0.45): Map<String, Double> {
+        // Per v0.5.2b: large cells would make this synchronous BVS computation (called from a
+        // remember() in the viewer) stall the UI. Skip it above the smart-ionic atom limit; the
+        // atom-info window then simply omits "s = X.XX" for those structures.
+        if (CrystalEngine.expandAsymmetricUnit(structure).size > SMART_IONIC_ATOM_LIMIT) return emptyMap()
         val analysis = analyze(structure, epsilon) ?: return emptyMap()
         val siteValence = analysis.siteValence
         val atomById = analysis.atoms.associateBy { it.id }
