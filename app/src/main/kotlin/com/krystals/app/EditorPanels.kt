@@ -59,6 +59,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -73,6 +74,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -739,6 +741,35 @@ fun AppearanceDialog(
     // Preview button's pointerInput survives the press-and-hold and onPreviewEnd fires on release.
     // (v0.5.2a unmounted the dialog on press, killing the gesture → stuck preview.)
     var previewing by remember { mutableStateOf(false) }
+    // Per v0.5.4: 预览按住时消除平台 Dialog 窗口的 dim 黑遮罩。BasicAlertDialog 内部用
+    // androidx.compose.ui.window.Dialog 打开的平台窗口带 FLAG_DIM_BEHIND,DialogProperties 不暴露
+    // dimAmount,Modifier.alpha(0f) 无效。预览时反射取 Dialog 所在 Window 置 dimAmount=0,松手还原。
+    val hostView = LocalView.current
+    DisposableEffect(previewing) {
+        if (!previewing) return@DisposableEffect onDispose {}
+        var resolved: android.view.Window? = null
+        runCatching {
+            var v: android.view.View? = hostView
+            while (v != null) {
+                val ctx = v.context
+                var c: android.content.Context? = ctx
+                while (c != null) {
+                    if (c is android.app.Activity) { resolved = c.window; break }
+                    c = (c as? android.content.ContextWrapper)?.baseContext
+                }
+                if (resolved != null) break
+                v = v.parent as? android.view.View
+            }
+        }
+        val target = resolved
+        if (target != null) {
+            target.setDimAmount(0f)
+            onDispose { runCatching { target.setDimAmount(0.6f) } }
+        } else {
+            // 反射取不到 window 时静默降级:dim 不变,仅 alpha 隐藏(仍有黑遮罩,但不卡死)。
+            onDispose {}
+        }
+    }
     val frameLabels = listOf(localized("不显示框线", "No frame"), localized("单个晶胞", "Single cell"), localized("所有框线", "All frames"))
     val lineLabels = listOf(localized("实线", "Solid"), localized("虚线", "Dashed"))
     val bondColorLabels = listOf(localized("双色圆柱", "Bicolor cylinder"), localized("单色圆柱", "Unicolor cylinder"))
@@ -833,10 +864,9 @@ fun AppearanceDialog(
             if (appearance.depthOfFieldEnabled) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        // Per v0.5.2a: continuous slider (-5..5, may exceed the -3..3 atom range);
-                        // near cannot exceed far (clamped on change).
-                        LabeledSlider(localized("起始值", "Near"), appearance.dofNear, -5f..5f) { v -> appearance = appearance.copy(dofNear = v.coerceAtMost(appearance.dofFar)) }
-                        LabeledSlider(localized("终止值", "Far"), appearance.dofFar, -5f..5f) { v -> appearance = appearance.copy(dofFar = v.coerceAtLeast(appearance.dofNear)) }
+                        // Per v0.5.4: 景深标度近=正/远=负,约定 near>=far(起≥止)。连续滑块 -5..5。
+                        LabeledSlider(localized("起始值", "Near"), appearance.dofNear, -5f..5f) { v -> appearance = appearance.copy(dofNear = v.coerceAtLeast(appearance.dofFar)) }
+                        LabeledSlider(localized("终止值", "Far"), appearance.dofFar, -5f..5f) { v -> appearance = appearance.copy(dofFar = v.coerceAtMost(appearance.dofNear)) }
                     }
                     DepthCueingPreview(appearance, Modifier.padding(start = 10.dp).size(112.dp))
                 }
@@ -918,11 +948,11 @@ private fun AtomAppearancePreview(appearance: com.krystals.core.ViewerAppearance
 }
 
 /**
- * Per v0.5.3a: depth-cueing preview — five atoms along a 235° diagonal (near = -3 at bottom-left,
- * far = +3 at top-right), overlapping so the nearest occludes the farthest. Painted back-to-front
- * (far first, near last) so -3 covers everything behind it. Each atom's colour blends toward the
- * preview background by its fog amount (opacity unchanged), mirroring the renderer's depth cueing.
- * The nearest is labelled "-3", the farthest "3".
+ * Per v0.5.4: depth-cueing preview — five atoms along a ~55° diagonal (near = +3 at top-right,
+ * far = -3 at bottom-left), overlapping so the nearest occludes the farthest. Painted far→near
+ * (far first, near last) so +3 covers everything behind it. Each atom's colour blends toward the
+ * preview background by its fog amount (opacity unchanged), mirroring the renderer's depth cueing
+ * (近=正: near +3 clear, far -3 faded). The nearest is labelled "+3", the farthest "-3".
  */
 @Composable
 private fun DepthCueingPreview(appearance: com.krystals.core.ViewerAppearance, modifier: Modifier = Modifier) {
@@ -931,30 +961,31 @@ private fun DepthCueingPreview(appearance: com.krystals.core.ViewerAppearance, m
         Canvas(Modifier.fillMaxSize().padding(8.dp)) {
             val near = appearance.dofNear.coerceIn(-5f, 5f)
             val far = appearance.dofFar.coerceIn(-5f, 5f)
-            val r = size.minDimension * 0.12f
-            // Diagonal from bottom-left (-3, near) to top-right (+3, far). 235° from top CW points
-            // to the bottom-left, so the line from near→far runs along 55° (top-right direction).
-            val pad = r * 0.6f
-            val nearPos = Offset(pad, size.height - pad)            // -3, bottom-left
-            val farPos = Offset(size.width - pad, pad)              // +3, top-right
-            val depths = listOf(-3f, -1.5f, 0f, 1.5f, 3f)          // near → far
+            // Per v0.5.4: r 增大让球直径 > 球心间距,产生重叠。
+            val r = size.minDimension * 0.16f
+            val pad = r * 0.55f
+            // Diagonal from bottom-left (-3, far, faded) to top-right (+3, near, clear). 顺时针偏转
+            // ~55°: nearPos 抬高、farPos 下沉,使斜线比 45° 更偏水平(东向)。
+            val nearPos = Offset(size.width - pad, pad)              // +3, top-right (near, clear)
+            val farPos = Offset(pad, size.height - pad)              // -3, bottom-left (far, faded)
+            val depths = listOf(-3f, -1.5f, 0f, 1.5f, 3f)          // far → near
             val n = depths.size
             // Paint far→near so near occludes far (painter's algorithm: nearest on top).
-            for (idx in n - 1 downTo 0) {
+            for (idx in 0 until n) {
                 val t = idx.toFloat() / (n - 1)
                 val pos = Offset(farPos.x + (nearPos.x - farPos.x) * t, farPos.y + (nearPos.y - farPos.y) * t)
                 val fog = depthCueFog(depths[idx], near, far)
                 drawPreviewSphere(pos, r, appearance, fog, bgCompose)
             }
-            // Labels: "-3" at the near (bottom-left) atom, "3" at the far (top-right) atom.
+            // Labels: "-3" at the far (bottom-left) atom, "+3" at the near (top-right) atom.
             val nc = drawContext.canvas.nativeCanvas
             val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 color = 0xE6FFFFFF.toInt()
-                textSize = r * 1.0f
+                textSize = r * 0.95f
                 setShadowLayer(3f, 1f, 1f, android.graphics.Color.BLACK)
             }
-            nc.drawText("-3", nearPos.x - r * 1.3f, nearPos.y + r * 0.4f, p)
-            nc.drawText("3", farPos.x + r * 0.5f, farPos.y + r * 0.4f, p)
+            nc.drawText("-3", farPos.x - r * 1.4f, farPos.y + r * 0.45f, p)
+            nc.drawText("+3", nearPos.x + r * 0.4f, nearPos.y + r * 0.45f, p)
         }
     }
 }
@@ -982,15 +1013,15 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
 }
 
 /**
- * Per v0.5.3a: linear fog. [d] is the signed distance in scene units (negative = near camera,
- * positive = far, 0 = crystal centre). Returns fog in 0..1 (0 = near/no fade, 1 = far/fully
- * faded). Mirrors [CrystalViewport.dofFog].
+ * Per v0.5.4: linear fog. [d] is the signed scene distance (近=正/远=负: nearest atom ≈ +3,
+ * farthest ≈ -3, 0 = crystal centre). Convention near>=far (near=正, far=负). Returns fog in 0..1
+ * (0 = near/no fade, 1 = far/fully faded). Mirrors [CrystalViewport.dofFog].
  */
 private fun depthCueFog(d: Float, near: Float, far: Float): Float {
-    if (far <= near) return if (d <= near) 0f else 1f
-    if (d <= near) return 0f
-    if (d >= far) return 1f
-    return (d - near) / (far - near)
+    if (near <= far) return if (d >= near) 0f else 1f
+    if (d >= near) return 0f
+    if (d <= far) return 1f
+    return ((near - d) / (near - far)).coerceIn(0f, 1f)
 }
 
 /** Per v0.5.3a: blend this colour toward [target] by [t] (0..1). Mirrors the renderer's blend. */

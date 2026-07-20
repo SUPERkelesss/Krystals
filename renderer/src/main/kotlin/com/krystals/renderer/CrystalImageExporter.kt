@@ -25,7 +25,6 @@ import com.krystals.core.dihedralDegrees
 import com.krystals.core.distance
 import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -96,14 +95,21 @@ object CrystalImageExporter {
             // Per v0.5.3a: sort by the face's GEOMETRIC CENTRE depth (average vertex z). +Z toward
             // viewer (larger z = closer). v0.5.2a's nearest-vertex (maxOf) sorted large faces as if
             // at their near edge, occluding atoms in front.
-            val nearestDepth = ordered.map { it.z }.average()
+            val faceDepth = ordered.map { it.z }.average()
             val camZ = (rotation * normal).z
             if (camZ > 0.0) {
-                result += PolyhedronFacePrimitive(center, ordered, normal, 1.0f, outlineOnly = false, outlineAlpha = 0.35f, depth = nearestDepth)
-                if (allCoplanar) result += PolyhedronFacePrimitive(center, ordered.reversed(), normal * -1.0, 0.4f, outlineOnly = false, outlineAlpha = 0.35f, depth = nearestDepth)
+                result += PolyhedronFacePrimitive(center, ordered, normal, 1.0f, outlineOnly = false, outlineAlpha = 0.35f, depth = faceDepth)
             } else {
                 // Per v0.3.44: back face — outline only, faint.
-                result += PolyhedronFacePrimitive(center, ordered, normal, 1.0f, outlineOnly = true, outlineAlpha = 0.18f, depth = nearestDepth)
+                result += PolyhedronFacePrimitive(center, ordered, normal, 1.0f, outlineOnly = true, outlineAlpha = 0.18f, depth = faceDepth)
+            }
+            // Per v0.3.41: for flat coordinations, also emit the reversed face so the polygon is
+            // visible from the centre-atom side. Only emit when the REVERSED normal faces the camera
+            // (mirrors CrystalViewport: original back-facing → reversed front-facing). The previous
+            // code emitted it when the original was front-facing, which made the reversed face's
+            // camera-z negative → always culled in drawPolyhedronFacePrimitive (dead code).
+            if (allCoplanar && (rotation * (normal * -1.0)).z > 0.0) {
+                result += PolyhedronFacePrimitive(center, ordered.reversed(), normal * -1.0, 0.4f, outlineOnly = false, outlineAlpha = 0.35f, depth = faceDepth)
             }
         }
         return result
@@ -206,10 +212,10 @@ object CrystalImageExporter {
             }
         }.sortedBy { it.depth }
 
-        // Per v0.5.3a: depth cueing now fades COLOUR toward the background (not alpha) — mirror
-        // CrystalViewport. 1 unit = 1/6 of the depth span (nearest atom = -3, farthest = +3).
+        // Per v0.5.4: depth cueing fades COLOUR toward the background (not alpha) — mirror
+        // CrystalViewport. Convention 近=正/远=负: nearest atom ≈ +3, farthest ≈ -3; near>=far.
         val depthRange = run {
-            val ds = points.map { it.z }
+            val ds = visiblePoints.map { it.z }   // 与 viewport 一致: 仅可见原子
             if (ds.isEmpty()) null else (ds.min() to ds.max())
         }
         val bgArgb = appearance.backgroundArgb.toInt()
@@ -218,19 +224,17 @@ object CrystalImageExporter {
             val (dMin, dMax) = depthRange
             val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
             val centre = (dMin + dMax) / 2.0
+            // d: 近(大z)=正、远(小z)=负;最近≈+3,最远≈-3。
             val d = ((depth - centre) / dSpan * 6.0).toFloat()
-            val near = appearance.dofNear
-            val far = appearance.dofFar
-            if (far <= near) return if (d <= near) 0f else 1f
-            if (d <= near) return 0f
-            if (d >= far) return 1f
-            return (d - near) / (far - near)
+            val near = appearance.dofNear   // 正,近端不淡化阈值
+            val far = appearance.dofFar     // 负,远端全淡化阈值
+            if (near <= far) return if (d >= near) 0f else 1f
+            if (d >= near) return 0f        // 近端不淡化
+            if (d <= far) return 1f         // 远端全淡化
+            return ((near - d) / (near - far)).coerceIn(0f, 1f)
         }
 
-        // Per v0.5.3: simulated contact shadows — mirror CrystalViewport (default-on with the light).
-        if (appearance.reflectionEnabled) {
-            drawContactShadows(canvas, visiblePoints, appearance, depthRange)
-        }
+        // Per v0.5.4: contact shadows removed (user request).
 
         renderables.forEach { primitive ->
             when (primitive) {
@@ -294,13 +298,18 @@ object CrystalImageExporter {
         }
         if (appearance.reflectionEnabled) {
             val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
-            val offset = point.radius * .38f * light.z.toFloat()
-            // Per v0.5.3a: highlight alpha dims with fog so distant atoms lose their sheen naturally.
+            // Per v0.5.4: highlight沿光在屏幕平面的方向偏移(light.xy 已含 cos(elevation)),量=r*0.38。
+            // 掠射→偏移最大;正射→居中。与 viewport 一致。
+            val offsetX = light.x.toFloat() * point.radius * .38f
+            val offsetY = light.y.toFloat() * point.radius * .38f
+            // Per v0.5.4: highlight alpha 含 opacity + lightIntensity + (1-fog);paint.alpha 置 255 让
+            // shader 自带 alpha 唯一生效,避免与 sphere 的 paint.alpha 叠乘成 opacity²(viewport 不叠乘)。
             val highlightAlpha = (appearance.lightIntensity.coerceIn(.05f, 1f) * opacity * (1f - fog) * 255).toInt().coerceIn(0, 255)
             val highlight = Color.argb(highlightAlpha, 255, 255, 255)
+            paint.alpha = 255
             paint.shader = RadialGradient(
-                point.x - light.x.toFloat() * offset,
-                point.y - light.y.toFloat() * offset,
+                point.x - offsetX,
+                point.y - offsetY,
                 point.radius * (0.35f + 0.75f * appearance.diffusion),
                 intArrayOf(highlight, Color.TRANSPARENT),
                 null,
@@ -403,7 +412,7 @@ object CrystalImageExporter {
         val shadowA = darken(baseArgb, 1f - 0.45f * lightIntensity)
         val shadowB = darken(baseArgb, 1f - 0.35f * lightIntensity)
         val highlight = if (reflectionEnabled) lighten(baseArgb, 0.55f * lightIntensity) else base
-        val band = 0.08f + 0.18f * diffusion
+        val band = 0.06f + 0.20f * diffusion  // Per v0.5.4: 对齐 viewport(原 0.08+0.18d)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             strokeWidth = width
             strokeCap = Paint.Cap.BUTT
@@ -443,20 +452,25 @@ object CrystalImageExporter {
         // Per v0.3.44: outline-only back faces skip the fill and draw edges at low alpha.
         if (!face.outlineOnly) {
             if (cam.z <= 0.0) return // back face culled (filled)
-            val factor = if (appearance.polyhedronReflectionEnabled) {
+            // Per v0.5.4: Blinn-Phong plastic shading — Lambert diffuse + white specular via the half
+            // vector (light+view, view=(0,0,1) since +Z is toward the viewer). The whole face shares
+            // one normal so the specular is uniform (flat reflective film / plastic). Shininess≈48.
+            var fill = if (appearance.polyhedronReflectionEnabled) {
                 val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
-                val dot = cam.dot(light).coerceIn(0.0, 1.0)
-                // Per v0.5.2: ambient floor scales with light intensity — intensity 0 → flat lit,
-                // intensity 1 → ambient 0.4 with full Lambert range.
+                val view = Vec3(0.0, 0.0, 1.0)
+                val half = (light + view).normalized()
+                val diff = cam.dot(light).coerceIn(0.0, 1.0)
+                val spec = Math.pow(cam.dot(half).coerceIn(0.0, 1.0), 48.0)
                 val ambient = (1f - 0.6f * appearance.lightIntensity).coerceIn(0.4f, 1f)
-                (ambient + (1f - ambient) * dot.toFloat()).toDouble()
-            } else 1.0
-            var fill = if (appearance.polyhedronReflectionEnabled) Color.argb(
-                Color.alpha(baseColor),
-                (Color.red(baseColor) * factor).toInt().coerceIn(0, 255),
-                (Color.green(baseColor) * factor).toInt().coerceIn(0, 255),
-                (Color.blue(baseColor) * factor).toInt().coerceIn(0, 255),
-            ) else baseColor
+                val diffFactor = (ambient + (1f - ambient) * diff.toFloat()).coerceIn(0f, 1f)
+                val specAmount = (spec.toFloat() * appearance.lightIntensity * 0.6f).coerceIn(0f, 1f)
+                Color.argb(
+                    Color.alpha(baseColor),
+                    (Color.red(baseColor) * diffFactor + specAmount * 255f).toInt().coerceIn(0, 255),
+                    (Color.green(baseColor) * diffFactor + specAmount * 255f).toInt().coerceIn(0, 255),
+                    (Color.blue(baseColor) * diffFactor + specAmount * 255f).toInt().coerceIn(0, 255),
+                )
+            } else baseColor
             if (face.alphaScale < 1.0f) {
                 fill = Color.argb((Color.alpha(fill) * face.alphaScale).toInt().coerceIn(0, 255), Color.red(fill), Color.green(fill), Color.blue(fill))
             }
@@ -514,43 +528,8 @@ object CrystalImageExporter {
         )
     }
 
-    /**
-     * Per v0.5.3: simulated contact shadows — mirror CrystalViewport.drawContactShadows. Each visible
-     * atom casts a soft dark ellipse offset along the light's screen direction; alpha fades with the
-     * atom's height above the centre plane. Drawn before the atoms so they sit on top.
-     */
-    private fun drawContactShadows(canvas: Canvas, atoms: List<Point>, appearance: ViewerAppearance, depthRange: Pair<Double, Double>?) {
-        if (atoms.isEmpty() || depthRange == null) return
-        val (dMin, dMax) = depthRange
-        val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
-        val centre = (dMin + dMax) / 2.0
-        val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
-        val sx = light.x.toFloat(); val sy = light.y.toFloat()
-        val sLen = sqrt(sx * sx + sy * sy)
-        if (sLen < 1e-3f) return
-        val ux = sx / sLen; val uy = sy / sLen
-        val strength = appearance.lightIntensity.coerceIn(0f, 1f) * 0.22f
-        if (strength < 0.005f) return
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        for (a in atoms) {
-            val h = ((a.z - centre) / dSpan * 10.0).toFloat()
-            if (h <= 0.1f) continue
-            val drop = h.coerceIn(0f, 5f) / 5f
-            val cast = a.radius * (1.2f + drop * 2.0f)
-            val cx = a.x - ux * cast
-            val cy = a.y - uy * cast
-            val rx = a.radius * (1.0f + drop * 0.3f)
-            val ry = a.radius * 0.42f
-            val alpha = (strength * (1f - drop * 0.5f)).coerceIn(0f, strength)
-            if (alpha < 0.005f) continue
-            val angle = Math.toDegrees(atan2(uy.toDouble(), ux.toDouble())).toFloat()
-            canvas.save()
-            canvas.rotate(angle, cx, cy)
-            paint.color = Color.argb((alpha * 255).toInt().coerceIn(0, 255), 0, 0, 0)
-            canvas.drawOval(cx - rx, cy - ry, cx + rx, cy + ry, paint)
-            canvas.restore()
-        }
-    }
+    // Per v0.5.4: contact shadows removed (drawContactShadows deleted — user requested removal of the
+    // simulated ground shadow; only atom/bond/polyhedron shading remains).
 
     private fun drawAxes(canvas: Canvas, snapshot: SceneSnapshot, appearance: ViewerAppearance, controller: ViewerController, width: Int, height: Int) {
         val directions: List<Vec3> = when (appearance.axisMode) {
@@ -570,7 +549,7 @@ object CrystalImageExporter {
         val lightX = light.x.toFloat()
         val lightY = light.y.toFloat()
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            strokeWidth = 4f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(4f, 1f, 1f, Color.BLACK)
+            strokeWidth = 4f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(5f, 1f, 1f, Color.BLACK)
         }
         directions.forEachIndexed { index, dir ->
             val rotated = controller.rotation * dir
@@ -604,7 +583,7 @@ object CrystalImageExporter {
             val shadowA = darken(color, 1f - 0.45f * appearance.lightIntensity)
             val shadowB = darken(color, 1f - 0.35f * appearance.lightIntensity)
             val highlight = if (appearance.bondReflectionEnabled) lighten(color, 0.55f * appearance.lightIntensity) else color
-            val band = 0.08f + 0.18f * appearance.diffusion
+            val band = 0.06f + 0.20f * appearance.diffusion  // Per v0.5.4: 对齐 viewport
             paint.style = Paint.Style.FILL
             paint.shader = LinearGradient(
                 baseX + perpX * headHalf, baseY + perpY * headHalf,
@@ -625,7 +604,7 @@ object CrystalImageExporter {
         val ex = if (appearance.frameMode == FrameMode.ALL_CELLS) snapshot.expansion.x else 1
         val ey = if (appearance.frameMode == FrameMode.ALL_CELLS) snapshot.expansion.y else 1
         val ez = if (appearance.frameMode == FrameMode.ALL_CELLS) snapshot.expansion.z else 1
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.GRAY; strokeWidth = 2f; if (appearance.lineStyle == LineStyle.DASHED) pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f) }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb((0.72f * 255).toInt(), 128, 128, 128); strokeWidth = 1.4f; if (appearance.lineStyle == LineStyle.DASHED) pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f) }
         val edges = listOf(0 to 1, 0 to 2, 0 to 4, 1 to 3, 1 to 5, 2 to 3, 2 to 6, 3 to 7, 4 to 5, 4 to 6, 5 to 7, 6 to 7)
         for (ix in 0 until ex) for (iy in 0 until ey) for (iz in 0 until ez) {
             val vertices = listOf(
@@ -644,6 +623,12 @@ object CrystalImageExporter {
         if (count == 0 || ids.size < count) return
         val selected = ids.takeLast(count).mapNotNull { id -> points.firstOrNull { it.atomId == id } }
         if (selected.size != count) return
+        // Per v0.5.4: draw the measurement polyline connecting the atoms (mirrors CrystalViewport —
+        // previously the exporter drew only the label box, no connecting line).
+        val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE1C6FF.toInt(); strokeWidth = 2.5f }
+        for (index in 0 until selected.lastIndex) {
+            canvas.drawLine(selected[index].x, selected[index].y, selected[index + 1].x, selected[index + 1].y, linePaint)
+        }
         val atoms = snapshot.atoms.associateBy { it.id }
         val positions = selected.mapNotNull { atoms[it.atomId]?.cartesian }
         val label = when (mode) {
@@ -652,22 +637,22 @@ object CrystalImageExporter {
             MeasurementMode.DIHEDRAL -> "%.3f°".format(dihedralDegrees(positions[0], positions[1], positions[2], positions[3]))
             else -> return
         }
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 48f; setShadowLayer(4f, 1f, 1f, Color.BLACK) }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 48f; setShadowLayer(5f, 1f, 1f, Color.BLACK) }
         val bounds = android.graphics.Rect()
         paint.getTextBounds(label, 0, label.length, bounds)
         val anchorX = selected.map { it.x }.average().toFloat()
         val anchorY = selected.map { it.y }.average().toFloat()
         val pad = 16f
-        val boxLeft = anchorX + 10f - pad
-        val boxTop = anchorY - 10f - bounds.height() - pad
-        val boxRight = anchorX + 10f + bounds.width() + pad
-        val boxBottom = anchorY - 10f + pad
+        val boxLeft = anchorX + 12f - pad
+        val boxTop = anchorY - 12f - bounds.height() - pad
+        val boxRight = anchorX + 12f + bounds.width() + pad
+        val boxBottom = anchorY - 12f + pad
         val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = if (locked) Color.argb((0.82f * 255).toInt(), 153, 102, 204) else Color.argb((0.65f * 255).toInt(), 0, 0, 0)
             style = Paint.Style.FILL
         }
         canvas.drawRoundRect(boxLeft, boxTop, boxRight, boxBottom, 14f, 14f, boxPaint)
-        canvas.drawText(label, anchorX + 10f, anchorY - 10f, paint)
+        canvas.drawText(label, anchorX + 12f, anchorY - 12f, paint)
     }
 
     private fun drawAtomInfo(canvas: Canvas, points: List<Point>, inspectedAtomId: Long?, locked: Boolean, bondValenceBySite: Map<String, Double> = emptyMap()) {
@@ -675,7 +660,7 @@ object CrystalImageExporter {
         val bvs = bondValenceBySite[atom.siteId]
         val bvsText = bvs?.let { "  s = %.2f".format(it) } ?: ""
         val label = "${atom.element}  ${atom.siteLabel}  occ ${atom.occupancy}$bvsText\n(${atom.fractional.x.formatFract()}, ${atom.fractional.y.formatFract()}, ${atom.fractional.z.formatFract()})"
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 40f; setShadowLayer(4f, 1f, 1f, Color.BLACK) }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 40f; setShadowLayer(5f, 1f, 1f, Color.BLACK) }
         val lines = label.split('\n')
         val widths = lines.map { line -> paint.measureText(line) }
         val maxWidth = widths.maxOrNull() ?: 0f

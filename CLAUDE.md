@@ -72,3 +72,7 @@ The core module contains no Android dependencies.
 - `crystal-core` tests use JUnit 5 (`useJUnitPlatform`). The sample CIF corpus lives under `res/cifs_example` and is exercised by `SampleCifTest`.
 - The app module packages the `res/` directory as assets (`sourceSets["main"].assets.srcDir(rootProject.file("res"))`), so bundled images and CIF samples are available at runtime without copying them into `app/src/main/assets`.
 - Rendering is Compose Canvas-based (no Filament); changes to 3D rendering should be done in `CrystalViewport` / `CrystalImageExporter`.
+
+## Workflow
+
+- 代码修改完成后**无需提交 Pull Request**——直接将改动 **merge 到 `master` 分支**并推送即可。这是本仓库的既定流程,适用于所有修改(包括在 worktree 分支上完成的提交),不要停留在特性分支上等待审核。
