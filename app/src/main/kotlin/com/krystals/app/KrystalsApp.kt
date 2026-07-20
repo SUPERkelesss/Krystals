@@ -1141,7 +1141,8 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                 // Per v0.2.2: only list rules whose two sites still exist (others don't affect rendering).
                                 val visibleRules = rules.filter { rule ->
                                     BondRuleMatching.hasMatchingBond(rule, tab.structure, bondGrid.second, bondGrid.first)
-                                }
+                                }.distinctBy { it.key } // Per v0.5.4b: see EditorPanels — duplicate
+                                // site-pair keys crash the LazyColumn with "Key was already used".
                                 val allExtend = visibleRules.isNotEmpty() && visibleRules.all { it.extendAcrossCell }
                                 // Per v0.3.43: display select-all/invert and extend select-all/invert on one
                                 // row, mirroring the ATOMS/POLYHEDRA style (Checkbox + 全选 + 反选), placed
