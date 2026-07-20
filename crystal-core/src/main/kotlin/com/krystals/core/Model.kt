@@ -180,14 +180,14 @@ data class ViewerAppearance(
     val polyhedronReflectionEnabled: Boolean = true,
     val showAxes: Boolean = true,
     val axisMode: AxisMode = AxisMode.ABC,
-    // Per v0.5.3/v0.5.2a: depth cueing via a linear alpha fog. Near/Far are signed distances in scene
-    // units (1 unit = 1/6 of the visible depth span, so the nearest atom maps to -3 and the farthest
-    // to +3): negative = toward the camera, positive = away, 0 = the crystal centre. Atoms/bonds/
-    // polyhedra fade to transparent (alpha -> 0) linearly across [near, far]; RGB is untouched so
-    // colours stay true. Defaults: cueing on, near -0.5 / far 4.5 (fog only the far side).
+    // Per v0.5.4: depth-cueing标度统一为「近=正/远=负」。d=(depth-centre)/dSpan*6,因 centre=
+    // (dMin+dMax)/2 而 dMin=最远原子(最小z)、dMax=最近原子(最大z),故最近原子 d=+3、最远 d=-3。
+    // dofNear=近端不淡化阈值(正)、dofFar=远端全淡化阈值(负);约定 near>=far。v0.5.3a 旧默认
+    // -0.5/4.5(near<far)与 d 实际符号矛盾,导致近被淡化、远清晰(完全反)——本版修正。颜色向
+    // 背景色 blend(opacity 不变),近端清晰、远端融背景。
     val depthOfFieldEnabled: Boolean = true,
-    val dofNear: Float = -0.5f,
-    val dofFar: Float = 4.5f,
+    val dofNear: Float = 0.5f,     // 近端: d>=near 不淡化(近=正)
+    val dofFar: Float = -4.5f,     // 远端: d<=far 全淡化(远=负)
 )
 
 data class SceneSnapshot(
