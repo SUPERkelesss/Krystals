@@ -474,7 +474,10 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     }
     val visibleRules = rules.filter { rule ->
         BondRuleMatching.hasMatchingBond(rule, tab.structure, bondGrid.second, bondGrid.first)
-    }
+    }.distinctBy { it.key } // Per v0.5.4b: bondRules can carry duplicate site-pair keys (e.g. a large
+    // cell whose ASU has repeated site ids, or a smart-ionic regen that re-emitted a pair). The
+    // renderer dedups via associateBy, but LazyColumn's key must be unique — collapse duplicates
+    // here so opening 编辑-化学键 on a large cell no longer crashes with "Key was already used".
 
     // Rebuild rules off the UI thread, showing a "computing" dialog while it runs.
     fun rebuildAsync(source: RadiusSource, epsilon: Double, skipConfirm: Boolean) {
