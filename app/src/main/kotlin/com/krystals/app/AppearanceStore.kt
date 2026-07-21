@@ -1,10 +1,6 @@
 package com.krystals.app
 
-import com.krystals.core.AxisMode
-import com.krystals.core.BondColorMode
-import com.krystals.core.FrameMode
-import com.krystals.core.LineStyle
-import com.krystals.core.ViewerAppearance
+import com.krystals.crystal.analysis.model.*
 import org.json.JSONObject
 
 /**

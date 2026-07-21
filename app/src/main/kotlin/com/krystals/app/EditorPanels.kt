@@ -78,26 +78,17 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.krystals.core.AtomSite
-import com.krystals.core.BondColorMode
-import com.krystals.core.BondRule
-import com.krystals.core.BondRuleMatching
-import com.krystals.core.BondGrid
-import com.krystals.core.BondRuleSource
-import com.krystals.core.BondValence
-import com.krystals.core.CrystalEditor
-import com.krystals.core.CrystalEngine
-import com.krystals.core.CrystalStructure
-import com.krystals.core.EditCommand
-import com.krystals.core.Expansion
-import com.krystals.core.ExpressionParser
-import com.krystals.core.FrameMode
-import com.krystals.core.LineStyle
-import com.krystals.core.PeriodicTable
-import com.krystals.core.RadiusSource
-import com.krystals.core.SpaceGroupCatalog
-import com.krystals.core.UnitCell
-import com.krystals.core.Vec3
+import com.krystals.crystal.analysis.bonding.BondDetector
+import com.krystals.crystal.analysis.bonding.BondGrid
+import com.krystals.crystal.analysis.bonding.BondRuleMatching
+import com.krystals.crystal.analysis.bonding.BondValence
+import com.krystals.crystal.analysis.editing.*
+import com.krystals.crystal.analysis.expansion.SymmetryExpander
+import com.krystals.crystal.analysis.model.*
+import com.krystals.crystal.core.ExpressionParser
+import com.krystals.crystal.core.SpaceGroupCatalog
+import com.krystals.crystal.core.UnitCell
+import com.krystals.crystal.core.Vec3
 import kotlin.math.max
 import kotlin.math.PI
 import kotlin.math.abs
@@ -471,7 +462,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     // the distance window), not just rules whose sites are gone.
     // Per v0.5.2b: expand + grid once and reuse across all rules so MOF-scale cells don't freeze.
     val bondGrid = remember(tab.structure) {
-        val atoms = CrystalEngine.expandAsymmetricUnit(tab.structure)
+        val atoms = SymmetryExpander.expand(tab.structure)
         BondGrid(atoms, tab.structure, BondRuleMatching.estimateCellSize(tab.structure)) to atoms
     }
     val visibleRules = rules.filter { rule ->
@@ -485,7 +476,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     fun rebuildAsync(source: RadiusSource, epsilon: Double, skipConfirm: Boolean) {
         // Per v0.5.0: large cells prompted to confirm before a manual smart-ionic rebuild.
         if (source == RadiusSource.SMART_IONIC && !skipConfirm &&
-            CrystalEngine.expandAsymmetricUnit(tab.structure).size > BondValence.SMART_IONIC_ATOM_LIMIT) {
+            SymmetryExpander.expand(tab.structure).size > BondValence.SMART_IONIC_ATOM_LIMIT) {
             confirmSmartIonic = true
             return
         }
@@ -688,11 +679,11 @@ private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRun
         Button(onClick = {
             runCatching {
                 val expansion = Expansion(x, y, z)
-                val base = com.krystals.core.CrystalEngine.expandAsymmetricUnit(tab.structure).size
-                require(base.toLong() * expansion.multiplier <= com.krystals.core.CrystalEngine.MAX_RENDERED_ATOMS) { "100,000 atom limit exceeded" }
+                val base = SymmetryExpander.expand(tab.structure).size
+                require(base.toLong() * expansion.multiplier <= BondDetector.MAX_RENDERED_ATOMS) { "100,000 atom limit exceeded" }
                 // Per v0.5.3b: warn if the shell materialisation will degrade to avoid OOM.
-                val degrade = com.krystals.core.CrystalEngine.estimatePeakAtomCount(base, expansion) >
-                    com.krystals.core.CrystalEngine.SHELL_DEGRADE_THRESHOLD
+                val degrade = BondDetector.estimatePeakAtomCount(base, expansion) >
+                    BondDetector.SHELL_DEGRADE_THRESHOLD
                 tab.expansion = expansion
                 degrade
             }.onSuccess { degrade ->
@@ -728,10 +719,10 @@ private fun ExpansionCluster(label: String, value: Int, onValue: (Int) -> Unit) 
 fun AppearanceDialog(
     tab: DocumentTab,
     onDismiss: () -> Unit,
-    onApplied: (com.krystals.core.ViewerAppearance) -> Unit = {},
+    onApplied: (ViewerAppearance) -> Unit = {},
     // Per v0.5.2a: press-and-hold Preview callbacks. onPreviewStart hands the in-dialog appearance
     // up so the viewer can render with it; onPreviewEnd restores the dialog.
-    onPreviewStart: (com.krystals.core.ViewerAppearance) -> Unit = {},
+    onPreviewStart: (ViewerAppearance) -> Unit = {},
     onPreviewEnd: () -> Unit = {},
 ) {
     var appearance by remember { mutableStateOf(tab.appearance) }
@@ -818,7 +809,7 @@ fun AppearanceDialog(
                 if (appearance.showAxes) {
                     Spacer(Modifier.weight(1f))
                     DropdownField(localized("坐标系", "System"), axisLabels[appearance.axisMode.ordinal], axisLabels) {
-                        appearance = appearance.copy(axisMode = com.krystals.core.AxisMode.entries[axisLabels.indexOf(it)])
+                        appearance = appearance.copy(axisMode = AxisMode.entries[axisLabels.indexOf(it)])
                     }
                 }
             }
@@ -921,7 +912,7 @@ private fun ToggleRow(label: String, checked: Boolean, onChecked: (Boolean) -> U
 private fun LabeledSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, percentage: Boolean = false, steps: Int = 0, onValue: (Float) -> Unit) { Text("$label  ${if (percentage) "%.0f%%".format(value * 100) else "%.1f".format(value)}"); Slider(value, onValue, valueRange = range, steps = steps) }
 
 @Composable
-private fun AtomAppearancePreview(appearance: com.krystals.core.ViewerAppearance, modifier: Modifier = Modifier) {
+private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifier = Modifier) {
     Surface(modifier, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
         Canvas(Modifier.fillMaxSize().padding(10.dp)) {
             val radius = size.minDimension * 0.38f
@@ -955,7 +946,7 @@ private fun AtomAppearancePreview(appearance: com.krystals.core.ViewerAppearance
  * (近=正: near +3 clear, far -3 faded). The nearest is labelled "+3", the farthest "-3".
  */
 @Composable
-private fun DepthCueingPreview(appearance: com.krystals.core.ViewerAppearance, modifier: Modifier = Modifier) {
+private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier = Modifier) {
     val bgCompose = MaterialTheme.colorScheme.surfaceVariant
     Surface(modifier, shape = RoundedCornerShape(16.dp), color = bgCompose) {
         Canvas(Modifier.fillMaxSize().padding(8.dp)) {
@@ -993,7 +984,7 @@ private fun DepthCueingPreview(appearance: com.krystals.core.ViewerAppearance, m
 /** Draws one lit preview sphere at [c] with radius [r], world-light highlight; colour blends
  *  toward [bg] by [fog] (opacity unchanged), mirroring the renderer's depth cueing. */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
-    c: Offset, r: Float, appearance: com.krystals.core.ViewerAppearance, fog: Float, bg: Color,
+    c: Offset, r: Float, appearance: ViewerAppearance, fog: Float, bg: Color,
 ) {
     val base = Color(0xFF747479).blend(bg, fog)
     drawCircle(base, r, c)

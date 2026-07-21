@@ -21,4 +21,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Krystals"
-include(":app", ":crystal-core", ":crystal-io", ":renderer")
+include(":app", ":crystal-analysis", ":crystal-core", ":crystal-data", ":crystal-io", ":renderer")

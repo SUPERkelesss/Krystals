@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.krystals.renderer"
+    namespace = "com.krystals.crystal.renderer"
     compileSdk = 36
 
     defaultConfig { minSdk = 26 }
@@ -18,7 +18,7 @@ android {
 }
 
 dependencies {
-    api(project(":crystal-core"))
+    api(project(":crystal-analysis"))
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")

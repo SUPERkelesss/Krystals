@@ -66,28 +66,47 @@ flowchart TB
     subgraph io["crystal-io · CIF 文件 IO"]
         Codec["CifCodec<br/>无损 CIF 解析/回写"]
     end
-    subgraph core["crystal-core · 纯 JVM 核心"]
-        Engine["CrystalEngine<br/>对称展开 / 成键"]
+    subgraph analysis["crystal-analysis · 晶体分析"]
+        Symmetry["SymmetryExpander<br/>AtomImage 展开"]
+        Bonds["BondDetector / BondValence<br/>BondNetwork"]
+        Coordination["CoordinationAnalyzer"]
+        Hull["PolyhedronHull"]
         Editor["CrystalEditor<br/>EditCommand 不可变编辑"]
+    end
+    subgraph core["crystal-core · 晶体学基础类型"]
+        Geometry["Geometry / Symmetry"]
         SG["SpaceGroupCatalog<br/>230 空间群"]
+    end
+    subgraph data["crystal-data · 编译期数据表"]
+        Elements["元素 / 离子数据"]
+        SpaceGroups["空间群符号 / 操作"]
     end
 
     UI --> VP
     UI --> Edit
     UI --> VM
     Repo -->|"parseStructure"| Codec
-    Codec --> Engine
+    Codec -->|"CrystalStructure"| Symmetry
     Edit -->|"EditCommand"| Editor
-    Editor --> Engine
-    Engine -->|"buildScene → SceneSnapshot"| VP
-    Engine -->|"buildScene"| Exp
+    Editor --> Symmetry
+    Symmetry --> Bonds
+    Bonds -->|"BondNetwork"| VP
+    Bonds -->|"BondNetwork"| Exp
+    Bonds --> Coordination
+    Coordination --> Hull
     Repo -->|"write 回写"| Codec
-    Engine --> SG
+    Symmetry --> Geometry
+    SG --> SpaceGroups
+    Bonds --> Elements
 
     app -.->|依赖| renderer
-    renderer -.->|api 依赖| core
-    io -.->|依赖| core
+    app -.->|依赖| analysis
     app -.->|依赖| io
+    renderer -.->|api 依赖| analysis
+    io -.->|依赖| analysis
+    analysis -.->|依赖| core
+    analysis -.->|依赖| data
+    core -.->|依赖| data
 ```
 
 ---
