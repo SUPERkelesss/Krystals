@@ -63,8 +63,10 @@ flowchart TB
         VP["CrystalViewport<br/>Canvas 视口"]
         Exp["CrystalImageExporter<br/>高清位图导出"]
     end
-    subgraph core["crystal-core · 纯 JVM 核心"]
+    subgraph io["crystal-io · CIF 文件 IO"]
         Codec["CifCodec<br/>无损 CIF 解析/回写"]
+    end
+    subgraph core["crystal-core · 纯 JVM 核心"]
         Engine["CrystalEngine<br/>对称展开 / 成键"]
         Editor["CrystalEditor<br/>EditCommand 不可变编辑"]
         SG["SpaceGroupCatalog<br/>230 空间群"]
@@ -74,6 +76,7 @@ flowchart TB
     UI --> Edit
     UI --> VM
     Repo -->|"parseStructure"| Codec
+    Codec --> Engine
     Edit -->|"EditCommand"| Editor
     Editor --> Engine
     Engine -->|"buildScene → SceneSnapshot"| VP
@@ -83,7 +86,8 @@ flowchart TB
 
     app -.->|依赖| renderer
     renderer -.->|api 依赖| core
-    app -.->|依赖| core
+    io -.->|依赖| core
+    app -.->|依赖| io
 ```
 
 ---
