@@ -1,11 +1,18 @@
-package com.krystals.crystal.core
+package com.krystals.crystal.core.symmetry
+
+import com.krystals.crystal.core.coordinate.FractionalCoordinate
+import com.krystals.crystal.core.math.Mat3
+import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.periodic.PeriodicBoundary
 
 data class SymmetryOperation(
     val rotation: Mat3,
     val translation: Vec3,
     val source: String,
 ) {
-    fun apply(value: Vec3) = (rotation * value + translation).wrapped()
+    fun apply(value: FractionalCoordinate): FractionalCoordinate = PeriodicBoundary.wrap(
+        FractionalCoordinate.fromVec3(rotation * value.toVec3() + translation),
+    )
 
     companion object {
         val IDENTITY = SymmetryOperation(Mat3.IDENTITY, Vec3.ZERO, "x,y,z")
@@ -20,7 +27,11 @@ data class SymmetryOperation(
                 Vec3(parsed[0].first.y, parsed[1].first.y, parsed[2].first.y),
                 Vec3(parsed[0].first.z, parsed[1].first.z, parsed[2].first.z),
             )
-            return SymmetryOperation(rotation, Vec3(parsed[0].second, parsed[1].second, parsed[2].second), clean)
+            return SymmetryOperation(
+                rotation,
+                Vec3(parsed[0].second, parsed[1].second, parsed[2].second),
+                clean,
+            )
         }
 
         private fun parseLinearExpression(expression: String): Pair<Vec3, Double> {
@@ -57,4 +68,3 @@ fun parseFraction(value: String): Double {
     val parts = clean.split('/', limit = 2)
     return parts[0].toDouble() / parts[1].toDouble()
 }
-

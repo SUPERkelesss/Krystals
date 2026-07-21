@@ -5,7 +5,8 @@ import android.content.SharedPreferences
 import android.util.Log
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.ParsedStructure
-import com.krystals.crystal.core.SymmetryOperation
+import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
+import com.krystals.crystal.core.symmetry.SymmetryOperation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
@@ -162,12 +163,13 @@ object MaterialsProject {
                 // Restore the real space-group label for display, but keep an EXPLICIT identity op
                 // list so CrystalStructure.effectiveSymmetryOperations does not fall back to the full
                 // op set of the real space group (which would re-expand the already-complete cell).
+                val correctedSymbol = realSpaceGroup?.symbol ?: legacy.structure.spaceGroup.symbol
+                val correctedNumber = realSpaceGroup?.number ?: legacy.structure.spaceGroup.number
                 val corrected = legacy.structure.copy(
-                    spaceGroupName = realSpaceGroup?.symbol ?: legacy.structure.spaceGroupName,
-                    spaceGroupNumber = realSpaceGroup?.number ?: legacy.structure.spaceGroupNumber,
+                    spaceGroup = SpaceGroupCatalog.resolve(correctedSymbol, correctedNumber),
                     symmetryOperations = listOf(SymmetryOperation.IDENTITY),
                 )
-                Log.d("MP", "downloadCif ok (legacy): $materialId -> ${corrected.sites.size} sites, sg=${corrected.spaceGroupName}")
+                Log.d("MP", "downloadCif ok (legacy): $materialId -> ${corrected.sites.size} sites, sg=${corrected.spaceGroup.symbol}")
                 legacy.copy(structure = corrected)
             } ?: run {
                 // New letter-format id (or legacy unavailable): use the primitive cell from next-gen,
@@ -176,10 +178,10 @@ object MaterialsProject {
                 target.parentFile?.mkdirs()
                 target.writeText(cif, Charsets.UTF_8)
                 val p = CifCodec.parseStructure(cif)
-                Log.d("MP", "downloadCif ok (primitive): $materialId -> ${p.structure.sites.size} sites, sg=${p.structure.spaceGroupName}")
+                Log.d("MP", "downloadCif ok (primitive): $materialId -> ${p.structure.sites.size} sites, sg=${p.structure.spaceGroup.symbol}")
                 p
             }
-            Log.d("MP", "downloadCif ok: $materialId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroupName}")
+            Log.d("MP", "downloadCif ok: $materialId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroup.symbol}")
             parsed
         }
     }

@@ -1,9 +1,9 @@
 package com.krystals.crystal.io
 
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
-import com.krystals.crystal.analysis.model.AtomSite
-import com.krystals.crystal.analysis.model.PeriodicTable
-import com.krystals.crystal.core.Vec3
+import com.krystals.crystal.core.coordinate.FractionalCoordinate
+import com.krystals.crystal.core.model.Site
+import com.krystals.crystal.core.model.Species
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -39,31 +39,32 @@ class CifCodecTest {
         val parsed = CifCodec.parseStructure(simple)
         val atoms = SymmetryExpander.expand(parsed.structure)
         assertEquals(2, atoms.size)
-        assertEquals(1.0 / 3.0, parsed.structure.sites.single().fractional.x, 1e-8)
+        assertEquals(1.0 / 3.0, parsed.structure.sites.single().fractionalCoordinate.x, 1e-8)
     }
 
     @Test
     fun preservesUnknownCommentsWhenWriting() {
         val parsed = CifCodec.parseStructure(simple)
-        val written = CifCodec.write(parsed, parsed.structure.copy(cell = parsed.structure.cell.copy(a = 5.0)))
+        val written = CifCodec.write(
+            parsed,
+            parsed.structure.copy(lattice = parsed.structure.lattice.copy(a = 5.0)),
+            parsed.bondConfiguration,
+            parsed.displayMetadata,
+        )
         assertTrue("# preserved comment" in written)
-        assertEquals(5.0, CifCodec.parseStructure(written).structure.cell.a)
+        assertEquals(5.0, CifCodec.parseStructure(written).structure.lattice.a)
     }
 
     @Test
     fun elementColorOverridesRoundTrip() {
         val parsed = CifCodec.newDocument()
         val structure = parsed.structure.copy(
-            sites = listOf(AtomSite("c1", "C1", "C", Vec3.ZERO)),
-            elementArgbOverrides = mapOf("C" to 0xFFFF0000L),
+            sites = listOf(Site("c1", "C1", Species("C"), FractionalCoordinate.ZERO)),
         )
-        val written = CifCodec.write(parsed, structure)
+        val metadata = CifDisplayMetadata(mapOf("C" to 0xFFFF0000L))
+        val written = CifCodec.write(parsed, structure, parsed.bondConfiguration, metadata)
         val reparsed = CifCodec.parseStructure(written)
-        assertEquals(0xFFFF0000L, reparsed.structure.elementArgbOverrides["C"])
-        assertEquals(
-            PeriodicTable.resolveArgb("C", reparsed.structure.elementArgbOverrides),
-            reparsed.structure.elementArgbOverrides["C"],
-        )
+        assertEquals(0xFFFF0000L, reparsed.displayMetadata.elementArgbOverrides["C"])
     }
 
     @Test
@@ -91,7 +92,12 @@ class CifCodecTest {
             C1 O1 1.2
         """.trimIndent()
         val parsed = CifCodec.parseStructure(source)
-        assertEquals(1, parsed.structure.bondRules.size)
-        assertEquals(1.2, parsed.structure.bondRules.single().maxAngstrom, 1e-8)
+        assertEquals(1, parsed.bondConfiguration.rules.size)
+        assertEquals(1.2, parsed.bondConfiguration.rules.single().maxAngstrom, 1e-8)
+    }
+
+    @Test fun preservesUnknownSpaceGroupSymbol() {
+        val source = simple.replace("'P -1'", "'Unknown group'")
+        assertEquals("Unknown group", CifCodec.parseStructure(source).structure.spaceGroup.symbol)
     }
 }

@@ -219,7 +219,7 @@ object CrystallographyOpenDatabase {
                 target.parentFile?.mkdirs()
                 target.writeText(cif, Charsets.UTF_8)
                 val parsed = CifCodec.parseStructure(cif)
-                Log.d("COD", "downloadCif ok: $fileId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroupName}")
+                Log.d("COD", "downloadCif ok: $fileId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroup.symbol}")
                 // Per v0.5.0: bond-rule synthesis is deferred to the caller's async path so the UI
                 // can show a "computing" overlay — return the parsed structure as-is here.
                 parsed

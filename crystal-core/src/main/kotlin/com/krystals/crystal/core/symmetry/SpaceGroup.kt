@@ -1,29 +1,41 @@
-package com.krystals.crystal.core
+package com.krystals.crystal.core.symmetry
 
 import com.krystals.crystal.data.SpaceGroupData
 
-data class SpaceGroupInfo(val number: Int, val symbol: String, val crystalSystem: String, val pointGroup: String)
+data class SpaceGroup(
+    val symbol: String,
+    val number: Int? = null,
+    val crystalSystem: String? = null,
+    val pointGroup: String? = null,
+)
 
 object SpaceGroupCatalog {
-    val all: List<SpaceGroupInfo> = SpaceGroupData.symbols.mapIndexed { index, symbol ->
+    val all: List<SpaceGroup> = SpaceGroupData.symbols.mapIndexed { index, symbol ->
         val number = index + 1
-        SpaceGroupInfo(number, symbol, crystalSystem(number), pointGroup(number))
+        SpaceGroup(symbol, number, crystalSystem(number), pointGroup(number))
     }
 
-    fun find(name: String): SpaceGroupInfo? {
-        val normalized = name.replace(" ", "").replace("_", "").lowercase()
-        return all.firstOrNull { it.symbol.replace("_", "").lowercase() == normalized }
+    fun find(name: String): SpaceGroup? {
+        val normalized = normalize(name)
+        return all.firstOrNull { normalize(it.symbol) == normalized }
+    }
+
+    fun resolve(symbol: String, number: Int? = null): SpaceGroup {
+        val catalog = number?.let { all.getOrNull(it - 1) } ?: find(symbol)
+        return if (catalog == null) SpaceGroup(symbol, number) else catalog.copy(symbol = symbol, number = number ?: catalog.number)
     }
 
     fun operations(name: String): List<SymmetryOperation> {
         val number = find(name)?.number ?: return listOf(SymmetryOperation.IDENTITY)
-        return SpaceGroupData.operationsTable[number]?.map { SymmetryOperation.parse(it) }
+        return SpaceGroupData.operationsTable[number]?.map(SymmetryOperation::parse)
             ?: listOf(SymmetryOperation.IDENTITY)
     }
 
     val RHOMBOHEDRAL_GROUPS: Set<Int> = setOf(146, 148, 155, 160, 161, 166, 167)
 
     fun isRhombohedral(name: String): Boolean = find(name)?.number in RHOMBOHEDRAL_GROUPS
+
+    private fun normalize(value: String) = value.replace(" ", "").replace("_", "").lowercase()
 
     private fun crystalSystem(number: Int): String = when (number) {
         1, 2 -> "Triclinic"

@@ -13,18 +13,13 @@ import android.graphics.RectF
 import android.graphics.Shader
 import com.krystals.crystal.analysis.bonding.BondNetwork
 import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
-import com.krystals.crystal.analysis.model.AxisMode
-import com.krystals.crystal.analysis.model.BondColorMode
-import com.krystals.crystal.analysis.model.FrameMode
-import com.krystals.crystal.analysis.model.LineStyle
-import com.krystals.crystal.analysis.model.PeriodicTable
-import com.krystals.crystal.analysis.model.ViewerAppearance
 import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
-import com.krystals.crystal.core.Mat3
-import com.krystals.crystal.core.Vec3
-import com.krystals.crystal.core.angleDegrees
-import com.krystals.crystal.core.dihedralDegrees
-import com.krystals.crystal.core.distance
+import com.krystals.crystal.core.coordinate.FractionalCoordinate
+import com.krystals.crystal.core.math.Mat3
+import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.math.angleDegrees
+import com.krystals.crystal.core.math.dihedralDegrees
+import com.krystals.crystal.core.math.distance
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -120,6 +115,7 @@ object CrystalImageExporter {
     fun render(
         snapshot: BondNetwork,
         appearance: ViewerAppearance,
+        renderConfiguration: RenderConfiguration,
         controller: ViewerController,
         visibility: ViewerVisibility,
         selectedAtomIds: List<Long>,
@@ -153,11 +149,11 @@ object CrystalImageExporter {
                 (it.isExternalShell && it.id in visibleExternalShellAtomIds)
         }
         val center = Vec3(
-            (snapshot.atoms.minOf { it.cartesian.x } + snapshot.atoms.maxOf { it.cartesian.x }) / 2,
-            (snapshot.atoms.minOf { it.cartesian.y } + snapshot.atoms.maxOf { it.cartesian.y }) / 2,
-            (snapshot.atoms.minOf { it.cartesian.z } + snapshot.atoms.maxOf { it.cartesian.z }) / 2,
+            (snapshot.atoms.minOf { it.cartesianCoordinate.x } + snapshot.atoms.maxOf { it.cartesianCoordinate.x }) / 2,
+            (snapshot.atoms.minOf { it.cartesianCoordinate.y } + snapshot.atoms.maxOf { it.cartesianCoordinate.y }) / 2,
+            (snapshot.atoms.minOf { it.cartesianCoordinate.z } + snapshot.atoms.maxOf { it.cartesianCoordinate.z }) / 2,
         )
-        val allRotated = snapshot.atoms.map { controller.rotation * (it.cartesian - center) }
+        val allRotated = snapshot.atoms.map { controller.rotation * (it.cartesianCoordinate.toVec3() - center) }
         val extentX = allRotated.maxOf { it.x } - allRotated.minOf { it.x }
         val extentY = allRotated.maxOf { it.y } - allRotated.minOf { it.y }
         val scale = min(width / max(1.0, extentX), height / max(1.0, extentY)).toFloat() * 0.72f * controller.zoom
@@ -168,9 +164,23 @@ object CrystalImageExporter {
         // Per v0.3.0: project ALL atoms (so bonds/polyhedra survive hiding an atom); render only
         // visible atoms as AtomPrimitive.
         val points = snapshot.atoms.map { atom ->
-            val rotated = controller.rotation * (atom.cartesian - center)
+            val rotated = controller.rotation * (atom.cartesianCoordinate.toVec3() - center)
             val (x, y) = screen(rotated)
-            Point(atom.id, atom.element, atom.siteId, atom.siteLabel, x, y, rotated.z, (PeriodicTable.defaultRadius(atom.element).toFloat() * scale).coerceIn(4.5f, 42f), atom.occupancy, atom.fractional, atom.cartesian, atom.isShell, atom.isBoundaryImage)
+            Point(
+                atom.id,
+                atom.species.symbol,
+                atom.siteId,
+                atom.siteLabel,
+                x,
+                y,
+                rotated.z,
+                (RenderPalette.defaultRadius(atom.species.symbol).toFloat() * scale).coerceIn(4.5f, 42f),
+                atom.occupancy,
+                atom.fractionalCoordinate.toVec3(),
+                atom.cartesianCoordinate.toVec3(),
+                atom.isShell,
+                atom.isBoundaryImage,
+            )
         }
         val visiblePointIds = visible.map { it.id }.toSet()
         val visiblePoints = points.filter { it.atomId in visiblePointIds }
@@ -204,7 +214,14 @@ object CrystalImageExporter {
                     if (vertices.size >= 3) {
                         // Per v0.3.43: draw each face as its own primitive sorted by the face's nearest
                         // vertex depth, instead of one block at the centre depth.
-                        drawPolyhedronFacePrimitives(center, vertices, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.rotation).forEach { add(it) }
+                        drawPolyhedronFacePrimitives(
+                            center,
+                            vertices,
+                            appearance,
+                            renderConfiguration.elementArgbOverrides,
+                            renderConfiguration.siteArgbOverrides,
+                            controller.rotation,
+                        ).forEach { add(it) }
                     }
                 }
             }
@@ -238,9 +255,9 @@ object CrystalImageExporter {
             when (primitive) {
                 // Per v0.5.3a: each object's colour blends toward the background by its fog amount;
                 // opacity is unchanged. Bonds split at the midpoint (each half by its endpoint's fog).
-                is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, selectedAtomIds, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, dofFog(primitive.depth), bgArgb)
-                is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites, ::dofFog, bgArgb)
-                is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, controller.rotation, dofFog(primitive.depth), bgArgb)
+                is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, selectedAtomIds, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, dofFog(primitive.depth), bgArgb)
+                is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, visibility.hiddenSites, ::dofFog, bgArgb)
+                is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, controller.rotation, dofFog(primitive.depth), bgArgb)
             }
         }
         // Per v0.3.0: draw locked (persistent) + active measurement/info windows.
@@ -253,7 +270,11 @@ object CrystalImageExporter {
 
     private fun drawAtom(canvas: Canvas, point: Point, appearance: ViewerAppearance, selectedAtomIds: List<Long>, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), fog: Float = 0f, bgArgb: Int = 0xFF101014.toInt()) {
         // Per v0.5.3a: depth cueing fades COLOUR toward the background by [fog]; opacity is unchanged.
-        val rawArgb = PeriodicTable.resolveSiteArgb(point.siteId, point.element, siteArgbOverrides, elementArgbOverrides).toInt()
+        val rawArgb = RenderPalette.resolveSiteArgb(
+            point.siteId,
+            point.element,
+            RenderConfiguration(elementArgbOverrides, siteArgbOverrides),
+        ).toInt()
         val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
         if (opacity < 0.01f) {
             if (point.atomId in selectedAtomIds) {
@@ -377,8 +398,9 @@ object CrystalImageExporter {
             drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, pack(blend(u, bgArgb, fogA), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
             drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, pack(blend(u, bgArgb, fogB), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         } else {
-            val baseA = PeriodicTable.resolveSiteArgb(a.siteId, a.element, siteArgbOverrides, elementArgbOverrides).toInt()
-            val baseB = PeriodicTable.resolveSiteArgb(b.siteId, b.element, siteArgbOverrides, elementArgbOverrides).toInt()
+            val configuration = RenderConfiguration(elementArgbOverrides, siteArgbOverrides)
+            val baseA = RenderPalette.resolveSiteArgb(a.siteId, a.element, configuration).toInt()
+            val baseB = RenderPalette.resolveSiteArgb(b.siteId, b.element, configuration).toInt()
             drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, pack(blend(baseA, bgArgb, fogA), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
             drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, pack(blend(baseB, bgArgb, fogB), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         }
@@ -440,7 +462,11 @@ object CrystalImageExporter {
     ) {
         val verts = face.faceVerts
         if (verts.size < 3) return
-        val rawArgb = PeriodicTable.resolveSiteArgb(face.center.siteId, face.center.element, siteArgbOverrides, elementArgbOverrides).toInt()
+        val rawArgb = RenderPalette.resolveSiteArgb(
+            face.center.siteId,
+            face.center.element,
+            RenderConfiguration(elementArgbOverrides, siteArgbOverrides),
+        ).toInt()
         // Per v0.5.3a: fog the RGB toward the background; alpha = polyhedron opacity only.
         val baseArgb = blend(rawArgb, bgArgb, fog)
         val alpha = appearance.polyhedronOpacity.coerceIn(0f, 1f)
@@ -531,7 +557,7 @@ object CrystalImageExporter {
 
     private fun drawAxes(canvas: Canvas, snapshot: BondNetwork, appearance: ViewerAppearance, controller: ViewerController, width: Int, height: Int) {
         val directions: List<Vec3> = when (appearance.axisMode) {
-            AxisMode.ABC -> listOf(snapshot.structure.cell.matrix.a, snapshot.structure.cell.matrix.b, snapshot.structure.cell.matrix.c)
+            AxisMode.ABC -> listOf(snapshot.structure.lattice.matrix.a, snapshot.structure.lattice.matrix.b, snapshot.structure.lattice.matrix.c)
             AxisMode.XYZ -> listOf(Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0))
         }
         val labels = when (appearance.axisMode) {
@@ -610,7 +636,11 @@ object CrystalImageExporter {
                 Vec3(ix.toDouble(), iy + 1.0, iz.toDouble()), Vec3(ix + 1.0, iy + 1.0, iz.toDouble()),
                 Vec3(ix.toDouble(), iy.toDouble(), iz + 1.0), Vec3(ix + 1.0, iy.toDouble(), iz + 1.0),
                 Vec3(ix.toDouble(), iy + 1.0, iz + 1.0), Vec3(ix + 1.0, iy + 1.0, iz + 1.0),
-            ).map { controller.rotation * (snapshot.structure.cell.toCartesian(it) - center) }
+            ).map {
+                controller.rotation * (
+                    snapshot.structure.lattice.toCartesian(FractionalCoordinate.fromVec3(it)).toVec3() - center
+                )
+            }
                 .map { Pair(width / 2f + controller.panX + it.x.toFloat() * scale, height / 2f + controller.panY - it.y.toFloat() * scale) }
             edges.forEach { (a, b) -> canvas.drawLine(vertices[a].first, vertices[a].second, vertices[b].first, vertices[b].second, paint) }
         }
@@ -628,7 +658,7 @@ object CrystalImageExporter {
             canvas.drawLine(selected[index].x, selected[index].y, selected[index + 1].x, selected[index + 1].y, linePaint)
         }
         val atoms = snapshot.atoms.associateBy { it.id }
-        val positions = selected.mapNotNull { atoms[it.atomId]?.cartesian }
+        val positions = selected.mapNotNull { atoms[it.atomId]?.cartesianCoordinate?.toVec3() }
         val label = when (mode) {
             MeasurementMode.LENGTH -> "%.4f Å".format(distance(positions[0], positions[1]))
             MeasurementMode.ANGLE -> "%.3f°".format(angleDegrees(positions[0], positions[1], positions[2]))

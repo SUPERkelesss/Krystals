@@ -44,16 +44,18 @@ The debug APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ### `crystal-core`
 
-- `Geometry.kt`: `Vec3`, `Int3`, `Mat3`, `UnitCell`, measurements, and rotations.
-- `Symmetry.kt`: `SymmetryOperation` and fractional-number parsing.
-- `SpaceGroupCatalog.kt`: name lookup, crystal-system/point-group derivation, rhombohedral classification, and conversion of data-table strings to `SymmetryOperation` values.
-- `ExpressionParser.kt`: safe arithmetic used by cell and coordinate input.
+- `model`: pure `CrystalStructure`, `Site`, `Species`, and `AtomImage` values.
+- `lattice`: strongly typed `Lattice` matrices, volume, and coordinate conversion.
+- `coordinate`: `FractionalCoordinate` and `CartesianCoordinate` values with explicit `Vec3` conversion.
+- `symmetry`: `SpaceGroup`, `SpaceGroupCatalog`, `SymmetryOperation`, and fractional-number parsing.
+- `math`: `Vec3`, `Mat3`, measurements, rotations, and safe expression parsing.
+- `periodic`: `Int3` cell offsets and periodic-boundary operations.
 
 ### `crystal-analysis`
 
-- `model/Model.kt`: `CrystalStructure`, `AtomSite`, `Expansion`, appearance models, and the stable `PeriodicTable` query entry point backed by `crystal-data`.
+- `model/Model.kt`: expansion and crystal-information values plus chemistry-only periodic-table queries.
 - `expansion/SymmetryExpander.kt`: expands asymmetric sites to `AtomImage` values.
-- `bonding/BondDetector.kt`: creates `BondNetwork` values and detects periodic bonds. Boundary-image and external-shell behavior must remain unchanged.
+- `bonding`: owns `BondRule`, `BondConfiguration`, `Bond`, `BondNetwork`, detection, matching, and bond-valence analysis. Boundary-image and external-shell behavior must remain unchanged.
 - `bonding/BondValence.kt`: smart-ionic rules and per-site bond-valence sums.
 - `bonding/BondRuleMatching.kt`: efficient rule visibility checks.
 - `coordination/CoordinationAnalyzer.kt`: builds bond adjacency while respecting the renderer's `showBonds` and hidden-bond filters.
@@ -63,11 +65,11 @@ The debug APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ### `crystal-io`
 
-`CifCodec.kt` parses multi-block CIF 1.1 content into `CifDocument`/`ParsedStructure` and writes structural changes back while preserving unrelated content and comments. It currently supports CIF only.
+`CifCodec.kt` parses multi-block CIF 1.1 content into `CifDocument`/`ParsedStructure` and writes structural changes back while preserving unrelated content and comments. `ParsedStructure` separates the core structure, analysis bond configuration, and IO-only display metadata. It currently supports CIF only.
 
 ### `renderer`
 
-`CrystalViewport.kt` and `CrystalImageExporter.kt` consume `BondNetwork`. Polyhedron vertices come from `CoordinationAnalyzer`; hidden external-shell ligands still complete coordination even when their bond line is not drawn. Boundary images remain visible by default, while external-shell atoms require `extendAcrossCell`.
+`CrystalViewport.kt` and `CrystalImageExporter.kt` consume `BondNetwork` plus an explicit `RenderConfiguration`. Renderer owns all appearance models, color resolution, and display-radius queries. Polyhedron vertices come from `CoordinationAnalyzer`; hidden external-shell ligands still complete coordination even when their bond line is not drawn. Boundary images remain visible by default, while external-shell atoms require `extendAcrossCell`.
 
 ### `app`
 
@@ -76,11 +78,11 @@ The app owns Android UI and platform I/O only. CIF conversion goes through `crys
 ## Data flow
 
 1. `app` reads CIF text and passes it to `crystal-io`.
-2. `CifCodec.parseStructure` produces a `CrystalStructure`.
+2. `CifCodec.parseStructure` produces a core structure, bond configuration, and CIF display metadata.
 3. `SymmetryExpander` creates atom images and `BondDetector` creates a `BondNetwork`.
 4. `CoordinationAnalyzer` and `PolyhedronHull` provide renderer-facing analysis.
 5. `CrystalViewport` or `CrystalImageExporter` renders the network.
-6. Saving passes the edited structure back to `CifCodec.write`.
+6. Saving passes the edited structure, bond configuration, and converted display metadata back to `CifCodec.write`.
 
 ## Contributor notes
 

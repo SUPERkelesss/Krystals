@@ -1,6 +1,6 @@
 package com.krystals.crystal.analysis.polyhedron
 
-import com.krystals.crystal.core.Vec3
+import com.krystals.crystal.core.math.Vec3
 import kotlin.math.atan2
 import kotlin.math.abs
 
@@ -189,4 +189,3 @@ private fun planarPolygonFaces(center: Vec3, points: List<Vec3>): List<List<Vec3
     }.sortedBy { it.second }.map { it.first }
     return listOf(ordered)
 }
-

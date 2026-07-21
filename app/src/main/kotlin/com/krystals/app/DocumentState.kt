@@ -6,12 +6,18 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
-import com.krystals.crystal.analysis.editing.CrystalEditor
-import com.krystals.crystal.analysis.model.*
+import com.krystals.crystal.analysis.bonding.BondConfiguration
+import com.krystals.crystal.analysis.editing.EditResult
+import com.krystals.crystal.analysis.model.Expansion
+import com.krystals.crystal.analysis.model.RadiusSource
+import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.io.CifCodec
+import com.krystals.crystal.io.CifDisplayMetadata
 import com.krystals.crystal.io.ParsedStructure
 import com.krystals.crystal.renderer.LockedMeasurement
 import com.krystals.crystal.renderer.MeasurementMode
+import com.krystals.crystal.renderer.RenderConfiguration
+import com.krystals.crystal.renderer.ViewerAppearance
 import com.krystals.crystal.renderer.ViewerVisibility
 import java.util.UUID
 
@@ -21,12 +27,16 @@ class DocumentTab(
     val id: String = UUID.randomUUID().toString(),
     parsed: ParsedStructure,
     structure: CrystalStructure,
+    bondConfiguration: BondConfiguration,
+    renderConfiguration: RenderConfiguration,
     name: String,
     uri: Uri? = null,
     isNew: Boolean = false,
 ) {
     var parsed by mutableStateOf(parsed)
     var structure by mutableStateOf(structure)
+    var bondConfiguration by mutableStateOf(bondConfiguration)
+    var renderConfiguration by mutableStateOf(renderConfiguration)
     var name by mutableStateOf(name)
     var savedName by mutableStateOf(name)
     var uri by mutableStateOf(uri)
@@ -71,7 +81,15 @@ class KrystalsViewModel : ViewModel() {
     fun add(parsed: ParsedStructure, name: String, uri: Uri?, isNew: Boolean = false) {
         val existing = uri?.let { target -> tabs.indexOfFirst { it.uri == target } } ?: -1
         if (existing >= 0) { selectedIndex = existing; return }
-        tabs += DocumentTab(parsed = parsed, structure = parsed.structure, name = name, uri = uri, isNew = isNew).also {
+        tabs += DocumentTab(
+            parsed = parsed,
+            structure = parsed.structure,
+            bondConfiguration = parsed.bondConfiguration,
+            renderConfiguration = parsed.displayMetadata.toRenderConfiguration(),
+            name = name,
+            uri = uri,
+            isNew = isNew,
+        ).also {
             it.appearance = defaultAppearance
             // Per v0.2: when opening a CIF that already carries bond rules (e.g. other software's settings),
             // import them verbatim and do not synthesize additional rules.
@@ -83,7 +101,7 @@ class KrystalsViewModel : ViewModel() {
 
     /**
      * Per v0.5.0: open a parsed structure and, if it carries no bond rules, synthesize them off the
-     * UI thread via [onCompute] (which returns the structure with rules). The caller supplies the
+     * UI thread via [onCompute] (which returns both the structure and bond configuration). The caller supplies the
      * suspend compute so the UI can show a "computing" overlay around it. Returns once the tab is
      * added (rules applied if needed).
      */
@@ -92,23 +110,38 @@ class KrystalsViewModel : ViewModel() {
         name: String,
         uri: Uri?,
         isNew: Boolean = false,
-        onCompute: suspend (CrystalStructure) -> CrystalStructure,
+        onCompute: suspend (CrystalStructure, BondConfiguration) -> EditResult,
     ) {
         val existing = uri?.let { target -> tabs.indexOfFirst { it.uri == target } } ?: -1
         if (existing >= 0) { selectedIndex = existing; return }
-        val needsRules = parsed.structure.bondRules.isEmpty()
-        val structure = if (needsRules) onCompute(parsed.structure) else parsed.structure
-        tabs += DocumentTab(parsed = parsed, structure = structure, name = name, uri = uri, isNew = isNew).also {
+        val result = if (parsed.bondConfiguration.rules.isEmpty()) {
+            onCompute(parsed.structure, parsed.bondConfiguration)
+        } else {
+            EditResult(parsed.structure, parsed.bondConfiguration)
+        }
+        tabs += DocumentTab(
+            parsed = parsed,
+            structure = result.structure,
+            bondConfiguration = result.bondConfiguration,
+            renderConfiguration = parsed.displayMetadata.toRenderConfiguration(),
+            name = name,
+            uri = uri,
+            isNew = isNew,
+        ).also {
             it.appearance = defaultAppearance
         }
         selectedIndex = tabs.lastIndex
     }
 
     /** Per v0.5.0: synthesize bond rules for an already-added tab off the UI thread. */
-    suspend fun applyAutoBondRules(tab: DocumentTab, onCompute: suspend (CrystalStructure) -> CrystalStructure) {
-        if (tab.structure.bondRules.isNotEmpty()) return
-        val structure = onCompute(tab.structure)
-        tab.structure = structure
+    suspend fun applyAutoBondRules(
+        tab: DocumentTab,
+        onCompute: suspend (CrystalStructure, BondConfiguration) -> EditResult,
+    ) {
+        if (tab.bondConfiguration.rules.isNotEmpty()) return
+        val result = onCompute(tab.structure, tab.bondConfiguration)
+        tab.structure = result.structure
+        tab.bondConfiguration = result.bondConfiguration
         tab.dirty = true
     }
 
@@ -132,9 +165,18 @@ class KrystalsViewModel : ViewModel() {
         tabs.removeAt(index)
         selectedIndex = selectedIndex.coerceAtMost((tabs.size - 1).coerceAtLeast(0))
     }
-    fun updateStructure(tab: DocumentTab, structure: CrystalStructure) {
-        tab.structure = structure
+    fun updateAnalysis(tab: DocumentTab, result: EditResult) {
+        tab.structure = result.structure
+        tab.bondConfiguration = result.bondConfiguration
         tab.dirty = true
         tab.selectedAtomIds = emptyList()
     }
 }
+
+internal fun CifDisplayMetadata.toRenderConfiguration() = RenderConfiguration(
+    elementArgbOverrides = elementArgbOverrides,
+)
+
+internal fun RenderConfiguration.toCifDisplayMetadata() = CifDisplayMetadata(
+    elementArgbOverrides = elementArgbOverrides,
+)
