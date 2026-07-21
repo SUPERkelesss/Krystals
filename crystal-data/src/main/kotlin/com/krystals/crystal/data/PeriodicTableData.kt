@@ -1,157 +1,5 @@
 package com.krystals.crystal.data
 
-import kotlin.math.roundToInt
-
-/* Model declarations live in crystal-analysis. The historical prefix is retained as a block
- * comment so this mechanical table extraction does not risk altering any of the static data. 
-data class AtomSite(
-    val id: String,
-    val label: String,
-    val element: String,
-    val fractional: Vec3,
-    val occupancy: Double = 1.0,
-)
-
-data class ExpandedAtom(
-    val id: Long,
-    val siteId: String,
-    val siteLabel: String,
-    val element: String,
-    val fractional: Vec3,
-    val cartesian: Vec3,
-    val occupancy: Double,
-    val cellOffset: Int3,
-    // Per v0.3.4: true for atoms in the surrounding shell of neighbour cells that exist only to
-    // compute cross-cell bonds and complete coordination polyhedra. Shell atoms are hidden unless
-    // a bond rule explicitly extends across the cell boundary.
-    val isShell: Boolean = false,
-    // Per v0.3.41: true for shell atoms that lie on the face of the primary expansion region.
-    // Boundary images are displayed by default (they complete the visible unit-cell edges/faces),
-    // whereas external shell atoms remain hidden unless extendAcrossCell is set.
-    val isBoundaryImage: Boolean = false,
-) {
-    /** True for shell atoms that are not boundary images, i.e. genuine external neighbours. */
-    val isExternalShell: Boolean get() = isShell && !isBoundaryImage
-}
-
-enum class BondRuleSource { CUSTOM, EXPLICIT, AUTO }
-
-// Per v0.4.1/v0.5.0: radius source for bond-rule generation. SMART_IONIC (智能离子) is the default —
-// it derives a per-site Shannon crystal radius from a bond-valence-sum oxidation-state estimate
-// (see BondValence.kt) and falls back to BONDING when the structure can't be analysed. BONDING
-// (键合半径) and VDW are the manual alternatives; BONDING looks up the bonding-radius table first
-// and falls back to the covalent single-bond table for elements it lacks. The bonding-radius data
-// is licensed CC BY-SA 4.0, arXiv:2601.02017v1 [cond-mat.mtrl-sci] 05 Jan 2026.
-enum class RadiusSource { SMART_IONIC, BONDING, VDW }
-
-/** A bond-valence parameter pair (R0, B) for s = exp((R0 − R)/B). */
-data class BondValenceParam(val r0: Double, val b: Float)
-
-data class BondRule(
-    val siteA: String,
-    val siteB: String,
-    val minAngstrom: Double,
-    val maxAngstrom: Double,
-    val source: BondRuleSource = BondRuleSource.CUSTOM,
-    // Per v0.3.0: when true, bonds of this rule are detected across unit-cell boundaries (between
-    // an atom and its periodic image / a neighbour cell). Default false so only in-cell bonds draw.
-    val extendAcrossCell: Boolean = false,
-) {
-    init {
-        require(minAngstrom >= 0.0 && maxAngstrom >= minAngstrom)
-    }
-    val key: String get() = listOf(siteA, siteB).sorted().joinToString("\u0000")
-}
-
-data class Bond(
-    val atomA: Long,
-    val atomB: Long,
-    val distance: Double,
-    val rule: BondRule,
-    // Per v0.3.4: cross-cell bonds are represented by an actual shell atom in atomB, so the offset
-    // is always zero. The field is kept for binary compatibility with saved snapshots/tests.
-    val offsetB: Int3 = Int3(0, 0, 0),
-)
-
-data class CrystalStructure(
-    val blockName: String,
-    val cell: UnitCell,
-    val spaceGroupName: String,
-    val spaceGroupNumber: Int?,
-    val symmetryOperations: List<SymmetryOperation>,
-    val sites: List<AtomSite>,
-    val bondRules: List<BondRule> = emptyList(),
-    val elementArgbOverrides: Map<String, Long> = emptyMap(),
-    // Per v0.2.3: site pairs the user has explicitly deleted a bond rule for. These pairs are
-    // skipped by inferBonds so the covalent-radius fallback does not silently redraw the bond.
-    val disabledBondPairs: Set<String> = emptySet(),
-    // Per v0.2.3: per-site color overrides (key = site id). Falls back to elementArgbOverrides.
-    val siteArgbOverrides: Map<String, Long> = emptyMap(),
-) {
-    val effectiveSymmetryOperations: List<SymmetryOperation>
-        get() = symmetryOperations.ifEmpty { SpaceGroupCatalog.operations(spaceGroupName) }
-}
-
-data class Expansion(val x: Int = 1, val y: Int = 1, val z: Int = 1) {
-    init { require(x > 0 && y > 0 && z > 0) }
-    val multiplier: Int get() = x * y * z
-}
-
-enum class FrameMode { NONE, SINGLE_CELL, ALL_CELLS }
-enum class LineStyle { SOLID, DASHED }
-enum class BondColorMode { BICOLOR, UNICOLOR }
-
-/** Coordinate system drawn by the on-screen axis indicator. */
-enum class AxisMode { ABC, XYZ }
-
-data class ViewerAppearance(
-    val backgroundArgb: Long = 0xFF101014,
-    val reflectionEnabled: Boolean = true,
-    val lightAzimuth: Float = 25f,
-    val lightElevation: Float = 45f,
-    val lightIntensity: Float = 0.4f,
-    val diffusion: Float = 0.7f,
-    val atomOpacity: Float = 1.0f,
-    val frameMode: FrameMode = FrameMode.SINGLE_CELL,
-    val lineStyle: LineStyle = LineStyle.SOLID,
-    val bondRadius: Float = 0.20f,
-    val bondOpacity: Float = 1.0f,
-    val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
-    val uniformBondArgb: Long = 0xFF9A90A0,
-    val bondReflectionEnabled: Boolean = true,
-    val polyhedronEnabled: Boolean = true,
-    val polyhedronOpacity: Float = 0.5f,
-    val polyhedronReflectionEnabled: Boolean = true,
-    val showAxes: Boolean = true,
-    val axisMode: AxisMode = AxisMode.ABC,
-    // Per v0.5.4: depth-cueing标度统一为「近=正/远=负」。d=(depth-centre)/dSpan*6,因 centre=
-    // (dMin+dMax)/2 而 dMin=最远原子(最小z)、dMax=最近原子(最大z),故最近原子 d=+3、最远 d=-3。
-    // dofNear=近端不淡化阈值(正)、dofFar=远端全淡化阈值(负);约定 near>=far。v0.5.3a 旧默认
-    // -0.5/4.5(near<far)与 d 实际符号矛盾,导致近被淡化、远清晰(完全反)——本版修正。颜色向
-    // 背景色 blend(opacity 不变),近端清晰、远端融背景。
-    val depthOfFieldEnabled: Boolean = true,
-    val dofNear: Float = 0.5f,     // 近端: d>=near 不淡化(近=正)
-    val dofFar: Float = -4.5f,     // 远端: d<=far 全淡化(远=负)
-)
-
-data class SceneSnapshot(
-    val atoms: List<ExpandedAtom>,
-    val bonds: List<Bond>,
-    val structure: CrystalStructure,
-    val expansion: Expansion,
-    val elementArgbOverrides: Map<String, Long> = structure.elementArgbOverrides,
-)
-
-data class CrystalInfo(
-    val atomCount: Int,
-    val spaceGroup: String,
-    val cell: UnitCell,
-    val volume: Double,
-    val density: Double?,
-    val composition: String,
-)
-
-*/
 
 enum class RadiusSource { SMART_IONIC, BONDING, VDW }
 
@@ -206,7 +54,6 @@ object PeriodicTableData {
         val match = Regex("[A-Z][a-z]?").find(value.trim()) ?: return "X"
         return match.value.takeIf { it in symbols } ?: "X"
     }
-    fun defaultRadius(symbol: String) = (covalentRadius(symbol) * 0.42).coerceIn(0.22, 0.85)
 
     // Per v0.4.1: two radius sources. The auto-apply-radii button cycles between them; the default
     // bond-rule generator uses BONDING (键合半径). BONDING falls back to the covalent single-bond
@@ -281,12 +128,6 @@ object PeriodicTableData {
         RadiusSource.SMART_IONIC -> bondingRadii[symbol] ?: iniCovalentRadii[symbol] ?: covalentRadius(symbol)
     }
 
-    fun resolveArgb(symbol: String, overrides: Map<String, Long> = emptyMap()) = overrides[symbol] ?: elementArgb(symbol)
-    // Per v0.2.3: per-site color override (key = site id), falling back to the element override
-    // then the VESTA palette. Same-element sites share a color by default unless individually set.
-    fun resolveSiteArgb(siteId: String, element: String, siteOverrides: Map<String, Long> = emptyMap(), elementOverrides: Map<String, Long> = emptyMap()): Long =
-        siteOverrides[siteId] ?: elementOverrides[element] ?: elementArgb(element)
-
     // Per v0.4.1: default element color from elements.ini's last three columns (RGB). Elements not
     // covered there (D, XX, and 96+ actinides) fall back to the VESTA palette below.
     private val elementColors = mapOf(
@@ -315,33 +156,7 @@ object PeriodicTableData {
         "Ac" to 0xFF649E73L, "Th" to 0xFF26FE78L, "Pa" to 0xFF29FB35L, "U" to 0xFF7AA2AAL,
         "Np" to 0xFF4D4D4DL, "Pu" to 0xFF4D4D4DL, "Am" to 0xFF4D4D4DL,
     )
-    fun elementArgb(symbol: String): Long = elementColors[symbol] ?: vestaArgb(symbol)
-    fun vestaArgb(symbol: String): Long = when (symbol) {
-        "H" -> 0xFFF4F4F4; "C" -> 0xFF505050; "N" -> 0xFF3050F8; "O" -> 0xFFFF0D0D
-        "F", "Cl" -> 0xFF90E050; "Br" -> 0xFFA62929; "I" -> 0xFF940094; "S" -> 0xFFFFFF30
-        "P" -> 0xFFFF8000; "Si" -> 0xFFF0C8A0; "B" -> 0xFFFFB5B5; "Li" -> 0xFFCC80FF
-        "Na" -> 0xFFAB5CF2; "K" -> 0xFF8F40D4; "Cs" -> 0xFF57178F; "Mg" -> 0xFF8AFF00
-        "Ca" -> 0xFF3DFF00; "Ti" -> 0xFFBFC2C7; "Fe" -> 0xFFE06633; "Co" -> 0xFFF090A0
-        "Ni" -> 0xFF50D050; "Cu" -> 0xFFC88033; "Zn" -> 0xFF7D80B0; "Ag" -> 0xFFC0C0C0
-        "Au" -> 0xFFFFD123; "Hg" -> 0xFFB8B8D0; "Al" -> 0xFFBFA6A6; "Pb" -> 0xFF575961
-        else -> {
-            val i = symbols.indexOf(symbol).coerceAtLeast(0)
-            val hue = (i * 137.508).roundToInt() % 360
-            hsvToArgb(hue.toDouble(), 0.55, 0.88)
-        }
-    }
-
-    private fun hsvToArgb(h: Double, s: Double, v: Double): Long {
-        val c = v * s
-        val x = c * (1 - kotlin.math.abs((h / 60.0) % 2 - 1))
-        val m = v - c
-        val (r, g, b) = when (h.toInt() / 60) {
-            0 -> Triple(c, x, 0.0); 1 -> Triple(x, c, 0.0); 2 -> Triple(0.0, c, x)
-            3 -> Triple(0.0, x, c); 4 -> Triple(x, 0.0, c); else -> Triple(c, 0.0, x)
-        }
-        return (0xFFL shl 24) or (((r + m) * 255).roundToInt().toLong() shl 16) or
-            (((g + m) * 255).roundToInt().toLong() shl 8) or ((b + m) * 255).roundToInt().toLong()
-    }
+    fun elementArgbValue(symbol: String): Long? = elementColors[symbol]
 
     // ------------------------------------------------------------------
     // Per v0.5.0: bond-valence parameters (R0, B) for s = exp((R0 − R)/B), from the IUCr

@@ -2,9 +2,10 @@ package com.krystals.app
 
 import android.content.Context
 import android.net.Uri
-import com.krystals.crystal.analysis.editing.CrystalEditor
-import com.krystals.crystal.analysis.model.CrystalStructure
+import com.krystals.crystal.analysis.bonding.BondConfiguration
+import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.io.CifCodec
+import com.krystals.crystal.io.CifDisplayMetadata
 import com.krystals.crystal.io.ParsedStructure
 import java.io.File
 
@@ -56,11 +57,18 @@ object PresetRepository {
         return parsed
     }
 
-    fun saveToPreset(context: Context, parsed: ParsedStructure, structure: CrystalStructure, name: String): File {
+    fun saveToPreset(
+        context: Context,
+        parsed: ParsedStructure,
+        structure: CrystalStructure,
+        bondConfiguration: BondConfiguration,
+        displayMetadata: CifDisplayMetadata,
+        name: String,
+    ): File {
         val userDir = File(context.filesDir, USER_DIR).apply { if (!exists()) mkdirs() }
         val safeName = name.ifBlank { "structure.cif" }.let { if (it.endsWith(".cif", true)) it else "$it.cif" }
         val target = File(userDir, safeName)
-        val content = CifCodec.write(parsed, structure, structure.bondRules)
+        val content = CifCodec.write(parsed, structure, bondConfiguration, displayMetadata)
         target.writeText(content, Charsets.UTF_8)
         return target
     }

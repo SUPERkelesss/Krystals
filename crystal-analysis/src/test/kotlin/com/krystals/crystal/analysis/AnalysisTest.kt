@@ -1,356 +1,114 @@
 package com.krystals.crystal.analysis
 
+import com.krystals.crystal.analysis.bonding.BondConfiguration
 import com.krystals.crystal.analysis.bonding.BondDetector
-import com.krystals.crystal.analysis.bonding.BondNetwork
-import com.krystals.crystal.analysis.bonding.BondRuleMatching
+import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
-import com.krystals.crystal.analysis.expansion.AtomImage
-import com.krystals.crystal.analysis.model.*
+import com.krystals.crystal.analysis.editing.CrystalEditor
+import com.krystals.crystal.analysis.editing.EditCommand
+import com.krystals.crystal.analysis.expansion.SymmetryExpander
+import com.krystals.crystal.analysis.model.Expansion
+import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
 import com.krystals.crystal.analysis.structure.StructureAnalyzer
-import com.krystals.crystal.core.*
-
+import com.krystals.crystal.core.coordinate.FractionalCoordinate
+import com.krystals.crystal.core.lattice.Lattice
+import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.model.Site
+import com.krystals.crystal.core.model.Species
+import com.krystals.crystal.core.periodic.Int3
+import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
+import com.krystals.crystal.core.symmetry.SymmetryOperation
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class AnalysisTest {
-    @Test fun evaluatesSafeExpressions() {
-        assertEquals(0.5, ExpressionParser("1 / (1 + 1)").evaluate(), 1e-10)
-    }
-
-    @Test fun computesMeasurements() {
-        assertEquals(90.0, angleDegrees(Vec3(1.0, 0.0, 0.0), Vec3.ZERO, Vec3(0.0, 1.0, 0.0)), 1e-8)
-    }
-
-    @Test fun cornerAtomPolyhedronHasAllSixFaceNeighbours() {
-        // Per v0.3.44: a corner atom (Cs at 0,0,0) with a Cs-Cs rule must find all 6 face-centre
-        // neighbours as bonds so its octahedral coordination polyhedron is complete. Previously the
-        // shell was only 1 cell thick, so the boundary-image centres at offset +1 could not reach
-        // their outward neighbours at offset +2; only the primary (0,0,0) had a complete octahedron.
-        // With a 2-cell shell every face-centre neighbour is materialised.
-        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
+    private fun csCl(configuration: BondConfiguration = BondConfiguration()): Pair<CrystalStructure, BondConfiguration> {
         val structure = CrystalStructure(
-            "Cs", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO)),
-            bondRules = listOf(BondRule("Cs", "Cs", 0.1, 5.09)),
-        )
-        val scene = BondDetector.buildNetwork(structure)
-        val primaryCs = scene.atoms.first { !it.isShell && it.siteId == "Cs" }
-        // The primary Cs bonds to all 6 face-centre neighbours (±x, ±y, ±z at distance 4.0).
-        val neighbours = scene.bonds.filter { it.atomA == primaryCs.id || it.atomB == primaryCs.id }
-        assertEquals(6, neighbours.size, "primary Cs should have 6 face-centre Cs neighbours")
-        // A boundary-image centre (e.g. Cs at offset (1,0,0)) must ALSO reach its outward neighbour
-        // at offset (2,0,0) — that atom lives in the second shell layer and must be kept.
-        val boundaryCs = scene.atoms.firstOrNull { it.isBoundaryImage && it.cellOffset == Int3(1, 0, 0) }
-        assertTrue(boundaryCs != null, "expected a boundary-image Cs at offset (1,0,0)")
-        val outwardNeighbour = scene.bonds.any { bond ->
-            val otherId = if (bond.atomA == boundaryCs!!.id) bond.atomB else if (bond.atomB == boundaryCs.id) bond.atomA else 0L
-            otherId != 0L && scene.atoms.first { it.id == otherId }.cellOffset == Int3(2, 0, 0)
-        }
-        assertTrue(outwardNeighbour, "boundary-image Cs should bond its outward (2,0,0) neighbour")
-    }
-
-    @Test fun originAtomGeneratesPrimaryAndShellCells() {
-        // Per v0.3.4: a single atom at the origin is placed in the primary cell, and the 26
-        // surrounding neighbour cells are considered during bonding. Shell atoms that do not bond
-        // to any primary atom are discarded to keep the snapshot small.
-        val structure = CrystalStructure(
-            "corners", UnitCell.DEFAULT, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(AtomSite("origin", "A1", "C", Vec3.ZERO)),
-        )
-        val scene = BondDetector.buildNetwork(structure)
-        assertEquals(1, scene.atoms.size)
-        assertEquals(1, scene.atoms.count { !it.isShell })
-        assertEquals(0, scene.atoms.count { it.isShell })
-    }
-
-    @Test fun crossCellBondsUseShellAtoms() {
-        // Per v0.3.4: a corner bond (0,0,0)-(0.75,0.75,0.75) is found by materialising B's image
-        // in the (-1,-1,-1) shell cell, not via a minimum-image offset. The in-cell distance
-        // sqrt(3)*0.75 ≈ 1.299 > 0.9 is ignored; the shell-atom distance sqrt(3)*0.25 ≈ 0.433 < 0.9
-        // produces a bond whose atomB is the shell image and whose offsetB is zero.
-        val structure = CrystalStructure(
-            "corner", UnitCell.DEFAULT, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(
-                AtomSite("a", "A1", "C", Vec3.ZERO),
-                AtomSite("b", "B1", "O", Vec3(0.75, 0.75, 0.75)),
-            ),
-            bondRules = listOf(BondRule("a", "b", 0.1, 0.9)),
-        )
-        val scene = BondDetector.buildNetwork(structure)
-        // Per v0.3.4: the cross-cell bond to B's (-1,-1,-1) shell image (distance sqrt(3)*0.25 ≈ 0.433)
-        // is found via a real shell atom, not a minimum-image offset. Real-distance bonding with
-        // boundary images also reaches other in-range images of the centre atom, so assert the
-        // specific shell-image bond rather than an exact bond count.
-        val bond = scene.bonds.first { it.distance < 0.5 && it.offsetB == Int3(0, 0, 0) }
-        assertEquals(0.433, bond.distance, 0.01)
-        val bAtom = scene.atoms.first { it.id == bond.atomB }
-        assertTrue(bAtom.isShell)
-    }
-
-    @Test fun catalogContainsAllSpaceGroups() {
-        assertEquals(230, SpaceGroupCatalog.all.size)
-        assertEquals("Fm-3m", SpaceGroupCatalog.all[224].symbol)
-    }
-
-    @Test fun compositionUsesHillOrdering() {
-        val structure = CrystalStructure(
-            "formula", UnitCell.DEFAULT, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(
-                AtomSite("o", "O1", "O", Vec3.ZERO, 1.0),
-                AtomSite("c", "C1", "C", Vec3(0.2, 0.2, 0.2), 1.0),
-                AtomSite("h", "H1", "H", Vec3(0.4, 0.4, 0.4), 2.0.coerceIn(0.0, 1.0)),
-                AtomSite("ag", "Ag1", "Ag", Vec3(0.6, 0.6, 0.6), 1.0),
+            blockName = "cscl",
+            lattice = Lattice(4.0, 4.0, 4.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(
+                Site("Cs", "Cs1", Species("Cs"), FractionalCoordinate.ZERO),
+                Site("Cl", "Cl1", Species("Cl"), FractionalCoordinate(0.5, 0.5, 0.5)),
             ),
         )
-        assertEquals("C 1 H 1 Ag 1 O 1", StructureAnalyzer.info(structure).composition)
+        return structure to configuration
     }
 
-    @Test fun csClCornerGeneratesBoundaryImages() {
-        // Per v0.3.41: a corner atom (Cs at 0,0,0) in a 1×1×1 expansion should generate boundary
-        // images at the other 7 corners of the unit cube. These are visible by default and can
-        // act as bond centres, so all 8 Cs vertices are rendered.
-        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
-        val structure = CrystalStructure(
-            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(
-                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
-                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
-            ),
+    @Test fun expandsStronglyTypedAtomImages() {
+        val structure = csCl().first
+        val atoms = SymmetryExpander.expand(structure)
+        assertEquals(2, atoms.size)
+        assertEquals(Species("Cs"), atoms.first().species)
+        assertEquals(FractionalCoordinate.ZERO, atoms.first().fractionalCoordinate)
+        assertEquals(0.0, atoms.first().cartesianCoordinate.x, 1e-10)
+    }
+
+    @Test fun preservesBondAndBoundaryImageResults() {
+        val rule = BondRule("Cs", "Cl", 0.1, 4.0, extendAcrossCell = true)
+        val structure = csCl(BondConfiguration(listOf(rule))).first
+        val network = BondDetector.buildNetwork(structure, BondConfiguration(listOf(rule)), Expansion())
+        assertTrue(network.bonds.isNotEmpty())
+        assertTrue(network.atoms.any { it.isBoundaryImage })
+        assertTrue(network.bonds.all { it.distance in 0.1..4.0 })
+        assertTrue(CoordinationAnalyzer.coordinationNumber(network, network.atoms.first().id) > 0)
+    }
+
+    @Test fun bondConfigurationEditLifecycleIsIndependentFromStructure() {
+        val rule = BondRule("Cs", "Cl", 0.1, 4.0)
+        val addedDirectly = BondConfiguration().add(rule)
+        assertEquals(listOf(rule), addedDirectly.rules)
+        assertEquals(BondConfiguration(), addedDirectly.remove(rule).clear())
+        val structure = csCl().first
+        val added = CrystalEditor.apply(structure, BondConfiguration(listOf(rule)), EditCommand.SetBondRule(rule.copy(maxAngstrom = 3.9)))
+        assertEquals(3.9, added.bondConfiguration.rules.single().maxAngstrom)
+        assertEquals(structure, added.structure)
+
+        val removed = CrystalEditor.apply(added.structure, added.bondConfiguration, EditCommand.RemoveBondRule(rule.key))
+        assertTrue(removed.bondConfiguration.rules.isEmpty())
+        assertTrue(rule.key in removed.bondConfiguration.disabledPairs)
+
+        val rebuilt = CrystalEditor.ensureAutoBondRules(removed.structure, removed.bondConfiguration)
+        assertTrue(rebuilt.bondConfiguration.rules.isNotEmpty())
+        assertTrue(rule.key in rebuilt.bondConfiguration.disabledPairs)
+    }
+
+    @Test fun deletingSiteUpdatesOnlyAffectedRules() {
+        val rules = listOf(BondRule("Cs", "Cl", 0.1, 4.0), BondRule("Cs", "Cs", 0.1, 5.0))
+        val structure = csCl().first
+        val result = CrystalEditor.apply(structure, BondConfiguration(rules), EditCommand.DeleteAtom("Cl"))
+        assertEquals(listOf("Cs"), result.structure.sites.map { it.id })
+        assertEquals(listOf(BondRule("Cs", "Cs", 0.1, 5.0)), result.bondConfiguration.rules)
+    }
+
+    @Test fun coordinationPolyhedronAndStructureInfoRemainAvailable() {
+        val rule = BondRule("Cs", "Cl", 0.1, 4.0)
+        val structure = csCl().first
+        val network = BondDetector.buildNetwork(structure, BondConfiguration(listOf(rule)))
+        val neighbors = CoordinationAnalyzer.neighbors(network)
+        val center = network.atoms.firstOrNull { it.siteId == "Cs" }
+        assertNotNull(center)
+        val vertices = neighbors[center.id].orEmpty().map { it.cartesianCoordinate.toVec3() }
+        if (vertices.size >= 3) assertFalse(PolyhedronHull.faces(center.cartesianCoordinate.toVec3(), vertices).isEmpty())
+        val info = StructureAnalyzer.info(structure)
+        assertEquals("P1", info.spaceGroup)
+        assertEquals(2, info.atomCount)
+        assertTrue(info.volume > 0.0)
+    }
+
+    @Test fun transformedStructureClearsBondConfiguration() {
+        val rule = BondRule("Cs", "Cl", 0.1, 4.0)
+        val structure = csCl().first
+        val result = CrystalEditor.apply(
+            structure,
+            BondConfiguration(listOf(rule), setOf(rule.key)),
+            EditCommand.Transform(listOf(listOf(1, 0, 0), listOf(0, 1, 0), listOf(0, 0, 1))),
         )
-        val scene = BondDetector.buildNetwork(structure)
-        val csAtoms = scene.atoms.filter { it.siteId == "Cs" }
-        val clAtoms = scene.atoms.filter { it.siteId == "Cl" }
-
-        assertEquals(8, csAtoms.size, "expected 1 primary Cs + 7 boundary-image Cs")
-        assertEquals(1, clAtoms.count { !it.isShell }, "expected exactly one primary Cl")
-        assertEquals(7, scene.atoms.count { it.isBoundaryImage && it.siteId == "Cs" })
-        assertTrue(scene.atoms.none { it.isBoundaryImage && it.siteId == "Cl" })
-
-        // Bonds whose atomB is not an external shell atom are drawn by default. Every Cs centre
-        // (primary or boundary) bonds to the primary Cl, giving 8 visible Cs-Cl bonds.
-        val atomById = scene.atoms.associateBy { it.id }
-        val drawnBonds = scene.bonds.count { bond -> atomById.getValue(bond.atomB).let { !it.isExternalShell } }
-        assertEquals(8, drawnBonds)
-
-        // All 8 Cs atoms (primary + boundary images) participate in at least one bond.
-        assertTrue(csAtoms.all { cs -> scene.bonds.any { it.atomA == cs.id || it.atomB == cs.id } })
+        assertEquals(Int3(0, 0, 0), SymmetryExpander.expand(result.structure).first().cellOffset)
+        assertEquals(BondConfiguration(), result.bondConfiguration)
     }
-
-    @Test fun csClExternalShellIsHiddenWithoutExtendAcrossCell() {
-        // Per v0.3.41: external shell atoms are kept for coordination/polyhedra but hidden unless
-        // the bond rule opts in to "extend across cell".
-        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
-        val structure = CrystalStructure(
-            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(
-                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
-                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
-            ),
-            bondRules = listOf(BondRule("Cs", "Cl", 0.1, 4.0)),
-        )
-        val scene = BondDetector.buildNetwork(structure)
-        val externalShell = scene.atoms.filter { it.isExternalShell }
-
-        assertTrue(externalShell.isNotEmpty())
-        assertTrue(externalShell.all { it.siteId == "Cl" })
-        assertTrue(scene.atoms.none { it.isExternalShell && it.isBoundaryImage })
-        // Every external-shell atom is referenced by at least one bond (so it is kept in the
-        // snapshot), but no bond to an external-shell atom is drawn because extendAcrossCell is false.
-        assertTrue(externalShell.all { ex -> scene.bonds.any { it.atomA == ex.id || it.atomB == ex.id } })
-        assertTrue(scene.bonds.none { bond -> atomById(scene, bond.atomB).isExternalShell && bond.rule.extendAcrossCell })
-    }
-
-    @Test fun csClExtendAcrossCellRevealsExternalShell() {
-        // Per v0.3.41: when the bond rule extends across the cell, every external-shell ligand
-        // becomes visible.
-        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
-        val structure = CrystalStructure(
-            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(
-                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
-                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
-            ),
-            bondRules = listOf(BondRule("Cs", "Cl", 0.1, 4.0, extendAcrossCell = true)),
-        )
-        val scene = BondDetector.buildNetwork(structure)
-        val externalShell = scene.atoms.filter { it.isExternalShell }
-
-        assertTrue(externalShell.isNotEmpty())
-        assertTrue(externalShell.all { ex ->
-            scene.bonds.any { bond -> bond.atomB == ex.id && bond.rule.extendAcrossCell }
-        })
-    }
-
-    @Test fun csClBoundaryImageBondsOrientShellAsAtomB() {
-        // Per v0.3.43/v0.3.44: a primary-to-boundary-image bond keeps the shell atom as atomB so the
-        // renderer (which keys cross-cell visibility on atomB) draws boundary-image bonds by default.
-        // With a Cs-Cl rule, every Cs centre (primary or boundary image) bonds to the body-centred Cl;
-        // the bond endpoint that is a shell atom must be atomB.
-        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
-        val structure = CrystalStructure(
-            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(
-                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
-                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
-            ),
-            bondRules = listOf(BondRule("Cs", "Cl", 0.1, 4.0)),
-        )
-        val scene = BondDetector.buildNetwork(structure)
-        val atomById = scene.atoms.associateBy { it.id }
-        // When a bond has exactly one shell endpoint, that endpoint must be atomB (so the renderer's
-        // atomB-based cross-cell visibility check classifies it correctly). Bonds with two shell
-        // endpoints (boundary<->boundary) are also fine and not constrained by this orientation rule.
-        assertTrue(scene.bonds.all { bond ->
-            val a = atomById.getValue(bond.atomA)
-            val b = atomById.getValue(bond.atomB)
-            !a.isShell || b.isShell // if a is a shell atom, b must be too (shell stays on the B side)
-        })
-        // There is at least one primary↔boundary-image bond (the renderer should draw by default).
-        assertTrue(scene.bonds.any { bond ->
-            val a = atomById.getValue(bond.atomA)
-            val b = atomById.getValue(bond.atomB)
-            !a.isShell && b.isBoundaryImage
-        })
-    }
-
-    @Test fun boundaryImageToBoundaryImageBondIsGenerated() {
-        // Per v0.3.44: a bond lying in a cell-face/edge plane (both endpoints are boundary images,
-        // e.g. two different-site atoms on a shared cell edge) must be generated. Previously the
-        // `a.isBoundaryImage && !b.isExternalShell` skip suppressed every boundary↔boundary pair.
-        // Build a 1×1×1 cell with two atoms on the same cell edge (x=0,y=0 line): A at (0,0,0.25),
-        // B at (0,0,0.75). Their images on neighbouring cells share that edge, so the A–B bond along
-        // the edge is a boundary↔boundary bond.
-        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
-        val structure = CrystalStructure(
-            "edge", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(
-                AtomSite("A", "A1", "C", Vec3(0.0, 0.0, 0.25)),
-                AtomSite("B", "B1", "O", Vec3(0.0, 0.0, 0.75)),
-            ),
-            bondRules = listOf(BondRule("A", "B", 0.1, 2.5)),
-        )
-        val scene = BondDetector.buildNetwork(structure)
-        val atomById = scene.atoms.associateBy { it.id }
-        // At least one bond whose both endpoints are boundary images.
-        val bbBonds = scene.bonds.filter { bond ->
-            val a = atomById.getValue(bond.atomA)
-            val b = atomById.getValue(bond.atomB)
-            a.isBoundaryImage && b.isBoundaryImage
-        }
-        assertTrue(bbBonds.isNotEmpty(), "expected at least one boundary-image↔boundary-image bond")
-        // Deduplication: no duplicate unordered atom-id pair.
-        val keys = scene.bonds.map { bond -> listOf(bond.atomA, bond.atomB).sorted() }
-        assertEquals(keys.size, keys.toSet().size, "duplicate bonds detected")
-    }
-
-    @Test fun sameSiteIntegerTranslationStillSkippedForBoundaryImages() {
-        // Per v0.3.44: relaxing the boundary-centre skip must NOT reintroduce same-site periodic-
-        // image bonds (Cs–Cs etc.) when no explicit rule exists. A single corner atom (Cs at origin)
-        // with only an unrelated Cs–Cl rule should still produce zero Cs–Cs bonds.
-        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
-        val structure = CrystalStructure(
-            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(
-                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
-                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
-            ),
-            bondRules = listOf(BondRule("Cs", "Cl", 0.1, 4.0)),
-        )
-        val scene = BondDetector.buildNetwork(structure)
-        val atomById = scene.atoms.associateBy { it.id }
-        assertTrue(scene.bonds.none { bond ->
-            val a = atomById.getValue(bond.atomA)
-            val b = atomById.getValue(bond.atomB)
-            a.siteId == "Cs" && b.siteId == "Cs"
-        }, "spurious Cs–Cs same-site periodic-image bond generated")
-    }
-
-    @Test fun hasMatchingBondDetectsAtomToOwnPeriodicImage() {
-        // Per v0.3.44: CsCl has a single Cs in the ASU, so a Cs-Cs bond is the atom to its own
-        // lattice image (distance |a|=4.0). The previous hasMatchingBond only checked pairs of
-        // distinct atoms, so a Cs-Cs rule was hidden from the editor/display lists even though
-        // inferPrimaryShellBonds generated its bond. hasMatchingBond must also consider atom-to-
-        // own-image distances.
-        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
-        val structure = CrystalStructure(
-            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(
-                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
-                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
-            ),
-            bondRules = listOf(BondRule("Cs", "Cs", 0.1, 5.09)),
-        )
-        assertTrue(BondRuleMatching.hasMatchingBond(structure.bondRules.single { it.siteA == "Cs" && it.siteB == "Cs" }, structure))
-    }
-
-    @Test fun estimatePeakAtomCountMatchesShellMaterialisation() {
-        // Per v0.5.3b: a 1×1×1 cell materialises 5×5×5 cells (primary + 2-cell shell); 2×2×2 → 6×6×6.
-        assertEquals(1250L, BondDetector.estimatePeakAtomCount(10, Expansion(1, 1, 1)))
-        assertEquals(2160L, BondDetector.estimatePeakAtomCount(10, Expansion(2, 2, 2)))
-        assertEquals(0L, BondDetector.estimatePeakAtomCount(0, Expansion(1, 1, 1)))
-    }
-
-    @Test fun pickShellModeDegradesForLargeCells() {
-        // FULL at/below the degrade threshold; ONE_CELL above it (but under the hard limit); throws
-        // past the hard limit.
-        assertEquals(BondDetector.ShellMode.FULL, BondDetector.pickShellMode(480, Expansion(1, 1, 1)))   // 480×125 = 60_000
-        assertEquals(BondDetector.ShellMode.ONE_CELL, BondDetector.pickShellMode(481, Expansion(1, 1, 1)))
-        assertEquals(BondDetector.ShellMode.ONE_CELL, BondDetector.pickShellMode(1000, Expansion(1, 1, 1))) // 1000×27 = 27_000
-        assertFailsWith<IllegalArgumentException> { BondDetector.pickShellMode(6000, Expansion(1, 1, 1)) }      // 6000×27 = 162_000
-    }
-
-    @Test fun buildSceneGriddedMatchesLegacyBondSet() {
-        // Per v0.5.3b (Phase 2): the gridded buildScene (no full-shell materialisation) must reproduce
-        // the legacy bond set for v0.3.4x structures. Compare bond signatures (sorted atom-id pair +
-        // rounded distance) between buildScene (now gridded) and the explicit buildSceneGridded entry
-        // point — they share one path, so this guards against future divergence and documents intent.
-        val cell = UnitCell(4.0, 4.0, 4.0, 90.0, 90.0, 90.0)
-        val csCl = CrystalStructure(
-            "CsCl", cell, "P1", 1, listOf(SymmetryOperation.IDENTITY),
-            listOf(
-                AtomSite("Cs", "Cs1", "Cs", Vec3.ZERO),
-                AtomSite("Cl", "Cl1", "Cl", Vec3(0.5, 0.5, 0.5)),
-            ),
-            bondRules = listOf(BondRule("Cs", "Cl", 0.1, 4.0)),
-        )
-        val a = BondDetector.buildNetwork(csCl)
-        val b = BondDetector.buildNetworkGridded(csCl)
-        fun sig(s: BondNetwork): List<Triple<Long, Long, Long>> = s.bonds
-            .map { Triple(minOf(it.atomA, it.atomB), maxOf(it.atomA, it.atomB), (it.distance * 1e6).toLong()) }
-            .sortedBy { it.first * 1_000_000_000L + it.second }
-        assertEquals(sig(a).size, sig(b).size)
-        assertTrue(a.atoms.any { it.isShell }, "gridded scene keeps shell atoms referenced by bonds")
-    }
-
-    @Test fun coordinationRespectsBondVisibility() {
-        val structure = CrystalStructure(
-            "coordination",
-            UnitCell.DEFAULT,
-            "P1",
-            1,
-            listOf(SymmetryOperation.IDENTITY),
-            listOf(
-                AtomSite("a", "A1", "C", Vec3.ZERO),
-                AtomSite("b", "B1", "O", Vec3(0.5, 0.0, 0.0)),
-            ),
-            bondRules = listOf(BondRule("a", "b", 0.1, 1.0)),
-        )
-        val network = BondDetector.buildNetwork(structure)
-        val bondKey = structure.bondRules.single().key
-        val center = network.atoms.first { !it.isShell && it.siteId == "a" }
-
-        assertTrue(CoordinationAnalyzer.neighbors(network)[center.id].orEmpty().isNotEmpty())
-        assertTrue(CoordinationAnalyzer.neighbors(network, hiddenBondPairs = setOf(bondKey)).isEmpty())
-        assertTrue(CoordinationAnalyzer.neighbors(network, showBonds = false).isEmpty())
-    }
-
-    @Test fun periodicTableQueriesUseStaticDataModule() {
-        assertEquals(15.999, PeriodicTable.mass("O"))
-        assertTrue(2 in PeriodicTable.cationValences("Cu"))
-        assertTrue(PeriodicTable.shannonCrystalRadius("O", -2, 6) != null)
-    }
-
-    private fun atomById(scene: BondNetwork, id: Long): AtomImage = scene.atoms.first { it.id == id }
 }

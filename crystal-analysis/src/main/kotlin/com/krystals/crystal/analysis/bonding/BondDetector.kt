@@ -2,7 +2,14 @@ package com.krystals.crystal.analysis.bonding
 
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.*
-import com.krystals.crystal.core.*
+import com.krystals.crystal.core.coordinate.FractionalCoordinate
+import com.krystals.crystal.core.lattice.Lattice
+import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.math.distance
+import com.krystals.crystal.core.model.AtomImage
+import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.periodic.Int3
+import com.krystals.crystal.core.periodic.PeriodicBoundary
 
 object BondDetector {
     const val MAX_RENDERED_ATOMS = 100_000
@@ -48,9 +55,9 @@ object BondDetector {
 
     fun buildNetwork(
         structure: CrystalStructure,
+        bondConfiguration: BondConfiguration,
         expansion: Expansion = Expansion(),
-        bondRules: List<BondRule> = structure.bondRules,
-    ): BondNetwork = buildNetworkGridded(structure, expansion, bondRules)
+    ): BondNetwork = buildNetworkGridded(structure, bondConfiguration, expansion)
 
     /**
      * Per v0.5.3b (Phase 2): gridded scene build. Materialises only the primary region plus the
@@ -67,8 +74,8 @@ object BondDetector {
      */
     fun buildNetworkGridded(
         structure: CrystalStructure,
+        bondConfiguration: BondConfiguration,
         expansion: Expansion = Expansion(),
-        bondRules: List<BondRule> = structure.bondRules,
     ): BondNetwork {
         val base = SymmetryExpander.expand(structure)
         require(base.size.toLong() * expansion.multiplier <= MAX_RENDERED_ATOMS) {
@@ -79,17 +86,17 @@ object BondDetector {
         val ez = expansion.z
         val boundaryEps = 1e-6
 
-        val primaryAtoms = ArrayList<ExpandedAtom>(base.size * expansion.multiplier)
+        val primaryAtoms = ArrayList<AtomImage>(base.size * expansion.multiplier)
         var tempId = 1L
         fun nextTempId() = tempId++
         for (ix in 0 until ex) for (iy in 0 until ey) for (iz in 0 until ez) {
             base.forEach { atom ->
                 val offset = Int3(ix, iy, iz)
-                val fractional = atom.fractional + Vec3(offset.x.toDouble(), offset.y.toDouble(), offset.z.toDouble())
+                val fractional = atom.fractionalCoordinate + offset
                 primaryAtoms += atom.copy(
                     id = nextTempId(),
-                    fractional = fractional,
-                    cartesian = structure.cell.toCartesian(fractional),
+                    fractionalCoordinate = fractional,
+                    cartesianCoordinate = structure.lattice.toCartesian(fractional),
                     cellOffset = offset,
                     isShell = false,
                 )
@@ -106,12 +113,12 @@ object BondDetector {
         // Cs@(0,0,0) imaged to (1,0,0) — same wrapped position but a different lattice image that
         // must act as a bond centre to reach its ±2 outward neighbour). The offset range is ±1; ±2
         // outward ligands are created on demand by the bond sweep.
-        val boundaryImages = ArrayList<ExpandedAtom>()
+        val boundaryImages = ArrayList<AtomImage>()
         for (ix in -1..ex + 1) for (iy in -1..ey + 1) for (iz in -1..ez + 1) {
             if (ix in 0 until ex && iy in 0 until ey && iz in 0 until ez) continue
             base.forEach { atom ->
                 val offset = Int3(ix, iy, iz)
-                val fractional = atom.fractional + Vec3(offset.x.toDouble(), offset.y.toDouble(), offset.z.toDouble())
+                val fractional = atom.fractionalCoordinate + offset
                 val inPrimaryBox =
                     fractional.x >= -boundaryEps && fractional.x <= ex + boundaryEps &&
                         fractional.y >= -boundaryEps && fractional.y <= ey + boundaryEps &&
@@ -126,8 +133,8 @@ object BondDetector {
                 if (!inPrimaryBox || !onFace) return@forEach
                 boundaryImages += atom.copy(
                     id = nextTempId(),
-                    fractional = fractional,
-                    cartesian = structure.cell.toCartesian(fractional),
+                    fractionalCoordinate = fractional,
+                    cartesianCoordinate = structure.lattice.toCartesian(fractional),
                     cellOffset = offset,
                     isShell = true,
                     isBoundaryImage = true,
@@ -136,33 +143,42 @@ object BondDetector {
         }
 
         val centers = primaryAtoms + boundaryImages
-        val custom = bondRules.associateBy { it.key }
-        val disabledPairs = structure.disabledBondPairs
+        val custom = bondConfiguration.rules.associateBy { it.key }
+        val disabledPairs = bondConfiguration.disabledPairs
         val cellSize = BondRuleMatching.estimateCellSize(structure)
         // Spatial hash of primary atoms by floor(cartesian / cellSize).
-        val buckets = HashMap<Int3, MutableList<ExpandedAtom>>()
+        val buckets = HashMap<Int3, MutableList<AtomImage>>()
         for (a in primaryAtoms) {
+            val cartesian = a.cartesianCoordinate
             val k = Int3(
-                Math.floor(a.cartesian.x / cellSize).toInt(),
-                Math.floor(a.cartesian.y / cellSize).toInt(),
-                Math.floor(a.cartesian.z / cellSize).toInt(),
+                Math.floor(cartesian.x / cellSize).toInt(),
+                Math.floor(cartesian.y / cellSize).toInt(),
+                Math.floor(cartesian.z / cellSize).toInt(),
             )
             buckets.getOrPut(k) { mutableListOf() }.add(a)
         }
-        val la = structure.cell.matrix.a
-        val lb = structure.cell.matrix.b
-        val lc = structure.cell.matrix.c
+        val la = structure.lattice.matrix.a
+        val lb = structure.lattice.matrix.b
+        val lc = structure.lattice.matrix.c
         val result = ArrayList<Bond>()
         val seenBonds = HashSet<Pair<Long, Long>>()
-        val shellAtoms = ArrayList<ExpandedAtom>()
+        val shellAtoms = ArrayList<AtomImage>()
         // Per v0.5.3b: shell atoms are deduplicated by (primary atom id, image offset). Boundary
         // images pre-materialised above are indexed here too so the bond sweep reuses them instead of
         // spawning duplicates at the same image position (e.g. Cs@(0,0,0) imaged to (1,0,0) is both a
         // boundary image and a bond target — it must be a single atom, or boundary centres would be
         // skipped and their ±2 outward neighbours never reached).
-        val shellByKey = HashMap<Pair<Long, Int3>, ExpandedAtom>()
+        val shellByKey = HashMap<Pair<Long, Int3>, AtomImage>()
         for (b in boundaryImages) {
-            val primaryId = primaryAtoms.firstOrNull { it.siteId == b.siteId && it.fractional.almostEquals(Vec3(b.fractional.x - b.cellOffset.x.toDouble(), b.fractional.y - b.cellOffset.y.toDouble(), b.fractional.z - b.cellOffset.z.toDouble())) }?.id
+            val primaryId = primaryAtoms.firstOrNull {
+                it.siteId == b.siteId && it.fractionalCoordinate.almostEquals(
+                    FractionalCoordinate(
+                        b.fractionalCoordinate.x - b.cellOffset.x,
+                        b.fractionalCoordinate.y - b.cellOffset.y,
+                        b.fractionalCoordinate.z - b.cellOffset.z,
+                    ),
+                )
+            }?.id
             if (primaryId != null) shellByKey[primaryId to b.cellOffset] = b
         }
 
@@ -171,7 +187,7 @@ object BondDetector {
         // instead would mis-classify e.g. Cl(½,½,½) imaged to (0,0,1) → position (½,½,1.5), which is
         // outside the closure (z=1.5 > 1) and therefore an external shell, not a boundary image —
         // even though the offset (0,0,1) itself sits on the z=1 face.
-        fun isBoundaryPosition(fractional: Vec3): Boolean {
+        fun isBoundaryPosition(fractional: FractionalCoordinate): Boolean {
             val inBox = fractional.x >= -boundaryEps && fractional.x <= ex + boundaryEps &&
                 fractional.y >= -boundaryEps && fractional.y <= ey + boundaryEps &&
                 fractional.z >= -boundaryEps && fractional.z <= ez + boundaryEps
@@ -184,13 +200,13 @@ object BondDetector {
                 (fractional.z >= ez - boundaryEps && fractional.z <= ez + boundaryEps)
         }
 
-        fun getShellAtom(q: ExpandedAtom, off: Int3): ExpandedAtom {
+        fun getShellAtom(q: AtomImage, off: Int3): AtomImage {
             shellByKey[q.id to off]?.let { return it }
-            val frac = q.fractional + Vec3(off.x.toDouble(), off.y.toDouble(), off.z.toDouble())
+            val frac = q.fractionalCoordinate + off
             val atom = q.copy(
                 id = nextTempId(),
-                fractional = frac,
-                cartesian = structure.cell.toCartesian(frac),
+                fractionalCoordinate = frac,
+                cartesianCoordinate = structure.lattice.toCartesian(frac),
                 cellOffset = off,
                 isShell = true,
                 isBoundaryImage = isBoundaryPosition(frac),
@@ -208,17 +224,18 @@ object BondDetector {
             for (dxx in -1..1) for (dyy in -1..1) for (dzz in -1..1) {
                 val offB = Int3(c.cellOffset.x + dxx, c.cellOffset.y + dyy, c.cellOffset.z + dzz)
                 val latOff = la * offB.x.toDouble() + lb * offB.y.toDouble() + lc * offB.z.toDouble()
-                val qx = c.cartesian.x - latOff.x
-                val qy = c.cartesian.y - latOff.y
-                val qz = c.cartesian.z - latOff.z
+                val cCartesian = c.cartesianCoordinate.toVec3()
+                val qx = cCartesian.x - latOff.x
+                val qy = cCartesian.y - latOff.y
+                val qz = cCartesian.z - latOff.z
                 val bix = Math.floor(qx / cellSize).toInt()
                 val biy = Math.floor(qy / cellSize).toInt()
                 val biz = Math.floor(qz / cellSize).toInt()
                 for (bx in bix - 1..bix + 1) for (by in biy - 1..biy + 1) for (bz in biz - 1..biz + 1) {
                     val bucket = buckets[Int3(bx, by, bz)] ?: continue
                     for (q in bucket) {
-                        val bCartesian = q.cartesian + latOff
-                        val d = distance(c.cartesian, bCartesian)
+                        val bCartesian = q.cartesianCoordinate.toVec3() + latOff
+                        val d = distance(cCartesian, bCartesian)
                         if (d <= 0.0) continue
                         // Per v0.5.3b: BondRule.key sorts the two site ids and joins with NUL; reuse
                         // it so custom-rule + disabled-pair lookups match the rest of the engine (the
@@ -227,11 +244,12 @@ object BondDetector {
                         if (key in disabledPairs) continue
                         val customRule = custom[key]
                         val isPeriodicSameSite = c.siteId == q.siteId &&
-                            (c.fractional - (q.fractional + Vec3(offB.x.toDouble(), offB.y.toDouble(), offB.z.toDouble()))).isIntegerVector()
+                            PeriodicBoundary.isIntegerTranslation(c.fractionalCoordinate - (q.fractionalCoordinate + offB))
                         if (customRule == null && isPeriodicSameSite) continue
                         val rule = customRule ?: BondRule(
                             c.siteId, q.siteId, 0.1,
-                            PeriodicTable.covalentRadius(c.element) + PeriodicTable.covalentRadius(q.element) + 0.45,
+                            PeriodicTable.covalentRadius(c.species.symbol) +
+                                PeriodicTable.covalentRadius(q.species.symbol) + 0.45,
                             BondRuleSource.AUTO,
                         )
                         if (d < rule.minAngstrom || d > rule.maxAngstrom) continue
@@ -261,7 +279,7 @@ object BondDetector {
 
         val idMap = HashMap<Long, Long>()
         var finalId = 1L
-        val finalAtoms = ArrayList<ExpandedAtom>(primaryAtoms.size + keptShell.size)
+        val finalAtoms = ArrayList<AtomImage>(primaryAtoms.size + keptShell.size)
         for (atom in primaryAtoms) {
             idMap[atom.id] = finalId
             finalAtoms += atom.copy(id = finalId++)
@@ -282,8 +300,8 @@ object BondDetector {
     @Suppress("unused")
     private fun buildNetworkLegacy(
         structure: CrystalStructure,
+        bondConfiguration: BondConfiguration,
         expansion: Expansion = Expansion(),
-        bondRules: List<BondRule> = structure.bondRules,
     ): BondNetwork {
         val base = SymmetryExpander.expand(structure)
         // Per v0.5.3b: guard the primary atom count up front (was a post-hoc check on finalAtoms
@@ -307,24 +325,24 @@ object BondDetector {
         // vertices. Shell atoms that are not referenced by any bond are discarded after bonding, and
         // the kept atoms are renumbered with compact ids.
         val primaryCapacity = base.size * expansion.multiplier
-        val primaryAtoms = ArrayList<ExpandedAtom>(primaryCapacity)
+        val primaryAtoms = ArrayList<AtomImage>(primaryCapacity)
         var tempId = 1L
         fun nextTempId() = tempId++
         for (ix in 0 until ex) for (iy in 0 until ey) for (iz in 0 until ez) {
             base.forEach { atom ->
                 val offset = Int3(ix, iy, iz)
-                val fractional = atom.fractional + Vec3(offset.x.toDouble(), offset.y.toDouble(), offset.z.toDouble())
+                val fractional = atom.fractionalCoordinate + offset
                 primaryAtoms += atom.copy(
                     id = nextTempId(),
-                    fractional = fractional,
-                    cartesian = structure.cell.toCartesian(fractional),
+                    fractionalCoordinate = fractional,
+                    cartesianCoordinate = structure.lattice.toCartesian(fractional),
                     cellOffset = offset,
                     isShell = false,
                 )
             }
         }
 
-        val shellAtoms = ArrayList<ExpandedAtom>()
+        val shellAtoms = ArrayList<AtomImage>()
         val boundaryEps = 1e-6
         // Per v0.3.44: the shell is TWO cells thick so a boundary-image centre's outward neighbours
         // are materialised too. A boundary image sits on the primary-box face (offset ±1); its
@@ -341,7 +359,7 @@ object BondDetector {
             if (ix in 0 until ex && iy in 0 until ey && iz in 0 until ez) continue
             base.forEach { atom ->
                 val offset = Int3(ix, iy, iz)
-                val fractional = atom.fractional + Vec3(offset.x.toDouble(), offset.y.toDouble(), offset.z.toDouble())
+                val fractional = atom.fractionalCoordinate + offset
                 // Per v0.3.41: a shell atom lying on a face of the primary expansion box is a
                 // boundary image (e.g. the (1,0,0) image of a corner atom). Boundary images are
                 // displayed by default. Shell atoms not on any face are genuine external neighbours.
@@ -362,8 +380,8 @@ object BondDetector {
                 val isBoundaryImage = inPrimaryBox && onFace
                 shellAtoms += atom.copy(
                     id = nextTempId(),
-                    fractional = fractional,
-                    cartesian = structure.cell.toCartesian(fractional),
+                    fractionalCoordinate = fractional,
+                    cartesianCoordinate = structure.lattice.toCartesian(fractional),
                     cellOffset = offset,
                     isShell = true,
                     isBoundaryImage = isBoundaryImage,
@@ -371,7 +389,12 @@ object BondDetector {
             }
         }
 
-        val rawBonds = inferPrimaryShellBonds(primaryAtoms, shellAtoms, bondRules, structure.disabledBondPairs)
+        val rawBonds = inferPrimaryShellBonds(
+            primaryAtoms,
+            shellAtoms,
+            bondConfiguration.rules,
+            bondConfiguration.disabledPairs,
+        )
 
         // Discard shell atoms that are not referenced by any bond. This keeps the SceneSnapshot small
         // while still allowing polyhedra to use every cross-cell ligand (they come from bonds).
@@ -388,7 +411,7 @@ object BondDetector {
         // Renumber kept atoms compactly so the id space is dense.
         val idMap = mutableMapOf<Long, Long>()
         var finalId = 1L
-        val finalAtoms = ArrayList<ExpandedAtom>(primaryAtoms.size + keptShellAtoms.size)
+        val finalAtoms = ArrayList<AtomImage>(primaryAtoms.size + keptShellAtoms.size)
         primaryAtoms.forEach { atom ->
             idMap[atom.id] = finalId
             finalAtoms += atom.copy(id = finalId++)
@@ -418,8 +441,8 @@ object BondDetector {
      * Duplicates are avoided with an unordered id-pair set.
      */
     private fun inferPrimaryShellBonds(
-        primaryAtoms: List<ExpandedAtom>,
-        shellAtoms: List<ExpandedAtom>,
+        primaryAtoms: List<AtomImage>,
+        shellAtoms: List<AtomImage>,
         rules: List<BondRule>,
         disabledPairs: Set<String> = emptySet(),
     ): List<Bond> {
@@ -449,14 +472,16 @@ object BondDetector {
                     // same atom (e.g. Ni(0,0,0)–Ni(1,0,0) along the c axis). The covalent-radius
                     // auto fallback would spuriously bond every like-atom neighbour (Cs–Cs in CsCl),
                     // so it is only allowed when the user defined an explicit rule for the pair.
-                    val isPeriodicSameSite = a.siteId == b.siteId && (a.fractional - b.fractional).isIntegerVector()
+                    val isPeriodicSameSite = a.siteId == b.siteId &&
+                        PeriodicBoundary.isIntegerTranslation(a.fractionalCoordinate - b.fractionalCoordinate)
                     if (customRule == null && isPeriodicSameSite) continue
                     val rule = customRule ?: BondRule(
                         a.siteId, b.siteId, 0.1,
-                        PeriodicTable.covalentRadius(a.element) + PeriodicTable.covalentRadius(b.element) + 0.45,
+                        PeriodicTable.covalentRadius(a.species.symbol) +
+                            PeriodicTable.covalentRadius(b.species.symbol) + 0.45,
                         BondRuleSource.AUTO,
                     )
-                    val d = distance(a.cartesian, b.cartesian)
+                    val d = distance(a.cartesianCoordinate.toVec3(), b.cartesianCoordinate.toVec3())
                     if (d > 0.0 && d >= rule.minAngstrom && d <= rule.maxAngstrom) {
                         // Per v0.3.43: orient the bond so the shell atom (when exactly one endpoint is a
                         // shell atom) is atomB. The renderer keys cross-cell visibility on atomB being an
@@ -474,16 +499,20 @@ object BondDetector {
         return result
     }
 
-    fun detect(atoms: List<ExpandedAtom>, rules: List<BondRule>, disabledPairs: Set<String> = emptySet(), cell: UnitCell): List<Bond> {
+    fun detect(
+        atoms: List<AtomImage>,
+        bondConfiguration: BondConfiguration,
+        lattice: Lattice,
+    ): List<Bond> {
         if (atoms.size < 2) return emptyList()
-        val custom = rules.associateBy { it.key }
+        val custom = bondConfiguration.rules.associateBy { it.key }
         // Per v0.3.2: minimum-image convention. For each atom pair consider all 27 periodic images
         // (offset in {-1,0,1}^3) of B and take the closest one, so corner/edge neighbour bonds are
         // found without materialising 26 neighbour-cell atoms. O(N^2 * 27) - fine for N up to a few
         // hundred; larger structures can be optimised later with spatial hashing.
-        val la = cell.matrix.a // lattice vectors in Cartesian (columns of the cell matrix)
-        val lb = cell.matrix.b
-        val lc = cell.matrix.c
+        val la = lattice.matrix.a // lattice vectors in Cartesian (columns of the lattice matrix)
+        val lb = lattice.matrix.b
+        val lc = lattice.matrix.c
         val offsets = ArrayList<Vec3>(27)
         val intOffsets = ArrayList<Int3>(27)
         for (dx in -1..1) for (dy in -1..1) for (dz in -1..1) {
@@ -497,17 +526,18 @@ object BondDetector {
                 val other = atoms[j]
                 val key = listOf(atom.siteId, other.siteId).sorted().joinToString("\u0000")
                 // Per v0.2.3: a pair the user explicitly deleted is not redrawn via the fallback.
-                if (key in disabledPairs) continue
+                if (key in bondConfiguration.disabledPairs) continue
                 val rule = custom[key] ?: BondRule(
                     atom.siteId, other.siteId, 0.1,
-                    PeriodicTable.covalentRadius(atom.element) + PeriodicTable.covalentRadius(other.element) + 0.45,
+                    PeriodicTable.covalentRadius(atom.species.symbol) +
+                        PeriodicTable.covalentRadius(other.species.symbol) + 0.45,
                     BondRuleSource.AUTO,
                 )
                 // Find the closest periodic image of other relative to atom.
                 var bestD = Double.POSITIVE_INFINITY
                 var bestIdx = -1
                 for (k in offsets.indices) {
-                    val d = distance(atom.cartesian, other.cartesian + offsets[k])
+                    val d = distance(atom.cartesianCoordinate.toVec3(), other.cartesianCoordinate.toVec3() + offsets[k])
                     if (d < bestD) { bestD = d; bestIdx = k }
                 }
                 if (bestD > 0.0 && bestD >= rule.minAngstrom && bestD <= rule.maxAngstrom) {
@@ -519,9 +549,3 @@ object BondDetector {
     }
 
 }
-
-private fun Vec3.isIntegerVector(epsilon: Double = 1e-6): Boolean {
-    fun isInt(v: Double) = kotlin.math.abs(v - kotlin.math.round(v)) < epsilon
-    return isInt(x) && isInt(y) && isInt(z)
-}
-

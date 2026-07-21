@@ -28,23 +28,18 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import com.krystals.crystal.analysis.bonding.BondNetwork
 import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
-import com.krystals.crystal.analysis.expansion.AtomImage
-import com.krystals.crystal.analysis.model.AxisMode
-import com.krystals.crystal.analysis.model.BondColorMode
-import com.krystals.crystal.analysis.model.FrameMode
-import com.krystals.crystal.analysis.model.LineStyle
-import com.krystals.crystal.analysis.model.PeriodicTable
-import com.krystals.crystal.analysis.model.ViewerAppearance
 import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
-import com.krystals.crystal.core.Mat3
-import com.krystals.crystal.core.UnitCell
-import com.krystals.crystal.core.Vec3
-import com.krystals.crystal.core.angleDegrees
-import com.krystals.crystal.core.dihedralDegrees
-import com.krystals.crystal.core.distance
-import com.krystals.crystal.core.eulerYX
-import com.krystals.crystal.core.rotX
-import com.krystals.crystal.core.rotY
+import com.krystals.crystal.core.coordinate.FractionalCoordinate
+import com.krystals.crystal.core.lattice.Lattice
+import com.krystals.crystal.core.math.Mat3
+import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.math.angleDegrees
+import com.krystals.crystal.core.math.dihedralDegrees
+import com.krystals.crystal.core.math.distance
+import com.krystals.crystal.core.math.eulerYX
+import com.krystals.crystal.core.math.rotX
+import com.krystals.crystal.core.math.rotY
+import com.krystals.crystal.core.model.AtomImage
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -148,11 +143,11 @@ class ViewerController {
         panY = 0f
     }
 
-    fun alignCellAxis(axis: Char, cell: UnitCell) {
+    fun alignCellAxis(axis: Char, lattice: Lattice) {
         val v = when (axis.lowercaseChar()) {
-            'a' -> cell.matrix.a
-            'b' -> cell.matrix.b
-            else -> cell.matrix.c
+            'a' -> lattice.matrix.a
+            'b' -> lattice.matrix.b
+            else -> lattice.matrix.c
         }
         val pitchRad = atan2(v.y, v.z)
         val zPlane = v.y * sin(pitchRad) + v.z * cos(pitchRad)
@@ -178,6 +173,7 @@ private data class TapEvent(val time: Long, val position: Offset)
 fun CrystalViewport(
     snapshot: BondNetwork,
     appearance: ViewerAppearance,
+    renderConfiguration: RenderConfiguration,
     modifier: Modifier = Modifier,
     controller: ViewerController = rememberViewerController(),
     visibility: ViewerVisibility = ViewerVisibility(),
@@ -272,10 +268,10 @@ fun CrystalViewport(
             return@Canvas
         }
 
-        val center = boundingCenter(snapshot.atoms.map { it.cartesian })
+        val center = boundingCenter(snapshot.atoms.map { it.cartesianCoordinate.toVec3() })
         // Per v0.3.0: project ALL atoms (not just visible) so bonds/polyhedra survive hiding an
         // atom — the bond endpoint / polyhedron vertex lookup (byId) needs the hidden atoms too.
-        val rotated = snapshot.atoms.associateWith { controller.rotation * (it.cartesian - center) }
+        val rotated = snapshot.atoms.associateWith { controller.rotation * (it.cartesianCoordinate.toVec3() - center) }
         val fullRotated = rotated.values.toList()
         val extentX = fullRotated.maxOf { it.x } - fullRotated.minOf { it.x }
         val extentY = fullRotated.maxOf { it.y } - fullRotated.minOf { it.y }
@@ -291,7 +287,7 @@ fun CrystalViewport(
 
         val projected = snapshot.atoms.map { atom ->
             val v = rotated.getValue(atom)
-            val radius = (PeriodicTable.defaultRadius(atom.element).toFloat() * scale).coerceIn(4.5f, 42f)
+            val radius = (RenderPalette.defaultRadius(atom.species.symbol).toFloat() * scale).coerceIn(4.5f, 42f)
             ProjectedAtom(atom, project(v), v.z, radius)
         }
         val byId = projected.associateBy { it.atom.id }
@@ -362,7 +358,11 @@ fun CrystalViewport(
                         // space lighting. Per v0.3.2: back faces are always culled (not just when
                         // nearly opaque) so translucent polyhedra don't have back faces paint over
                         // front atoms.
-                        val baseArgb = PeriodicTable.resolveSiteArgb(center.atom.siteId, center.atom.element, snapshot.structure.siteArgbOverrides, snapshot.elementArgbOverrides)
+                        val baseArgb = RenderPalette.resolveSiteArgb(
+                            center.atom.siteId,
+                            center.atom.species.symbol,
+                            renderConfiguration,
+                        )
                         val baseColor = colorFromArgb(baseArgb).copy(alpha = appearance.polyhedronOpacity.coerceIn(0f, 1f))
                         polyhedronFaceRenderables(center, vertices, baseColor, controller.rotation).forEach { add(it) }
                     }
@@ -402,8 +402,8 @@ fun CrystalViewport(
                 // Per v0.5.3a: depth cueing blends each object's colour toward the background by its
                 // fog amount; opacity is unchanged. Bonds split at the midpoint so each half fades by
                 // its endpoint atom's depth (continuous fade into the atoms).
-                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, dofFog(renderable.depth), bgColor)
-                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, snapshot.elementArgbOverrides, snapshot.structure.siteArgbOverrides, visibility.hiddenSites, ::dofFog, bgColor)
+                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, appearance, renderConfiguration, dofFog(renderable.depth), bgColor)
+                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, renderConfiguration, visibility.hiddenSites, ::dofFog, bgColor)
                 is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance, dofFog(renderable.depth), bgColor)
             }
         }
@@ -428,7 +428,14 @@ fun CrystalViewport(
     }
 }
 
-private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), fog: Float = 0f, bgColor: Color = Color.Black) {
+private fun DrawScope.drawAtom(
+    atom: ProjectedAtom,
+    selected: Boolean,
+    appearance: ViewerAppearance,
+    renderConfiguration: RenderConfiguration,
+    fog: Float = 0f,
+    bgColor: Color = Color.Black,
+) {
     // Per v0.5.3a: depth cueing fades COLOUR toward the background by [fog] (0..1); opacity is
     // unchanged (atomOpacity only), so distant atoms dissolve into the bg rather than go transparent.
     val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
@@ -436,7 +443,9 @@ private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearanc
         if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))
         return
     }
-    val rawBase = colorFromArgb(PeriodicTable.resolveSiteArgb(atom.atom.siteId, atom.atom.element, siteArgbOverrides, elementArgbOverrides))
+    val rawBase = colorFromArgb(
+        RenderPalette.resolveSiteArgb(atom.atom.siteId, atom.atom.species.symbol, renderConfiguration),
+    )
     val base = rawBase.blend(bgColor, fog).copy(alpha = opacity)
     val dark = rawBase.darken(0.65f).blend(bgColor, fog).copy(alpha = opacity)
     val sphere = Brush.radialGradient(
@@ -501,7 +510,16 @@ private fun DrawScope.drawAtom(atom: ProjectedAtom, selected: Boolean, appearanc
     if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))
 }
 
-private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dofFog: (Double) -> Float, bgColor: Color = Color.Black) {
+private fun DrawScope.drawBond(
+    a: ProjectedAtom,
+    b: ProjectedAtom,
+    width: Float,
+    appearance: ViewerAppearance,
+    renderConfiguration: RenderConfiguration,
+    hiddenSites: Set<String> = emptySet(),
+    dofFog: (Double) -> Float,
+    bgColor: Color = Color.Black,
+) {
     // Per v0.5.3a: depth cueing fades each half's COLOUR toward the background by its endpoint's
     // fog; opacity is unchanged (bondOpacity only). Splitting at the midpoint keeps the fade
     // continuous into the atoms instead of a single mid-depth step.
@@ -535,8 +553,12 @@ private fun DrawScope.drawBond(a: ProjectedAtom, b: ProjectedAtom, width: Float,
         drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
     } else {
-        val baseA = colorFromArgb(PeriodicTable.resolveSiteArgb(a.atom.siteId, a.atom.element, siteArgbOverrides, elementArgbOverrides)).blend(bgColor, fogA).copy(alpha = opacity)
-        val baseB = colorFromArgb(PeriodicTable.resolveSiteArgb(b.atom.siteId, b.atom.element, siteArgbOverrides, elementArgbOverrides)).blend(bgColor, fogB).copy(alpha = opacity)
+        val baseA = colorFromArgb(
+            RenderPalette.resolveSiteArgb(a.atom.siteId, a.atom.species.symbol, renderConfiguration),
+        ).blend(bgColor, fogA).copy(alpha = opacity)
+        val baseB = colorFromArgb(
+            RenderPalette.resolveSiteArgb(b.atom.siteId, b.atom.species.symbol, renderConfiguration),
+        ).blend(bgColor, fogB).copy(alpha = opacity)
         drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
     }
@@ -630,22 +652,26 @@ private fun polyhedronFaceRenderables(
     rotation: Mat3,
 ): List<PolyhedronFaceRenderable> {
     if (vertices.size < 3) return emptyList()
-    val byCartesian = vertices.associateBy { it.atom.cartesian }
+    val byCartesian = vertices.associateBy { it.atom.cartesianCoordinate.toVec3() }
 
     // Per v0.3.41: always use convexHullFaces so coplanar ligands produce a single correctly-ordered
     // polygon (triangle, quad, etc.) instead of being handled by the allMutuallyAdjacent shortcut.
     val hullPolygons: List<List<ProjectedAtom>> =
-        PolyhedronHull.faces(center.atom.cartesian, vertices.map { it.atom.cartesian })
+        PolyhedronHull.faces(
+            center.atom.cartesianCoordinate.toVec3(),
+            vertices.map { it.atom.cartesianCoordinate.toVec3() },
+        )
             .mapNotNull { poly -> poly.map { p -> byCartesian[p] ?: return@mapNotNull null } }
 
     // For a flat coordination (e.g. trigonal-planar CO3 or square-planar) the polyhedron is really a
     // single polygon. Back-face culling would hide it when viewed from the centre-atom side, so emit
     // each face twice — once with the outward normal and once with the reversed normal.
     val allCoplanar = vertices.size >= 3 && run {
-        val v0 = vertices[0].atom.cartesian
-        val n = (vertices[1].atom.cartesian - v0).cross(vertices[2].atom.cartesian - v0)
+        val v0 = vertices[0].atom.cartesianCoordinate.toVec3()
+        val n = (vertices[1].atom.cartesianCoordinate.toVec3() - v0)
+            .cross(vertices[2].atom.cartesianCoordinate.toVec3() - v0)
         if (n.lengthSquared() < 1e-12) return@run false
-        vertices.drop(3).all { abs(n.dot(it.atom.cartesian - v0)) < 1e-6 }
+        vertices.drop(3).all { abs(n.dot(it.atom.cartesianCoordinate.toVec3() - v0)) < 1e-6 }
     }
 
     val result = mutableListOf<PolyhedronFaceRenderable>()
@@ -653,8 +679,10 @@ private fun polyhedronFaceRenderables(
         if (faceVerts.size < 3) return@forEach
         // Outward normal in world space, then rotate to camera space for culling + lighting.
         val va = faceVerts[0]; val vb = faceVerts[1]; val vc = faceVerts[2]
-        var worldNormal = (vb.atom.cartesian - va.atom.cartesian).cross(vc.atom.cartesian - va.atom.cartesian)
-        val toCenter = center.atom.cartesian - va.atom.cartesian
+        val vaCartesian = va.atom.cartesianCoordinate.toVec3()
+        var worldNormal = (vb.atom.cartesianCoordinate.toVec3() - vaCartesian)
+            .cross(vc.atom.cartesianCoordinate.toVec3() - vaCartesian)
+        val toCenter = center.atom.cartesianCoordinate.toVec3() - vaCartesian
         // Per v0.3.42: toCenter points from the face toward the centre atom, so the outward normal
         // (pointing away from the centre) must have a NEGATIVE dot with toCenter. The previous code
         // flipped when dot < 0, which turned outward into inward and culled the front face.
@@ -751,9 +779,9 @@ private fun DrawScope.drawMeasurement(
     if (points.size != expected) return null
     for (index in 0 until points.lastIndex) drawLine(Color(0xFFE1C6FF), points[index].point, points[index + 1].point, 2.5f)
     val label = when (mode) {
-        MeasurementMode.LENGTH -> "%.4f Å".format(distance(points[0].atom.cartesian, points[1].atom.cartesian))
-        MeasurementMode.ANGLE -> "%.3f°".format(angleDegrees(points[0].atom.cartesian, points[1].atom.cartesian, points[2].atom.cartesian))
-        MeasurementMode.DIHEDRAL -> "%.3f°".format(dihedralDegrees(points[0].atom.cartesian, points[1].atom.cartesian, points[2].atom.cartesian, points[3].atom.cartesian))
+        MeasurementMode.LENGTH -> "%.4f Å".format(distance(points[0].atom.cartesianCoordinate.toVec3(), points[1].atom.cartesianCoordinate.toVec3()))
+        MeasurementMode.ANGLE -> "%.3f°".format(angleDegrees(points[0].atom.cartesianCoordinate.toVec3(), points[1].atom.cartesianCoordinate.toVec3(), points[2].atom.cartesianCoordinate.toVec3()))
+        MeasurementMode.DIHEDRAL -> "%.3f°".format(dihedralDegrees(points[0].atom.cartesianCoordinate.toVec3(), points[1].atom.cartesianCoordinate.toVec3(), points[2].atom.cartesianCoordinate.toVec3(), points[3].atom.cartesianCoordinate.toVec3()))
         else -> return null
     }
     val anchor = points.map { it.point }.reduce { a, b -> a + b } / points.size.toFloat()
@@ -786,7 +814,8 @@ private fun DrawScope.drawAtomInfo(
     // Per v0.5.0: append the atom's bond-valence sum (s = X.XX) after occupancy when available.
     val bvs = bondValenceBySite[atom.atom.siteId]
     val bvsText = bvs?.let { "  s = %.2f".format(it) } ?: ""
-    val label = "${atom.atom.element}  ${atom.atom.siteLabel}  occ ${atom.atom.occupancy}$bvsText\n(${atom.atom.fractional.x.formatFract()}, ${atom.atom.fractional.y.formatFract()}, ${atom.atom.fractional.z.formatFract()})"
+    val fractional = atom.atom.fractionalCoordinate
+    val label = "${atom.atom.species.symbol}  ${atom.atom.siteLabel}  occ ${atom.atom.occupancy}$bvsText\n(${fractional.x.formatFract()}, ${fractional.y.formatFract()}, ${fractional.z.formatFract()})"
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.WHITE
         textSize = 40f
@@ -818,7 +847,7 @@ private fun DrawScope.drawAxes(
 ) {
     // Three unit direction vectors, in the same world space the atoms live in.
     val directions: List<Vec3> = when (appearance.axisMode) {
-        AxisMode.ABC -> listOf(snapshot.structure.cell.matrix.a, snapshot.structure.cell.matrix.b, snapshot.structure.cell.matrix.c)
+        AxisMode.ABC -> listOf(snapshot.structure.lattice.matrix.a, snapshot.structure.lattice.matrix.b, snapshot.structure.lattice.matrix.c)
         AxisMode.XYZ -> listOf(Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0))
     }
     val labels = when (appearance.axisMode) {
@@ -903,7 +932,7 @@ private fun DrawScope.drawCellFrames(
             Vec3(ix.toDouble(), iy + 1.0, iz.toDouble()), Vec3(ix + 1.0, iy + 1.0, iz.toDouble()),
             Vec3(ix.toDouble(), iy.toDouble(), iz + 1.0), Vec3(ix + 1.0, iy.toDouble(), iz + 1.0),
             Vec3(ix.toDouble(), iy + 1.0, iz + 1.0), Vec3(ix + 1.0, iy + 1.0, iz + 1.0),
-        ).map { snapshot.structure.cell.toCartesian(it) - center }
+        ).map { snapshot.structure.lattice.toCartesian(FractionalCoordinate.fromVec3(it)).toVec3() - center }
             .map { controller.rotation * it }
             .map(project)
         edges.forEach { (a, b) -> drawLine(Color.Gray.copy(alpha = 0.72f), vertices[a], vertices[b], 1.4f, pathEffect = effect) }

@@ -1,15 +1,18 @@
 package com.krystals.crystal.io
 
-import com.krystals.crystal.analysis.model.AtomSite
-import com.krystals.crystal.analysis.model.BondRule
-import com.krystals.crystal.analysis.model.BondRuleSource
-import com.krystals.crystal.analysis.model.CrystalStructure
+import com.krystals.crystal.analysis.bonding.BondConfiguration
+import com.krystals.crystal.analysis.bonding.BondRule
+import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.model.PeriodicTable
-import com.krystals.crystal.core.SpaceGroupCatalog
-import com.krystals.crystal.core.SymmetryOperation
-import com.krystals.crystal.core.UnitCell
-import com.krystals.crystal.core.Vec3
-import com.krystals.crystal.core.parseFraction
+import com.krystals.crystal.core.coordinate.CartesianCoordinate
+import com.krystals.crystal.core.coordinate.FractionalCoordinate
+import com.krystals.crystal.core.lattice.Lattice
+import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.model.Site
+import com.krystals.crystal.core.model.Species
+import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
+import com.krystals.crystal.core.symmetry.SymmetryOperation
+import com.krystals.crystal.core.symmetry.parseFraction
 
 data class CifToken(val value: String, val start: Int, val end: Int)
 
@@ -67,7 +70,23 @@ data class CifBlock(
 
 data class CifDocument(val source: String, val blocks: List<CifBlock>)
 
-data class ParsedStructure(val document: CifDocument, val blockIndex: Int, val structure: CrystalStructure)
+data class CifDisplayMetadata(
+    val elementArgbOverrides: Map<String, Long> = emptyMap(),
+)
+
+data class ParsedStructure(
+    val document: CifDocument,
+    val blockIndex: Int,
+    val structure: CrystalStructure,
+    val bondConfiguration: BondConfiguration,
+    val displayMetadata: CifDisplayMetadata,
+)
+
+private data class ParsedBlock(
+    val structure: CrystalStructure,
+    val bondConfiguration: BondConfiguration,
+    val displayMetadata: CifDisplayMetadata,
+)
 
 object CifCodec {
     private val replacementPrefixes = listOf(
@@ -109,32 +128,43 @@ object CifCodec {
         require(candidates.isNotEmpty()) { "CIF contains no structure with a unit cell and atom sites" }
         val selected = blockIndex ?: candidates.first()
         require(selected in candidates) { "Selected data block is not a crystal structure" }
-        return ParsedStructure(document, selected, toStructure(document.blocks[selected]))
+        val parsedBlock = toStructure(document.blocks[selected])
+        return ParsedStructure(
+            document,
+            selected,
+            parsedBlock.structure,
+            parsedBlock.bondConfiguration,
+            parsedBlock.displayMetadata,
+        )
     }
 
     fun newDocument(structure: CrystalStructure = CrystalStructure(
         blockName = "untitled",
-        cell = UnitCell.DEFAULT,
-        spaceGroupName = "P1",
-        spaceGroupNumber = 1,
+        lattice = Lattice.DEFAULT,
+        spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
         symmetryOperations = emptyList(),
         sites = emptyList(),
-        elementArgbOverrides = emptyMap(),
-    )): ParsedStructure {
-        val source = canonicalStructure(structure, structure.bondRules, includeHeader = true)
+    ), bondConfiguration: BondConfiguration = BondConfiguration(), displayMetadata: CifDisplayMetadata = CifDisplayMetadata()): ParsedStructure {
+        val source = canonicalStructure(structure, bondConfiguration.rules, displayMetadata, includeHeader = true)
         return parseStructureAllowEmpty(source)
     }
 
     private fun parseStructureAllowEmpty(source: String): ParsedStructure {
         val document = parse(source)
-        return ParsedStructure(document, 0, toStructure(document.blocks[0]))
+        val parsedBlock = toStructure(document.blocks[0])
+        return ParsedStructure(document, 0, parsedBlock.structure, parsedBlock.bondConfiguration, parsedBlock.displayMetadata)
     }
 
-    fun write(parsed: ParsedStructure, structure: CrystalStructure, bondRules: List<BondRule> = structure.bondRules): String {
+    fun write(
+        parsed: ParsedStructure,
+        structure: CrystalStructure,
+        bondConfiguration: BondConfiguration,
+        displayMetadata: CifDisplayMetadata,
+    ): String {
         val document = parsed.document
         val block = document.blocks[parsed.blockIndex]
         val source = document.source
-        val replacement = canonicalStructure(structure, bondRules, includeHeader = false)
+        val replacement = canonicalStructure(structure, bondConfiguration.rules, displayMetadata, includeHeader = false)
         val out = StringBuilder(source.length + replacement.length)
         out.append(source, 0, block.start)
         var cursor = block.start
@@ -163,8 +193,8 @@ object CifCodec {
         return out.toString()
     }
 
-    private fun toStructure(block: CifBlock): CrystalStructure {
-        val cell = UnitCell(
+    private fun toStructure(block: CifBlock): ParsedBlock {
+        val lattice = Lattice(
             numeric(block.scalar("_cell_length_a")) ?: 1.0,
             numeric(block.scalar("_cell_length_b")) ?: 1.0,
             numeric(block.scalar("_cell_length_c")) ?: 1.0,
@@ -192,24 +222,24 @@ object CifCodec {
             val rawElement = atomLoop.firstValue(row, "_atom_site_type_symbol") ?: label
             val element = PeriodicTable.normalizeElement(rawElement)
             val fractional = if (atomLoop.hasTag("_atom_site_fract_x")) {
-                Vec3(
+                FractionalCoordinate(
                     numeric(atomLoop.firstValue(row, "_atom_site_fract_x")) ?: return@mapNotNull null,
                     numeric(atomLoop.firstValue(row, "_atom_site_fract_y")) ?: return@mapNotNull null,
                     numeric(atomLoop.firstValue(row, "_atom_site_fract_z")) ?: return@mapNotNull null,
                 ).wrapped()
             } else {
-                val cartesian = Vec3(
+                val cartesian = CartesianCoordinate(
                     numeric(atomLoop.firstValue(row, "_atom_site_cartn_x")) ?: return@mapNotNull null,
                     numeric(atomLoop.firstValue(row, "_atom_site_cartn_y")) ?: return@mapNotNull null,
                     numeric(atomLoop.firstValue(row, "_atom_site_cartn_z")) ?: return@mapNotNull null,
                 )
-                cell.toFractional(cartesian).wrapped()
+                lattice.toFractional(cartesian).wrapped()
             }
-            AtomSite(
+            Site(
                 id = uniqueSiteId(label, row),
                 label = label,
-                element = element,
-                fractional = fractional,
+                species = Species(element),
+                fractionalCoordinate = fractional,
                 occupancy = (numeric(atomLoop.firstValue(row, "_atom_site_occupancy")) ?: 1.0).coerceIn(0.0, 1.0),
             )
         }
@@ -255,26 +285,41 @@ object CifCodec {
             PeriodicTable.normalizeElement(symbol) to argb
         }.toMap()
 
-        return CrystalStructure(block.name, cell, groupName, groupNumber, operations, sites, krystalsRules + vestaRules + geomRules, colorOverrides, disabledBondPairs = emptySet(), siteArgbOverrides = emptyMap())
+        return ParsedBlock(
+            structure = CrystalStructure(
+                block.name,
+                lattice,
+                SpaceGroupCatalog.resolve(groupName, groupNumber),
+                operations,
+                sites,
+            ),
+            bondConfiguration = BondConfiguration(krystalsRules + vestaRules + geomRules),
+            displayMetadata = CifDisplayMetadata(colorOverrides),
+        )
     }
 
-    private fun canonicalStructure(structure: CrystalStructure, rules: List<BondRule>, includeHeader: Boolean): String = buildString {
+    private fun canonicalStructure(
+        structure: CrystalStructure,
+        rules: List<BondRule>,
+        displayMetadata: CifDisplayMetadata,
+        includeHeader: Boolean,
+    ): String = buildString {
         if (includeHeader) append("data_${sanitizeBlockName(structure.blockName)}\n")
-        append("_space_group_name_H-M_alt   '${structure.spaceGroupName}'\n")
-        structure.spaceGroupNumber?.let { append("_space_group_IT_number   $it\n") }
-        append("_cell_length_a   ${format(structure.cell.a)}\n")
-        append("_cell_length_b   ${format(structure.cell.b)}\n")
-        append("_cell_length_c   ${format(structure.cell.c)}\n")
-        append("_cell_angle_alpha   ${format(structure.cell.alpha)}\n")
-        append("_cell_angle_beta   ${format(structure.cell.beta)}\n")
-        append("_cell_angle_gamma   ${format(structure.cell.gamma)}\n")
+        append("_space_group_name_H-M_alt   '${structure.spaceGroup.symbol}'\n")
+        structure.spaceGroup.number?.let { append("_space_group_IT_number   $it\n") }
+        append("_cell_length_a   ${format(structure.lattice.a)}\n")
+        append("_cell_length_b   ${format(structure.lattice.b)}\n")
+        append("_cell_length_c   ${format(structure.lattice.c)}\n")
+        append("_cell_angle_alpha   ${format(structure.lattice.alpha)}\n")
+        append("_cell_angle_beta   ${format(structure.lattice.beta)}\n")
+        append("_cell_angle_gamma   ${format(structure.lattice.gamma)}\n")
         append("loop_\n _space_group_symop_id\n _space_group_symop_operation_xyz\n")
         structure.effectiveSymmetryOperations.forEachIndexed { index, operation ->
             append(" ${index + 1} '${operation.source}'\n")
         }
         append("loop_\n _atom_site_label\n _atom_site_type_symbol\n _atom_site_fract_x\n _atom_site_fract_y\n _atom_site_fract_z\n _atom_site_occupancy\n")
         structure.sites.forEach { site ->
-            append(" ${quoteIfNeeded(site.label)} ${quoteIfNeeded(site.element)} ${format(site.fractional.x)} ${format(site.fractional.y)} ${format(site.fractional.z)} ${format(site.occupancy)}\n")
+            append(" ${quoteIfNeeded(site.label)} ${quoteIfNeeded(site.species.symbol)} ${format(site.fractionalCoordinate.x)} ${format(site.fractionalCoordinate.y)} ${format(site.fractionalCoordinate.z)} ${format(site.occupancy)}\n")
         }
         if (rules.isNotEmpty()) {
             append("loop_\n _krystals_bond_rule_site_a\n _krystals_bond_rule_site_b\n _krystals_bond_rule_min_distance\n _krystals_bond_rule_max_distance\n _krystals_bond_rule_extend\n")
@@ -284,9 +329,9 @@ object CifCodec {
                 append(" ${quoteIfNeeded(labelA)} ${quoteIfNeeded(labelB)} ${format(rule.minAngstrom)} ${format(rule.maxAngstrom)} ${if (rule.extendAcrossCell) 1 else 0}\n")
             }
         }
-        if (structure.elementArgbOverrides.isNotEmpty()) {
+        if (displayMetadata.elementArgbOverrides.isNotEmpty()) {
             append("loop_\n _krystals_element_color_symbol\n _krystals_element_color_argb\n")
-            structure.elementArgbOverrides.entries.sortedBy { it.key }.forEach { (symbol, argb) ->
+            displayMetadata.elementArgbOverrides.entries.sortedBy { it.key }.forEach { (symbol, argb) ->
                 append(" ${quoteIfNeeded(symbol)} $argb\n")
             }
         }

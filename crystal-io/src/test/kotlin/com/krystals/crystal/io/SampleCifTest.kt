@@ -1,10 +1,11 @@
 package com.krystals.crystal.io
 
-import com.krystals.crystal.analysis.editing.CrystalEditor
-import com.krystals.crystal.analysis.editing.EditCommand
+import com.krystals.crystal.analysis.bonding.BondConfiguration
+import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
-import com.krystals.crystal.analysis.model.BondRule
-import com.krystals.crystal.core.Vec3
+import com.krystals.crystal.core.coordinate.FractionalCoordinate
+import com.krystals.crystal.core.model.Site
+import com.krystals.crystal.core.model.Species
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -27,7 +28,12 @@ class SampleCifTest {
                 val parsed = CifCodec.parseStructure(source, block)
                 val atoms = SymmetryExpander.expand(parsed.structure)
                 assertTrue(atoms.isNotEmpty(), "No atoms in ${file.name}:${parsed.structure.blockName}")
-                val written = CifCodec.write(parsed, parsed.structure)
+                val written = CifCodec.write(
+                    parsed,
+                    parsed.structure,
+                    parsed.bondConfiguration,
+                    parsed.displayMetadata,
+                )
                 val reparsed = CifCodec.parseStructure(written, block)
                 assertEquals(parsed.structure.sites.size, reparsed.structure.sites.size, file.name)
             }
@@ -37,12 +43,13 @@ class SampleCifTest {
     @Test
     fun customBondRulesSurviveCifWrite() {
         val parsed = CifCodec.newDocument().let { base ->
-            val structure = CrystalEditor.apply(base.structure, EditCommand.AddAtom("C", "C1", Vec3.ZERO, 1.0)).structure
-            base.copy(structure = structure)
+            base.copy(structure = base.structure.copy(sites = listOf(
+                Site("c1", "C1", Species("C"), FractionalCoordinate.ZERO),
+            )))
         }
         val site = parsed.structure.sites.single()
-        val structure = CrystalEditor.apply(parsed.structure, EditCommand.SetBondRule(BondRule(site.id, site.id, 0.8, 1.8))).structure
-        val text = CifCodec.write(parsed, structure)
-        assertEquals(1, CifCodec.parseStructure(text).structure.bondRules.size)
+        val configuration = BondConfiguration(listOf(BondRule(site.id, site.id, 0.8, 1.8)))
+        val text = CifCodec.write(parsed, parsed.structure, configuration, parsed.displayMetadata)
+        assertEquals(1, CifCodec.parseStructure(text).bondConfiguration.rules.size)
     }
 }

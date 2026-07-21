@@ -1,7 +1,7 @@
 package com.krystals.crystal.analysis.coordination
 
 import com.krystals.crystal.analysis.bonding.BondNetwork
-import com.krystals.crystal.analysis.expansion.AtomImage
+import com.krystals.crystal.core.model.AtomImage
 
 object CoordinationAnalyzer {
     fun neighbors(

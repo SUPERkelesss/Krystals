@@ -1,4 +1,4 @@
-package com.krystals.crystal.core
+package com.krystals.crystal.core.math
 
 class ExpressionParser(private val source: String) {
     private var position = 0
@@ -29,7 +29,12 @@ class ExpressionParser(private val source: String) {
             skipWhitespace()
             value = when (peek()) {
                 '*' -> { position++; value * factor() }
-                '/' -> { position++; val divisor = factor(); require(kotlin.math.abs(divisor) > 1e-15) { "Division by zero" }; value / divisor }
+                '/' -> {
+                    position++
+                    val divisor = factor()
+                    require(kotlin.math.abs(divisor) > 1e-15) { "Division by zero" }
+                    value / divisor
+                }
                 else -> return value
             }
         }
@@ -40,19 +45,33 @@ class ExpressionParser(private val source: String) {
         return when (peek()) {
             '+' -> { position++; factor() }
             '-' -> { position++; -factor() }
-            '(' -> { position++; val value = expression(); skipWhitespace(); require(peek() == ')') { "Missing ')'" }; position++; value }
+            '(' -> {
+                position++
+                val value = expression()
+                skipWhitespace()
+                require(peek() == ')') { "Missing ')'" }
+                position++
+                value
+            }
             else -> number()
         }
     }
 
     private fun number(): Double {
         val start = position
-        while (position < source.length && (source[position].isDigit() || source[position] == '.' || source[position] == 'e' || source[position] == 'E' || ((source[position] == '+' || source[position] == '-') && position > start && (source[position - 1] == 'e' || source[position - 1] == 'E')))) position++
+        while (
+            position < source.length &&
+            (source[position].isDigit() || source[position] == '.' || source[position] == 'e' || source[position] == 'E' ||
+                ((source[position] == '+' || source[position] == '-') && position > start &&
+                    (source[position - 1] == 'e' || source[position - 1] == 'E')))
+        ) position++
         require(position > start) { "Number expected at position $position" }
         return source.substring(start, position).toDouble()
     }
 
-    private fun skipWhitespace() { while (position < source.length && source[position].isWhitespace()) position++ }
+    private fun skipWhitespace() {
+        while (position < source.length && source[position].isWhitespace()) position++
+    }
+
     private fun peek(): Char? = source.getOrNull(position)
 }
-

@@ -80,15 +80,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.krystals.crystal.analysis.bonding.BondDetector
 import com.krystals.crystal.analysis.bonding.BondGrid
+import com.krystals.crystal.analysis.bonding.BondRule
+import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.bonding.BondRuleMatching
 import com.krystals.crystal.analysis.bonding.BondValence
 import com.krystals.crystal.analysis.editing.*
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.*
-import com.krystals.crystal.core.ExpressionParser
-import com.krystals.crystal.core.SpaceGroupCatalog
-import com.krystals.crystal.core.UnitCell
-import com.krystals.crystal.core.Vec3
+import com.krystals.crystal.core.coordinate.FractionalCoordinate
+import com.krystals.crystal.core.lattice.Lattice
+import com.krystals.crystal.core.math.ExpressionParser
+import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.model.Site
+import com.krystals.crystal.core.model.Species
+import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
+import com.krystals.crystal.renderer.RenderPalette
+import com.krystals.crystal.renderer.AxisMode
+import com.krystals.crystal.renderer.BondColorMode
+import com.krystals.crystal.renderer.FrameMode
+import com.krystals.crystal.renderer.LineStyle
+import com.krystals.crystal.renderer.ViewerAppearance
 import kotlin.math.max
 import kotlin.math.PI
 import kotlin.math.abs
@@ -104,9 +116,9 @@ private enum class EditorTab { BASIC, ATOMS, BONDS, EXPANSION }
 fun EditorPanel(
     tab: DocumentTab,
     onDismiss: () -> Unit,
-    onStructure: (CrystalStructure) -> Unit,
+    onStructure: (EditResult) -> Unit,
     onMessage: (String) -> Unit,
-    onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit)? = null,
+    onRunBondComputation: ((suspend () -> EditResult?) -> Unit)? = null,
 ) {
     var selectedTab by remember { mutableStateOf(if (tab.editingSiteId != null) EditorTab.ATOMS else EditorTab.BASIC) }
     // Per v0.2.3: resizable panel (mirrors DisplayPanel).
@@ -187,11 +199,11 @@ fun EditorPanel(
 }
 
 @Composable
-private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit)? = null) {
-    val currentGroup = SpaceGroupCatalog.find(tab.structure.spaceGroupName) ?: SpaceGroupCatalog.all.first()
-    var system by remember(tab.structure.spaceGroupName) { mutableStateOf(currentGroup.crystalSystem) }
-    var pointGroup by remember(tab.structure.spaceGroupName) { mutableStateOf(currentGroup.pointGroup) }
-    val systems = SpaceGroupCatalog.all.map { it.crystalSystem }.distinct()
+private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> EditResult?) -> Unit)? = null) {
+    val currentGroup = SpaceGroupCatalog.find(tab.structure.spaceGroup.symbol) ?: SpaceGroupCatalog.all.first()
+    var system by remember(tab.structure.spaceGroup.symbol) { mutableStateOf(currentGroup.crystalSystem.orEmpty()) }
+    var pointGroup by remember(tab.structure.spaceGroup.symbol) { mutableStateOf(currentGroup.pointGroup.orEmpty()) }
+    val systems = SpaceGroupCatalog.all.mapNotNull { it.crystalSystem }.distinct()
     val systemLabels = systems.associateWith { value -> when (value) {
         "Triclinic" -> localized("三斜", "Triclinic")
         "Monoclinic" -> localized("单斜", "Monoclinic")
@@ -201,13 +213,13 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Uni
         "Hexagonal" -> localized("六方", "Hexagonal")
         else -> localized("立方", "Cubic")
     } }
-    val points = SpaceGroupCatalog.all.filter { it.crystalSystem == system }.map { it.pointGroup }.distinct()
+    val points = SpaceGroupCatalog.all.filter { it.crystalSystem == system }.mapNotNull { it.pointGroup }.distinct()
     val groups = SpaceGroupCatalog.all.filter { it.crystalSystem == system && it.pointGroup == pointGroup }
-    val cell = tab.structure.cell
+    val cell = tab.structure.lattice
     var a by remember(cell) { mutableStateOf(cell.a.toString()) }; var b by remember(cell) { mutableStateOf(cell.b.toString()) }
     var c by remember(cell) { mutableStateOf(cell.c.toString()) }; var alpha by remember(cell) { mutableStateOf(cell.alpha.toString()) }
     var beta by remember(cell) { mutableStateOf(cell.beta.toString()) }; var gamma by remember(cell) { mutableStateOf(cell.gamma.toString()) }
-    val systemName = currentGroup.crystalSystem
+    val systemName = currentGroup.crystalSystem.orEmpty()
     val lockB = systemName in setOf("Tetragonal", "Trigonal", "Hexagonal", "Cubic")
     val lockC = systemName == "Cubic"
     val lockAlpha = systemName != "Triclinic"
@@ -224,10 +236,10 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Uni
             // and applies the first space group of the new (system, point group), so cell/sg stay
             // consistent instead of leaving the old space group under a new system.
             system = selected
-            val newPointGroup = SpaceGroupCatalog.all.first { it.crystalSystem == selected }.pointGroup
+            val newPointGroup = SpaceGroupCatalog.all.first { it.crystalSystem == selected }.pointGroup.orEmpty()
             pointGroup = newPointGroup
             val newSymbol = SpaceGroupCatalog.all.first { it.crystalSystem == selected && it.pointGroup == newPointGroup }.symbol
-            runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetSpaceGroup(newSymbol)).structure }
+            runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetSpaceGroup(newSymbol)) }
                 .onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid space group") }
         }
         DropdownField(localized("点群", "Point group"), pointGroup, points) { picked ->
@@ -235,12 +247,12 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Uni
             // group so the displayed space group follows the point group selection.
             pointGroup = picked
             val newSymbol = SpaceGroupCatalog.all.first { it.crystalSystem == system && it.pointGroup == picked }.symbol
-            runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetSpaceGroup(newSymbol)).structure }
+            runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetSpaceGroup(newSymbol)) }
                 .onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid space group") }
         }
-        DropdownField(localized("空间群", "Space group"), tab.structure.spaceGroupName, groups.map { "${it.number}  ${it.symbol}" }) { selection ->
+        DropdownField(localized("空间群", "Space group"), tab.structure.spaceGroup.symbol, groups.map { "${it.number}  ${it.symbol}" }) { selection ->
             val symbol = selection.substringAfter("  ")
-            runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetSpaceGroup(symbol)).structure }.onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid space group") }
+            runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetSpaceGroup(symbol)) }.onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid space group") }
         }
         Text(localized("晶胞参数", "Cell parameters"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
         Row { CellField("a (Å)", a, { a = it }, true, Modifier.weight(1f)); Spacer(Modifier.width(8.dp)); CellField("b (Å)", b, { b = it }, !lockB, Modifier.weight(1f)) }
@@ -248,19 +260,16 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Uni
         Row { CellField("β (°)", beta, { beta = it }, !lockBeta, Modifier.weight(1f)); Spacer(Modifier.width(8.dp)); CellField("γ (°)", gamma, { gamma = it }, !lockGamma, Modifier.weight(1f)) }
         Button(onClick = {
             runCatching {
-                UnitCell(eval(a), eval(if (lockB) a else b), eval(if (lockC) a else c), eval(alpha), eval(beta), eval(gamma))
-            }.mapCatching { CrystalEditor.apply(tab.structure, EditCommand.SetCell(it)).structure }
+                Lattice(eval(a), eval(if (lockB) a else b), eval(if (lockC) a else c), eval(alpha), eval(beta), eval(gamma))
+            }.mapCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetLattice(it)) }
                 .onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid cell parameters") }
         }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("应用晶胞", "Apply cell")) }
-        if (SpaceGroupCatalog.isRhombohedral(tab.structure.spaceGroupName)) {
+        if (SpaceGroupCatalog.isRhombohedral(tab.structure.spaceGroup.symbol)) {
             // γ ≈ 120 indicates the hexagonal setting; otherwise treat as already rhombohedral.
-            val toRhom = tab.structure.cell.gamma > 100.0
+            val toRhom = tab.structure.lattice.gamma > 100.0
             OutlinedButton(onClick = {
-                runCatching { CrystalEditor.convertHexRhom(tab.structure, toRhom).structure }
-                    .onSuccess { converted ->
-                        if (onRunBondComputation != null) onRunBondComputation { CrystalEditor.ensureAutoBondRules(converted).structure }
-                        else onStructure(CrystalEditor.ensureAutoBondRules(converted).structure)
-                    }
+                runCatching { CrystalEditor.convertHexRhom(tab.structure, tab.bondConfiguration, toRhom) }
+                    .onSuccess(onStructure)
                     .onFailure { onMessage(it.message ?: "Conversion failed") }
             }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 Text(localized("六方/菱方晶胞转换", "Hex/Rhombohedral conversion"))
@@ -269,10 +278,11 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Uni
         OutlinedButton(onClick = { transformOpen = true }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("3×3 变换矩阵", "3×3 Transform")) }
     }
     if (transformOpen) TransformDialog(onDismiss = { transformOpen = false }) { rows, translation ->
-        runCatching { CrystalEditor.apply(tab.structure, EditCommand.Transform(rows, translation)).structure }
+        runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.Transform(rows, translation)) }
             .onSuccess { transformed ->
-                if (onRunBondComputation != null) onRunBondComputation { CrystalEditor.ensureAutoBondRules(transformed).structure }
-                else onStructure(CrystalEditor.ensureAutoBondRules(transformed).structure)
+                if (onRunBondComputation != null) onRunBondComputation {
+                    CrystalEditor.ensureAutoBondRules(transformed.structure, transformed.bondConfiguration)
+                } else onStructure(CrystalEditor.ensureAutoBondRules(transformed.structure, transformed.bondConfiguration))
                 transformOpen = false
             }
             .onFailure { onMessage(it.message ?: "Invalid transformation") }
@@ -285,8 +295,8 @@ private fun CellField(label: String, value: String, onValue: (String) -> Unit, e
 }
 
 @Composable
-private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit)? = null) {
-    var atomDialog by remember { mutableStateOf<AtomSite?>(null) }
+private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (EditResult) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> EditResult?) -> Unit)? = null) {
+    var atomDialog by remember { mutableStateOf<Site?>(null) }
     var newElement by remember { mutableStateOf<String?>(null) }
     var periodicOpen by remember { mutableStateOf(false) }
     LaunchedEffect(tab.editingSiteId) { tab.editingSiteId?.let { id -> atomDialog = tab.structure.sites.firstOrNull { it.id == id }; tab.editingSiteId = null } }
@@ -300,14 +310,15 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Cr
         LazyColumn(Modifier.fillMaxSize()) {
             items(tab.structure.sites, key = { it.id }) { site ->
                 Row(Modifier.fillMaxWidth().clickable { atomDialog = site }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(20.dp).background(colorFromArgb(PeriodicTable.resolveArgb(site.element, tab.structure.elementArgbOverrides)), CircleShape))
-                    Text("${site.label}  ${site.element}   (${fmt(site.fractional.x)}, ${fmt(site.fractional.y)}, ${fmt(site.fractional.z)})", modifier = Modifier.weight(1f).padding(start = 10.dp))
+                    Box(Modifier.size(20.dp).background(colorFromArgb(RenderPalette.resolveArgb(site.species.symbol, tab.renderConfiguration)), CircleShape))
+                    Text("${site.label}  ${site.species.symbol}   (${fmt(site.fractionalCoordinate.x)}, ${fmt(site.fractionalCoordinate.y)}, ${fmt(site.fractionalCoordinate.z)})", modifier = Modifier.weight(1f).padding(start = 10.dp))
                     IconButton(onClick = {
-                        val deleted = runCatching { CrystalEditor.apply(tab.structure, EditCommand.DeleteAtom(site.id)).structure }
+                        val deleted = runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.DeleteAtom(site.id)) }
                             .onFailure { onMessage(it.message ?: "Delete failed") }.getOrNull() ?: return@IconButton
                         // Per v0.5.0: deleting an atom changes bond partners → recompute rules with overlay.
-                        if (onRunBondComputation != null) onRunBondComputation { CrystalEditor.ensureAutoBondRules(deleted).structure }
-                        else onStructure(CrystalEditor.ensureAutoBondRules(deleted).structure)
+                        if (onRunBondComputation != null) onRunBondComputation {
+                            CrystalEditor.ensureAutoBondRules(deleted.structure, deleted.bondConfiguration)
+                        } else onStructure(CrystalEditor.ensureAutoBondRules(deleted.structure, deleted.bondConfiguration))
                     }) { Icon(Icons.Default.Delete, null) }
                 }
             }
@@ -315,24 +326,36 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Cr
     }
     if (periodicOpen) PeriodicTableDialog(onDismiss = { periodicOpen = false }) { element -> periodicOpen = false; newElement = element }
     newElement?.let { element -> AtomDialog(null, element, onDismiss = { newElement = null }) { label, chosen, frac, occupancy ->
-        runCatching { CrystalEditor.apply(tab.structure, EditCommand.AddAtom(chosen, label, frac, occupancy)) }
+        runCatching {
+            CrystalEditor.apply(
+                tab.structure,
+                tab.bondConfiguration,
+                EditCommand.AddAtom(Species(chosen), label, frac, occupancy),
+            )
+        }
             .onSuccess {
                 // Per v0.5.0: AddAtom already synthesizes rules inside the editor; recompute on a
                 // background thread with the overlay when available, else apply synchronously.
                 if (onRunBondComputation != null) {
-                    onRunBondComputation { CrystalEditor.ensureAutoBondRules(it.structure).structure }
-                } else onStructure(CrystalEditor.ensureAutoBondRules(it.structure).structure)
+                    onRunBondComputation { CrystalEditor.ensureAutoBondRules(it.structure, it.bondConfiguration) }
+                } else onStructure(CrystalEditor.ensureAutoBondRules(it.structure, it.bondConfiguration))
                 it.warnings.forEach(onMessage); newElement = null
             }.onFailure { onMessage(it.message ?: "Invalid atom") }
     } }
-    atomDialog?.let { site -> AtomDialog(site, site.element, onDismiss = { atomDialog = null }) { label, chosen, frac, occupancy ->
-        runCatching { CrystalEditor.apply(tab.structure, EditCommand.UpdateAtom(site.id, chosen, label, frac, occupancy)) }
-            .onSuccess { onStructure(it.structure); it.warnings.forEach(onMessage); atomDialog = null }.onFailure { onMessage(it.message ?: "Invalid atom") }
+    atomDialog?.let { site -> AtomDialog(site, site.species.symbol, onDismiss = { atomDialog = null }) { label, chosen, frac, occupancy ->
+        runCatching {
+            CrystalEditor.apply(
+                tab.structure,
+                tab.bondConfiguration,
+                EditCommand.UpdateAtom(site.id, Species(chosen), label, frac, occupancy),
+            )
+        }
+            .onSuccess { onStructure(it); it.warnings.forEach(onMessage); atomDialog = null }.onFailure { onMessage(it.message ?: "Invalid atom") }
     } }
 }
 
 @Composable
-private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, Vec3) -> Unit) {
+private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, FractionalCoordinate) -> Unit) {
     // 9 matrix entries (default identity) + 3 translation entries (default 0). Per v0.3.3 the
     // translation is a separate column to the right of the matrix; it applies after the linear
     // transform in the new fractional basis and allows fractional values (e.g. 1/4, 1/2).
@@ -357,7 +380,7 @@ private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, Ve
                 require(kotlin.math.abs(number - kotlin.math.round(number)) < 1e-9) { "Matrix entries must be integers" }
                 number.toInt()
             } }
-            val translation = Vec3(eval(translationValues[0].value), eval(translationValues[1].value), eval(translationValues[2].value))
+            val translation = FractionalCoordinate(eval(translationValues[0].value), eval(translationValues[1].value), eval(translationValues[2].value))
             onApply(rows, translation)
         }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
@@ -365,15 +388,15 @@ private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, Ve
 }
 
 @Composable
-private fun AtomDialog(site: AtomSite?, initialElement: String, onDismiss: () -> Unit, onApply: (String, String, Vec3, Double) -> Unit) {
+private fun AtomDialog(site: Site?, initialElement: String, onDismiss: () -> Unit, onApply: (String, String, FractionalCoordinate, Double) -> Unit) {
     var label by remember { mutableStateOf(site?.label ?: initialElement) }; var element by remember { mutableStateOf(initialElement) }
-    var x by remember { mutableStateOf(site?.fractional?.x?.toString() ?: "0") }; var y by remember { mutableStateOf(site?.fractional?.y?.toString() ?: "0") }
-    var z by remember { mutableStateOf(site?.fractional?.z?.toString() ?: "0") }; var occupancy by remember { mutableStateOf(site?.occupancy?.toString() ?: "1") }
+    var x by remember { mutableStateOf(site?.fractionalCoordinate?.x?.toString() ?: "0") }; var y by remember { mutableStateOf(site?.fractionalCoordinate?.y?.toString() ?: "0") }
+    var z by remember { mutableStateOf(site?.fractionalCoordinate?.z?.toString() ?: "0") }; var occupancy by remember { mutableStateOf(site?.occupancy?.toString() ?: "1") }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(if (site == null) localized("新建原子", "New atom") else localized("修改原子", "Modify atom")) }, text = { Column {
         OutlinedTextField(element, { element = it }, label = { Text(localized("元素", "Element")) }); OutlinedTextField(label, { label = it }, label = { Text(localized("标签", "Label")) })
         Row { CellField("x", x, { x = it }, true, Modifier.weight(1f)); CellField("y", y, { y = it }, true, Modifier.weight(1f)); CellField("z", z, { z = it }, true, Modifier.weight(1f)) }
         OutlinedTextField(occupancy, { occupancy = it }, label = { Text(localized("占据率", "Occupancy")) })
-    } }, confirmButton = { TextButton(onClick = { runCatching { onApply(label, element, Vec3(eval(x), eval(y), eval(z)), eval(occupancy)) } }) { Text(stringResource(R.string.confirm)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })
+    } }, confirmButton = { TextButton(onClick = { runCatching { onApply(label, element, FractionalCoordinate(eval(x), eval(y), eval(z)), eval(occupancy)) } }) { Text(stringResource(R.string.confirm)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })
 }
 
 private val periodicTableLayout: List<List<String?>> = listOf(
@@ -441,7 +464,7 @@ private fun cell(w: androidx.compose.ui.unit.Dp, h: androidx.compose.ui.unit.Dp,
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit, onMessage: (String) -> Unit) {
+private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMessage: (String) -> Unit) {
     val sites = tab.structure.sites
     if (sites.isEmpty()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("请先添加原子", "Add atoms first")) }; return }
     var addOpen by remember { mutableStateOf(false) }
@@ -457,7 +480,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
     val confirmMessage = localized("当前晶胞原子数过多，计算时间可能较长。确认自动计算化学键规则吗？", "This cell has many atoms; computation may take a while. Recompute bond rules anyway?")
     val computingMessage = localized("计算中...", "Computing...")
     val epsilonHint = localized("max = rA + rB + ε，建议在 0.35–0.45 之间", "max = rA + rB + ε, suggested 0.35–0.45")
-    val rules = tab.structure.bondRules
+    val rules = tab.bondConfiguration.rules
     // Per v0.2.3: hide rules that produce no bond in the current structure (no atom pair within
     // the distance window), not just rules whose sites are gone.
     // Per v0.5.2b: expand + grid once and reuse across all rules so MOF-scale cells don't freeze.
@@ -466,7 +489,13 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
         BondGrid(atoms, tab.structure, BondRuleMatching.estimateCellSize(tab.structure)) to atoms
     }
     val visibleRules = rules.filter { rule ->
-        BondRuleMatching.hasMatchingBond(rule, tab.structure, bondGrid.second, bondGrid.first)
+        BondRuleMatching.hasMatchingBond(
+            rule,
+            tab.structure,
+            tab.bondConfiguration,
+            bondGrid.second,
+            bondGrid.first,
+        )
     }.distinctBy { it.key } // Per v0.5.4b: bondRules can carry duplicate site-pair keys (e.g. a large
     // cell whose ASU has repeated site ids, or a smart-ionic regen that re-emitted a pair). The
     // renderer dedups via associateBy, but LazyColumn's key must be unique — collapse duplicates
@@ -482,12 +511,17 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
         }
         loading = true
         scope.launch(Dispatchers.Default) {
-            val result = CrystalEditor.rebuildBondRules(tab.structure, source, epsilon)
+            val result = CrystalEditor.rebuildBondRules(
+                tab.structure,
+                tab.bondConfiguration,
+                source,
+                epsilon,
+            )
             withContext(Dispatchers.Main) {
                 loading = false
                 tab.lastRadiusSource = source
                 if (CrystalEditor.SMART_IONIC_UNAVAILABLE in result.warnings) onMessage(unavailableMessage)
-                onStructure(result.structure)
+                onStructure(result)
             }
         }
     }
@@ -560,7 +594,9 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
                 ) {
                     Text("$labelA — $labelB", modifier = Modifier.weight(1f))
                     Text("%.3f–%.3f Å".format(rule.minAngstrom, rule.maxAngstrom), modifier = Modifier.padding(horizontal = 8.dp))
-                    IconButton(onClick = { onStructure(CrystalEditor.apply(tab.structure, EditCommand.RemoveBondRule(rule.key)).structure) }) {
+                    IconButton(onClick = {
+                        onStructure(CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.RemoveBondRule(rule.key)))
+                    }) {
                         Icon(Icons.Default.Delete, null)
                     }
                 }
@@ -591,12 +627,12 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
         )
     }
     if (addOpen) BondRuleDialog(sites, editingRule = null, onDismiss = { addOpen = false }) { siteA, siteB, min, max, extend ->
-        runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extend))).structure }
+        runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extend))) }
             .onSuccess { onStructure(it); addOpen = false }.onFailure { onMessage(it.message ?: "Invalid bond rule") }
     }
     editingRule?.let { rule ->
         BondRuleDialog(sites, editingRule = rule, onDismiss = { editingRule = null }) { siteA, siteB, min, max, extend ->
-            runCatching { CrystalEditor.apply(tab.structure, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extend))).structure }
+            runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extend))) }
                 .onSuccess { onStructure(it); editingRule = null }.onFailure { onMessage(it.message ?: "Invalid bond rule") }
         }
     }
@@ -604,7 +640,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (CrystalStructure) -> Unit
 
 @Composable
 private fun BondRuleDialog(
-    sites: List<AtomSite>,
+    sites: List<Site>,
     editingRule: BondRule?,
     onDismiss: () -> Unit,
     onApply: (String, String, Double, Double, Boolean) -> Unit,
@@ -616,7 +652,8 @@ private fun BondRuleDialog(
     // Per v0.4.1: default maximum is the sum of the two atoms' bonding radii (键合半径),
     // matching the default bond-rule generator. It is recomputed as the user switches sites so the
     // suggested window tracks the selected pair.
-    val defaultMax = PeriodicTable.radius(siteA.element, RadiusSource.BONDING) + PeriodicTable.radius(siteB.element, RadiusSource.BONDING)
+    val defaultMax = PeriodicTable.radius(siteA.species.symbol, RadiusSource.BONDING) +
+        PeriodicTable.radius(siteB.species.symbol, RadiusSource.BONDING)
     var minValue by remember { mutableFloatStateOf((editingRule?.minAngstrom ?: 0.1).toFloat()) }
     // When creating a new rule (no editingRule), maxValue follows the selected pair's default; once
     // the user drags the slider the override sticks until they switch sites again.
@@ -659,7 +696,7 @@ private fun DistanceControl(label: String, value: Float, range: ClosedFloatingPo
 }
 
 @Composable
-private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit)? = null) {
+private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> EditResult?) -> Unit)? = null) {
     var x by remember(tab.expansion) { mutableStateOf(tab.expansion.x) }
     var y by remember(tab.expansion) { mutableStateOf(tab.expansion.y) }
     var z by remember(tab.expansion) { mutableStateOf(tab.expansion.z) }

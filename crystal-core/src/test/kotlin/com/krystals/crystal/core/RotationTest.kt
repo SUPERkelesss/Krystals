@@ -1,5 +1,10 @@
 package com.krystals.crystal.core
 
+import com.krystals.crystal.core.math.Mat3
+import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.math.eulerYX
+import com.krystals.crystal.core.math.rotX
+import com.krystals.crystal.core.math.rotY
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -114,4 +119,3 @@ class RotationTest {
         assertOrthogonal(r1)
     }
 }
-

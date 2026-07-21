@@ -134,18 +134,23 @@ import com.krystals.app.ui.ThemeMode
 import com.krystals.crystal.analysis.bonding.BondDetector
 import com.krystals.crystal.analysis.bonding.BondGrid
 import com.krystals.crystal.analysis.bonding.BondNetwork
+import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondRuleMatching
 import com.krystals.crystal.analysis.bonding.BondValence
 import com.krystals.crystal.analysis.editing.*
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.*
 import com.krystals.crystal.analysis.structure.StructureAnalyzer
+import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.ParsedStructure
 import com.krystals.crystal.renderer.CrystalViewport
 import com.krystals.crystal.renderer.CrystalImageExporter
 import com.krystals.crystal.renderer.LockedMeasurement
 import com.krystals.crystal.renderer.MeasurementMode
+import com.krystals.crystal.renderer.RenderPalette
+import com.krystals.crystal.renderer.ViewerAppearance
+import com.krystals.crystal.renderer.ViewerVisibility
 import com.krystals.crystal.renderer.rememberViewerController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -260,14 +265,14 @@ fun KrystalsRoot(
      * overlay. [block] runs on Dispatchers.Default and returns the new structure (or null to abort
      * silently, e.g. on validation failure where the caller already reported the error).
      */
-    fun runWithBondComputation(block: suspend () -> CrystalStructure?) {
+    fun runWithBondComputation(block: suspend () -> EditResult?) {
         if (computing) return
         computing = true
         scope.launch {
             val result = runCatching { withContext(Dispatchers.Default) { block() } }
             computing = false
-            result.getOrNull()?.let { newStructure ->
-                viewModel.current?.let { viewModel.updateStructure(it, newStructure) }
+            result.getOrNull()?.let { editResult ->
+                viewModel.current?.let { viewModel.updateAnalysis(it, editResult) }
             }
             result.onFailure { showMessage(it.message ?: "Operation failed") }
         }
@@ -277,7 +282,11 @@ fun KrystalsRoot(
      * Per v0.5.2b: open-file bond computation with a 5 s smart-ionic timeout. Falls back to bonding
      * radii on timeout and surfaces the [smartIonicTimeoutMessage] snackbar.
      */
-    fun openWithBondComputation(structure: CrystalStructure, epsilon: Double) {
+    fun openWithBondComputation(
+        structure: CrystalStructure,
+        bondConfiguration: com.krystals.crystal.analysis.bonding.BondConfiguration,
+        epsilon: Double,
+    ) {
         if (computing) return
         computing = true
         scope.launch {
@@ -286,15 +295,15 @@ fun KrystalsRoot(
                     // Per v0.5.2b: cap smart-ionic at 5 s; on timeout pass null so the editor falls
                     // back to bonding radii and flags the timeout.
                     val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
-                        BondValence.smartIonicRules(structure, epsilon)
+                        BondValence.smartIonicRules(structure, bondConfiguration, epsilon)
                     }
-                    CrystalEditor.fromSmartIonicAttempt(structure, epsilon, smartIonic)
+                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
                 }
             }
             computing = false
             result.onSuccess { editResult ->
                 if (CrystalEditor.SMART_IONIC_TIMEOUT in editResult.warnings) showMessage(smartIonicTimeoutMessage)
-                viewModel.current?.let { viewModel.updateStructure(it, editResult.structure) }
+                viewModel.current?.let { viewModel.updateAnalysis(it, editResult) }
             }.onFailure { showMessage(it.message ?: "Operation failed") }
         }
     }
@@ -316,9 +325,9 @@ fun KrystalsRoot(
         // Add the tab immediately (so the empty structure shows), then compute rules if needed.
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
-        if (tab.structure.bondRules.isEmpty()) {
+        if (tab.bondConfiguration.rules.isEmpty()) {
             // Per v0.5.2b: open-file path uses the 5 s smart-ionic timeout variant.
-            openWithBondComputation(tab.structure, tab.bondEpsilon)
+            openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
         }
     }
 
@@ -364,7 +373,12 @@ fun KrystalsRoot(
         if (uri != null && tab != null) {
             scope.launch {
                 runCatching {
-                    val content = CifCodec.write(tab.parsed, tab.structure, tab.structure.bondRules)
+                    val content = CifCodec.write(
+                        tab.parsed,
+                        tab.structure,
+                        tab.bondConfiguration,
+                        tab.renderConfiguration.toCifDisplayMetadata(),
+                    )
                     withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, content) }
                     tab.uri = uri; tab.isNew = false; tab.dirty = false; tab.savedName = tab.name
                     tab.parsed = CifCodec.parseStructure(content, tab.parsed.blockIndex)
@@ -384,7 +398,12 @@ fun KrystalsRoot(
         }
         scope.launch {
             runCatching {
-                val content = CifCodec.write(tab.parsed, tab.structure, tab.structure.bondRules)
+                val content = CifCodec.write(
+                    tab.parsed,
+                    tab.structure,
+                    tab.bondConfiguration,
+                    tab.renderConfiguration.toCifDisplayMetadata(),
+                )
                 withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, content) }
                 tab.parsed = CifCodec.parseStructure(content, tab.parsed.blockIndex)
                 tab.dirty = false
@@ -439,7 +458,14 @@ fun KrystalsRoot(
                         onSaveToPreset = {
                             val tab = viewModel.current ?: return@ViewerScreen
                             runCatching {
-                                PresetRepository.saveToPreset(activity, tab.parsed, tab.structure, tab.name)
+                                PresetRepository.saveToPreset(
+                                    activity,
+                                    tab.parsed,
+                                    tab.structure,
+                                    tab.bondConfiguration,
+                                    tab.renderConfiguration.toCifDisplayMetadata(),
+                                    tab.name,
+                                )
                                 showMessage("Saved to presets")
                             }.onFailure { showMessage(it.message ?: "Save failed") }
                         },
@@ -646,7 +672,7 @@ private fun ViewerScreen(
     onHelp: () -> Unit,
     onAbout: () -> Unit,
     onSponsor: () -> Unit,
-    onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit),
+    onRunBondComputation: ((suspend () -> EditResult?) -> Unit),
     onApplyAppearance: (ViewerAppearance) -> Unit,
 ) {
     val tab = viewModel.current ?: return
@@ -697,13 +723,17 @@ private fun ViewerScreen(
         sceneResult = null
         sceneResult = runCatching {
             withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
-                withContext(Dispatchers.Default) { BondDetector.buildNetwork(tab.structure, tab.expansion) }
+                withContext(Dispatchers.Default) {
+                    BondDetector.buildNetwork(tab.structure, tab.bondConfiguration, tab.expansion)
+                }
             } ?: throw IllegalStateException("Scene build timed out after ${BUILD_SCENE_TIMEOUT_MS / 1000}s")
         }
     }
     // Per v0.5.0: per-site bond-valence sums for the atom-info window (s = X.XX). Recomputed when
     // the structure changes; cheap relative to scene build.
-    val bondValenceBySite = remember(tab.structure, tab.bondEpsilon) { BondValence.bondValenceSums(tab.structure, tab.bondEpsilon) }
+    val bondValenceBySite = remember(tab.structure, tab.bondConfiguration, tab.bondEpsilon) {
+        BondValence.bondValenceSums(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
+    }
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
@@ -718,7 +748,7 @@ private fun ViewerScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
                     menuOpen = false
                     sceneResult?.getOrNull()?.let { snapshot ->
-                        onExport(CrystalImageExporter.render(snapshot, tab.appearance, controller, tab.visibility, tab.selectedAtomIds, tab.measurementMode, tab.inspectedAtomId, tab.lockedMeasurements, tab.lockedInspectedAtomIds, bondValenceBySite))
+                        onExport(CrystalImageExporter.render(snapshot, tab.appearance, tab.renderConfiguration, controller, tab.visibility, tab.selectedAtomIds, tab.measurementMode, tab.inspectedAtomId, tab.lockedMeasurements, tab.lockedInspectedAtomIds, bondValenceBySite))
                     } ?: onMessage("Unable to export current crystal")
                 })
                 HorizontalDivider()
@@ -750,6 +780,7 @@ private fun ViewerScreen(
                     CrystalViewport(
                         snapshot = snapshot,
                         appearance = previewAppearance ?: tab.appearance,
+                        renderConfiguration = tab.renderConfiguration,
                         controller = controller,
                         visibility = tab.visibility,
                         selectedAtomIds = tab.selectedAtomIds,
@@ -794,8 +825,12 @@ private fun ViewerScreen(
                             when (tab.atomEditMode) {
                                 AtomEditMode.DELETE_NEXT -> {
                                     tab.atomEditMode = AtomEditMode.NONE
-                                    val deleted = runCatching { CrystalEditor.apply(tab.structure, EditCommand.DeleteAtom(atom.siteId)).structure }.getOrNull()
-                                    if (deleted != null) onRunBondComputation { CrystalEditor.ensureAutoBondRules(deleted).structure }
+                                    val deleted = runCatching {
+                                        CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.DeleteAtom(atom.siteId))
+                                    }.getOrNull()
+                                    if (deleted != null) onRunBondComputation {
+                                        CrystalEditor.ensureAutoBondRules(deleted.structure, deleted.bondConfiguration)
+                                    }
                                 }
                                 AtomEditMode.MODIFY_NEXT -> {
                                     tab.editingSiteId = atom.siteId; tab.atomEditMode = AtomEditMode.NONE; tab.editorOpen = true
@@ -820,11 +855,17 @@ private fun ViewerScreen(
             val legendEntries = remember(tab.structure, tab.visibility) {
                 val visibleSites = tab.structure.sites.filterNot { it.id in tab.visibility.hiddenSites }
                 visibleSites
-                    .groupBy { site -> site.element to PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides) }
+                    .groupBy { site ->
+                        site.species.symbol to RenderPalette.resolveSiteArgb(
+                            site.id,
+                            site.species.symbol,
+                            tab.renderConfiguration,
+                        )
+                    }
                     .toSortedMap(compareBy({ it.first }, { it.second }))
                     .flatMap { (key, sites) ->
                         val (element, argb) = key
-                        if (sites.size == 1 && sites.first().element == element) listOf(LegendEntry(element, argb))
+                        if (sites.size == 1 && sites.first().species.symbol == element) listOf(LegendEntry(element, argb))
                         else sites.sortedBy { it.label }.map { LegendEntry(it.label, argb) }
                     }
             }
@@ -905,7 +946,7 @@ private fun ViewerScreen(
                     modifier = Modifier.size(54.dp),
                 ) { AssetImage("icon_trans.png", Modifier.size(43.dp), ContentScale.Fit) }
             }
-            if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateStructure(tab, it) }, onMessage = onMessage, onRunBondComputation = onRunBondComputation)
+            if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateAnalysis(tab, it) }, onMessage = onMessage, onRunBondComputation = onRunBondComputation)
         }
     }
 
@@ -914,7 +955,7 @@ private fun ViewerScreen(
         onChoice = { choice ->
             when (choice) {
                 "X", "Y", "Z" -> controller.align(choice.first())
-                "a", "b", "c" -> controller.alignCellAxis(choice.first(), tab.structure.cell)
+                "a", "b", "c" -> controller.alignCellAxis(choice.first(), tab.structure.lattice)
             }
             alignOpen = false
         },
@@ -1012,7 +1053,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
     // Per v0.3.44: ATOMS/POLYHEDRA group color override — when set, the chosen color is applied to
     // every site of the target element (written into siteArgbOverrides for each site of that element).
     var groupColorPickerElement by remember { mutableStateOf<String?>(null) }
-    val rules = tab.structure.bondRules
+    val rules = tab.bondConfiguration.rules
     // Per v0.5.2b: expand + grid once for the BONDS tab's hasMatchingBond filter (MOF-scale cells).
     val bondGrid = remember(tab.structure) {
         val atoms = SymmetryExpander.expand(tab.structure)
@@ -1099,7 +1140,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                 // Per v0.3.44: group sites by element. Each group is a collapsible header
                                 // (expand/collapse + group checkbox + element label + group color swatch +
                                 // count) followed by the per-site rows when expanded.
-                                val groupedSites = remember(sites) { sites.groupBy { it.element }.toSortedMap() }
+                                val groupedSites = remember(sites) { sites.groupBy { it.species.symbol }.toSortedMap() }
                                 groupedSites.forEach { (element, groupSites) ->
                                     val expanded = collapsedGroups["A:$element"] != true
                                     val allGroupVisible = groupSites.all { it.id !in tab.visibility.hiddenSites }
@@ -1115,7 +1156,11 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                             )
                                         },
                                     ) {
-                                        val argb = PeriodicTable.resolveSiteArgb(groupSites.first().id, element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides)
+                                        val argb = RenderPalette.resolveSiteArgb(
+                                            groupSites.first().id,
+                                            element,
+                                            tab.renderConfiguration,
+                                        )
                                         Box(
                                             Modifier.size(22.dp).background(Color(argb), CircleShape).clickable { groupColorPickerElement = element; colorPickerOpen = true }
                                         )
@@ -1128,7 +1173,11 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                                     tab.visibility = tab.visibility.copy(hiddenSites = if (checked) tab.visibility.hiddenSites - site.id else tab.visibility.hiddenSites + site.id)
                                                 })
                                                 Text(site.label, modifier = Modifier.weight(1f))
-                                                val siteArgb = PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides)
+                                                val siteArgb = RenderPalette.resolveSiteArgb(
+                                                    site.id,
+                                                    site.species.symbol,
+                                                    tab.renderConfiguration,
+                                                )
                                                 Box(
                                                     Modifier.size(20.dp).background(Color(siteArgb), CircleShape).clickable { colorPickerTarget = site.id; colorPickerOpen = true }
                                                 )
@@ -1140,7 +1189,13 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                             DisplayTab.BONDS -> {
                                 // Per v0.2.2: only list rules whose two sites still exist (others don't affect rendering).
                                 val visibleRules = rules.filter { rule ->
-                                    BondRuleMatching.hasMatchingBond(rule, tab.structure, bondGrid.second, bondGrid.first)
+                                    BondRuleMatching.hasMatchingBond(
+                                        rule,
+                                        tab.structure,
+                                        tab.bondConfiguration,
+                                        bondGrid.second,
+                                        bondGrid.first,
+                                    )
                                 }.distinctBy { it.key } // Per v0.5.4b: see EditorPanels — duplicate
                                 // site-pair keys crash the LazyColumn with "Key was already used".
                                 val allExtend = visibleRules.isNotEmpty() && visibleRules.all { it.extendAcrossCell }
@@ -1163,22 +1218,30 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                     if (visibleRules.isNotEmpty()) {
                                         Spacer(Modifier.width(12.dp))
                                         Checkbox(allExtend, onCheckedChange = { checked ->
-                                            var working = tab.structure
+                                            var working = tab.bondConfiguration
                                             visibleRules.forEach { rule ->
                                                 if (rule.extendAcrossCell != checked) {
-                                                    working = CrystalEditor.apply(working, EditCommand.SetBondRule(rule.copy(extendAcrossCell = checked))).structure
+                                                    working = CrystalEditor.apply(
+                                                        tab.structure,
+                                                        working,
+                                                        EditCommand.SetBondRule(rule.copy(extendAcrossCell = checked)),
+                                                    ).bondConfiguration
                                                 }
                                             }
-                                            viewModel.updateStructure(tab, working)
+                                            viewModel.updateAnalysis(tab, EditResult(tab.structure, working))
                                         })
                                         Text(stringResource(R.string.extend_across_cell), style = MaterialTheme.typography.bodySmall)
                                         Spacer(Modifier.width(4.dp))
                                         TextButton(onClick = {
-                                            var working = tab.structure
+                                            var working = tab.bondConfiguration
                                             visibleRules.forEach { rule ->
-                                                working = CrystalEditor.apply(working, EditCommand.SetBondRule(rule.copy(extendAcrossCell = !rule.extendAcrossCell))).structure
+                                                working = CrystalEditor.apply(
+                                                    tab.structure,
+                                                    working,
+                                                    EditCommand.SetBondRule(rule.copy(extendAcrossCell = !rule.extendAcrossCell)),
+                                                ).bondConfiguration
                                             }
-                                            viewModel.updateStructure(tab, working)
+                                            viewModel.updateAnalysis(tab, EditResult(tab.structure, working))
                                         }) { Text(localized("反选", "Invert")) }
                                     }
                                 }
@@ -1188,7 +1251,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                 } else {
                                     // Per v0.3.44: group bond rules by element pair (e.g. C-O, Cs-Cl). Each
                                     // group is a collapsible header (group visibility checkbox) + per-rule rows.
-                                    val elementOf = remember(sites) { sites.associate { it.id to it.element } }
+                                    val elementOf = remember(sites) { sites.associate { it.id to it.species.symbol } }
                                     val groupedRules = remember(visibleRules, elementOf) {
                                         visibleRules.groupBy { rule ->
                                             val ea = elementOf[rule.siteA] ?: "?"
@@ -1230,7 +1293,14 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                                     Spacer(Modifier.width(4.dp))
                                                     Checkbox(rule.extendAcrossCell, onCheckedChange = { extend ->
                                                         val updated = rule.copy(extendAcrossCell = extend)
-                                                        viewModel.updateStructure(tab, CrystalEditor.apply(tab.structure, EditCommand.SetBondRule(updated)).structure)
+                                                        viewModel.updateAnalysis(
+                                                            tab,
+                                                            CrystalEditor.apply(
+                                                                tab.structure,
+                                                                tab.bondConfiguration,
+                                                                EditCommand.SetBondRule(updated),
+                                                            ),
+                                                        )
                                                     })
                                                 }
                                             }
@@ -1250,7 +1320,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                                 // Per v0.3.44: polyhedra sites grouped by element, same collapse/group-toggle
                                 // pattern as ATOMS but without a color swatch.
-                                val groupedPoly = remember(sites) { sites.groupBy { it.element }.toSortedMap() }
+                                val groupedPoly = remember(sites) { sites.groupBy { it.species.symbol }.toSortedMap() }
                                 groupedPoly.forEach { (element, groupSites) ->
                                     val expanded = collapsedGroups["P:$element"] != true
                                     val allGroupEnabled = groupSites.all { it.id in tab.visibility.polyhedronSites }
@@ -1302,10 +1372,12 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
         val element = groupColorPickerElement
         val site = sites.firstOrNull { it.id == target }
         val initial = when {
-            site != null -> PeriodicTable.resolveSiteArgb(site.id, site.element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides)
+            site != null -> RenderPalette.resolveSiteArgb(site.id, site.species.symbol, tab.renderConfiguration)
             element != null -> {
-                val firstOfElement = sites.firstOrNull { it.element == element }
-                if (firstOfElement != null) PeriodicTable.resolveSiteArgb(firstOfElement.id, element, tab.structure.siteArgbOverrides, tab.structure.elementArgbOverrides) else 0xFFCCCCCC
+                val firstOfElement = sites.firstOrNull { it.species.symbol == element }
+                if (firstOfElement != null) {
+                    RenderPalette.resolveSiteArgb(firstOfElement.id, element, tab.renderConfiguration)
+                } else 0xFFCCCCCC
             }
             else -> 0xFFCCCCCC
         }
@@ -1314,10 +1386,14 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
             onDismiss = { colorPickerOpen = false; colorPickerTarget = null; groupColorPickerElement = null },
             onColorSelected = { color ->
                 when {
-                    target != null -> tab.structure = tab.structure.copy(siteArgbOverrides = tab.structure.siteArgbOverrides + (target to color))
+                    target != null -> tab.renderConfiguration = tab.renderConfiguration.copy(
+                        siteArgbOverrides = tab.renderConfiguration.siteArgbOverrides + (target to color),
+                    )
                     element != null -> {
-                        val additions = sites.filter { it.element == element }.associate { it.id to color }
-                        tab.structure = tab.structure.copy(siteArgbOverrides = tab.structure.siteArgbOverrides + additions)
+                        val additions = sites.filter { it.species.symbol == element }.associate { it.id to color }
+                        tab.renderConfiguration = tab.renderConfiguration.copy(
+                            siteArgbOverrides = tab.renderConfiguration.siteArgbOverrides + additions,
+                        )
                     }
                 }
                 colorPickerOpen = false
@@ -1375,15 +1451,15 @@ private fun InfoDialog(tab: DocumentTab, onDismiss: () -> Unit) {
                 Text(localized("晶胞参数", "Cell parameters"), fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth()) {
-                    InfoCell(label = "a", value = "%.5f Å".format(info.cell.a), Modifier.weight(1f))
-                    InfoCell(label = "b", value = "%.5f Å".format(info.cell.b), Modifier.weight(1f))
-                    InfoCell(label = "c", value = "%.5f Å".format(info.cell.c), Modifier.weight(1f))
+                    InfoCell(label = "a", value = "%.5f Å".format(info.lattice.a), Modifier.weight(1f))
+                    InfoCell(label = "b", value = "%.5f Å".format(info.lattice.b), Modifier.weight(1f))
+                    InfoCell(label = "c", value = "%.5f Å".format(info.lattice.c), Modifier.weight(1f))
                 }
                 Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth()) {
-                    InfoCell(label = "α", value = "%.4f°".format(info.cell.alpha), Modifier.weight(1f))
-                    InfoCell(label = "β", value = "%.4f°".format(info.cell.beta), Modifier.weight(1f))
-                    InfoCell(label = "γ", value = "%.4f°".format(info.cell.gamma), Modifier.weight(1f))
+                    InfoCell(label = "α", value = "%.4f°".format(info.lattice.alpha), Modifier.weight(1f))
+                    InfoCell(label = "β", value = "%.4f°".format(info.lattice.beta), Modifier.weight(1f))
+                    InfoCell(label = "γ", value = "%.4f°".format(info.lattice.gamma), Modifier.weight(1f))
                 }
                 Spacer(Modifier.height(16.dp))
                 InfoRow(label = localized("体积", "Volume"), value = "%.5f Å³".format(info.volume))

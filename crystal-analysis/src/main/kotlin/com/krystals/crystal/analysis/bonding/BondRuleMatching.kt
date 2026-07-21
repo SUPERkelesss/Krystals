@@ -2,7 +2,11 @@ package com.krystals.crystal.analysis.bonding
 
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.*
-import com.krystals.crystal.core.*
+import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.math.distance
+import com.krystals.crystal.core.model.AtomImage
+import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.periodic.Int3
 
 /**
  * Helpers for deciding whether a [BondRule] actually produces a visible bond in a given structure.
@@ -28,10 +32,14 @@ object BondRuleMatching {
      * Convenience overload that expands + grids on each call — fine for one-off checks; prefer the
      * [hasMatchingBond] overload that takes a [BondGrid] when filtering many rules at once.
      */
-    fun hasMatchingBond(rule: BondRule, structure: CrystalStructure): Boolean {
+    fun hasMatchingBond(
+        rule: BondRule,
+        structure: CrystalStructure,
+        bondConfiguration: BondConfiguration,
+    ): Boolean {
         val atoms = SymmetryExpander.expand(structure)
         val grid = BondGrid(atoms, structure, estimateCellSize(structure))
-        return hasMatchingBond(rule, structure, atoms, grid)
+        return hasMatchingBond(rule, structure, bondConfiguration, atoms, grid)
     }
 
     /**
@@ -42,9 +50,11 @@ object BondRuleMatching {
     fun hasMatchingBond(
         rule: BondRule,
         structure: CrystalStructure,
-        atoms: List<ExpandedAtom>,
+        bondConfiguration: BondConfiguration,
+        atoms: List<AtomImage>,
         grid: BondGrid,
     ): Boolean {
+        if (rule.key in bondConfiguration.disabledPairs) return false
         val a = atoms.filter { it.siteId == rule.siteA }
         if (a.isEmpty()) return false
         val min = rule.minAngstrom
@@ -65,13 +75,14 @@ object BondRuleMatching {
                 return best
             }
             for (i in a.indices) for (j in i + 1 until a.size) {
-                val d = minImage(a[i].cartesian, a[j].cartesian)
+                val d = minImage(a[i].cartesianCoordinate.toVec3(), a[j].cartesianCoordinate.toVec3())
                 if (d > 0.0 && d >= min && d <= max) return true
             }
             for (x in a) {
                 for (off in offsets) {
                     if (off.lengthSquared() < 1e-18) continue
-                    val d = distance(x.cartesian, x.cartesian + off)
+                    val cartesian = x.cartesianCoordinate.toVec3()
+                    val d = distance(cartesian, cartesian + off)
                     if (d >= min && d <= max) return true
                 }
             }
@@ -93,7 +104,7 @@ object BondRuleMatching {
                 return best
             }
             for (x in a) for (y in b) {
-                val d = minImage(x.cartesian, y.cartesian)
+                val d = minImage(x.cartesianCoordinate.toVec3(), y.cartesianCoordinate.toVec3())
                 if (d > 0.0 && d >= min && d <= max) return true
             }
             return false
@@ -102,8 +113,12 @@ object BondRuleMatching {
         // Grid path: for each atom of siteA, scan its 27 periodic image positions and collect siteB
         // candidates from nearby buckets, then confirm with the minimum-image distance.
         for (x in a) {
-            for (candidate in grid.nearbyOfSite(x.cartesian, rule.siteB)) {
-                val d = minImageDistance(x.cartesian, candidate.cartesian, structure)
+            for (candidate in grid.nearbyOfSite(x.cartesianCoordinate.toVec3(), rule.siteB)) {
+                val d = minImageDistance(
+                    x.cartesianCoordinate.toVec3(),
+                    candidate.cartesianCoordinate.toVec3(),
+                    structure,
+                )
                 if (d > 0.0 && d >= min && d <= max) return true
             }
         }
@@ -119,8 +134,8 @@ object BondRuleMatching {
     fun estimateCellSize(structure: CrystalStructure): Double {
         var maxSum = 0.0
         for (a in structure.sites) for (b in structure.sites) {
-            val sum = PeriodicTable.radius(a.element, RadiusSource.BONDING) +
-                PeriodicTable.radius(b.element, RadiusSource.BONDING)
+            val sum = PeriodicTable.radius(a.species.symbol, RadiusSource.BONDING) +
+                PeriodicTable.radius(b.species.symbol, RadiusSource.BONDING)
             if (sum > maxSum) maxSum = sum
         }
         return (maxSum + 1.0).coerceAtLeast(2.0)
@@ -134,14 +149,14 @@ object BondRuleMatching {
  *  covering all mirror cells (a query near a cell face/edge/corner sees neighbours in up to 7
  *  neighbouring cells, hence the 27-image sweep rather than a single 3³ bucket window). */
 class BondGrid(
-    atoms: List<ExpandedAtom>,
+    atoms: List<AtomImage>,
     private val structure: CrystalStructure,
     val cellSize: Double,
 ) {
-    private val buckets: Map<Int3, List<ExpandedAtom>> = run {
-        val map = HashMap<Int3, MutableList<ExpandedAtom>>()
+    private val buckets: Map<Int3, List<AtomImage>> = run {
+        val map = HashMap<Int3, MutableList<AtomImage>>()
         for (atom in atoms) {
-            val key = keyOf(atom.cartesian)
+            val key = keyOf(atom.cartesianCoordinate.toVec3())
             map.getOrPut(key) { mutableListOf() }.add(atom)
         }
         map.mapValues { it.value.toList() }
@@ -149,8 +164,8 @@ class BondGrid(
     private val latticeOffsets: List<Vec3> = structure.latticeOffsets()
 
     /** Atoms of [siteId] near any of [center]'s 27 periodic-image positions (within cellSize). */
-    fun nearbyOfSite(center: Vec3, siteId: String): List<ExpandedAtom> {
-        val result = ArrayList<ExpandedAtom>()
+    fun nearbyOfSite(center: Vec3, siteId: String): List<AtomImage> {
+        val result = ArrayList<AtomImage>()
         val seen = HashSet<Long>()
         for (off in latticeOffsets) {
             collect(center + off, siteId, result, seen)
@@ -158,7 +173,7 @@ class BondGrid(
         return result
     }
 
-    private fun collect(center: Vec3, siteId: String, out: ArrayList<ExpandedAtom>, seen: HashSet<Long>) {
+    private fun collect(center: Vec3, siteId: String, out: ArrayList<AtomImage>, seen: HashSet<Long>) {
         val ix = Math.floor(center.x / cellSize).toInt()
         val iy = Math.floor(center.y / cellSize).toInt()
         val iz = Math.floor(center.z / cellSize).toInt()
@@ -180,9 +195,9 @@ class BondGrid(
 
 /** The 27 lattice-image offsets {-1,0,1}³ × (a,b,c) for [structure]'s cell. */
 private fun CrystalStructure.latticeOffsets(): List<Vec3> {
-    val la = cell.matrix.a
-    val lb = cell.matrix.b
-    val lc = cell.matrix.c
+    val la = lattice.matrix.a
+    val lb = lattice.matrix.b
+    val lc = lattice.matrix.c
     val offsets = ArrayList<Vec3>(27)
     for (dx in -1..1) for (dy in -1..1) for (dz in -1..1) {
         offsets += la * dx.toDouble() + lb * dy.toDouble() + lc * dz.toDouble()
@@ -199,4 +214,3 @@ private fun minImageDistance(x: Vec3, y: Vec3, structure: CrystalStructure): Dou
     }
     return best
 }
-
