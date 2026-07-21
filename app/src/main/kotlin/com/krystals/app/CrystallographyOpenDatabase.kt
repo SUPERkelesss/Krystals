@@ -1,8 +1,8 @@
 package com.krystals.app
 
 import android.util.Log
-import com.krystals.core.CifCodec
-import com.krystals.core.ParsedStructure
+import com.krystals.crystal.io.CifCodec
+import com.krystals.crystal.io.ParsedStructure
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl

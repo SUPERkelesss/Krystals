@@ -68,28 +68,47 @@ flowchart TB
     subgraph io["crystal-io · CIF file IO"]
         Codec["CifCodec<br/>lossless CIF parse/write-back"]
     end
-    subgraph core["crystal-core · pure JVM core"]
-        Engine["CrystalEngine<br/>symmetry expansion / bonding"]
+    subgraph analysis["crystal-analysis · structure analysis"]
+        Symmetry["SymmetryExpander<br/>AtomImage expansion"]
+        Bonds["BondDetector / BondValence<br/>BondNetwork"]
+        Coordination["CoordinationAnalyzer"]
+        Hull["PolyhedronHull"]
         Editor["CrystalEditor<br/>immutable EditCommand edits"]
+    end
+    subgraph core["crystal-core · crystallographic primitives"]
+        Geometry["Geometry / Symmetry"]
         SG["SpaceGroupCatalog<br/>230 space groups"]
+    end
+    subgraph data["crystal-data · compile-time tables"]
+        Elements["element / ionic data"]
+        SpaceGroups["space-group symbols / operations"]
     end
 
     UI --> VP
     UI --> Edit
     UI --> VM
     Repo -->|"parseStructure"| Codec
-    Codec --> Engine
+    Codec -->|"CrystalStructure"| Symmetry
     Edit -->|"EditCommand"| Editor
-    Editor --> Engine
-    Engine -->|"buildScene → SceneSnapshot"| VP
-    Engine -->|"buildScene"| Exp
+    Editor --> Symmetry
+    Symmetry --> Bonds
+    Bonds -->|"BondNetwork"| VP
+    Bonds -->|"BondNetwork"| Exp
+    Bonds --> Coordination
+    Coordination --> Hull
     Repo -->|"write back"| Codec
-    Engine --> SG
+    Symmetry --> Geometry
+    SG --> SpaceGroups
+    Bonds --> Elements
 
     app -.->|depends on| renderer
-    renderer -.->|api dependency| core
-    io -.->|depends on| core
+    app -.->|depends on| analysis
     app -.->|depends on| io
+    renderer -.->|api dependency| analysis
+    io -.->|depends on| analysis
+    analysis -.->|depends on| core
+    analysis -.->|depends on| data
+    core -.->|depends on| data
 ```
 
 ---

@@ -2,10 +2,10 @@ package com.krystals.app
 
 import android.content.Context
 import android.net.Uri
-import com.krystals.core.CifCodec
-import com.krystals.core.CrystalEditor
-import com.krystals.core.CrystalStructure
-import com.krystals.core.ParsedStructure
+import com.krystals.crystal.analysis.editing.CrystalEditor
+import com.krystals.crystal.analysis.model.CrystalStructure
+import com.krystals.crystal.io.CifCodec
+import com.krystals.crystal.io.ParsedStructure
 import java.io.File
 
 enum class PresetSource { BUNDLED, USER }

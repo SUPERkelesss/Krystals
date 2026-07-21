@@ -3,9 +3,9 @@ package com.krystals.app
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
-import com.krystals.core.CifCodec
-import com.krystals.core.ParsedStructure
-import com.krystals.core.SymmetryOperation
+import com.krystals.crystal.io.CifCodec
+import com.krystals.crystal.io.ParsedStructure
+import com.krystals.crystal.core.SymmetryOperation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl

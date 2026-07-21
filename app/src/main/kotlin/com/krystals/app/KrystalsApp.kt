@@ -131,22 +131,22 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.krystals.app.ui.KrystalsTheme
 import com.krystals.app.ui.ThemeMode
-import com.krystals.core.CifCodec
-import com.krystals.core.BondValence
-import com.krystals.core.CrystalEditor
-import com.krystals.core.BondGrid
-import com.krystals.core.BondRuleMatching
-import com.krystals.core.CrystalEngine
-import com.krystals.core.EditCommand
-import com.krystals.core.CrystalStructure
-import com.krystals.core.ParsedStructure
-import com.krystals.core.PeriodicTable
-import com.krystals.core.SceneSnapshot
-import com.krystals.renderer.CrystalViewport
-import com.krystals.renderer.CrystalImageExporter
-import com.krystals.renderer.LockedMeasurement
-import com.krystals.renderer.MeasurementMode
-import com.krystals.renderer.rememberViewerController
+import com.krystals.crystal.analysis.bonding.BondDetector
+import com.krystals.crystal.analysis.bonding.BondGrid
+import com.krystals.crystal.analysis.bonding.BondNetwork
+import com.krystals.crystal.analysis.bonding.BondRuleMatching
+import com.krystals.crystal.analysis.bonding.BondValence
+import com.krystals.crystal.analysis.editing.*
+import com.krystals.crystal.analysis.expansion.SymmetryExpander
+import com.krystals.crystal.analysis.model.*
+import com.krystals.crystal.analysis.structure.StructureAnalyzer
+import com.krystals.crystal.io.CifCodec
+import com.krystals.crystal.io.ParsedStructure
+import com.krystals.crystal.renderer.CrystalViewport
+import com.krystals.crystal.renderer.CrystalImageExporter
+import com.krystals.crystal.renderer.LockedMeasurement
+import com.krystals.crystal.renderer.MeasurementMode
+import com.krystals.crystal.renderer.rememberViewerController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -196,7 +196,7 @@ fun KrystalsRoot(
         viewModel.tabs.forEach { tab -> tab.appearance = tab.appearance.copy(backgroundArgb = background) }
     }
     // Per v0.5.2a: persist + globally apply a new appearance (default + every open tab).
-    fun applyViewerAppearance(ap: com.krystals.core.ViewerAppearance) {
+    fun applyViewerAppearance(ap: ViewerAppearance) {
         viewModel.applyAppearance(ap)
         preferences.edit().putString(AppearanceStore.KEY, AppearanceStore.run { ap.toJson() }).apply()
     }
@@ -327,7 +327,7 @@ fun KrystalsRoot(
      *  Per v0.5.3b: cells expanding past [LARGE_CELL_WARN_THRESHOLD] atoms are gated behind a
      *  confirm dialog; the user can still open them in degraded mode. */
     fun openParsed(parsed: ParsedStructure, name: String, uri: Uri?) {
-        val expandedEstimate = CrystalEngine.expandAsymmetricUnit(parsed.structure).size
+        val expandedEstimate = SymmetryExpander.expand(parsed.structure).size
         if (expandedEstimate > LARGE_CELL_WARN_THRESHOLD) {
             pendingLargeOpen = PendingLargeOpen(parsed, name, uri, expandedEstimate)
             return
@@ -647,7 +647,7 @@ private fun ViewerScreen(
     onAbout: () -> Unit,
     onSponsor: () -> Unit,
     onRunBondComputation: ((suspend () -> CrystalStructure?) -> Unit),
-    onApplyAppearance: (com.krystals.core.ViewerAppearance) -> Unit,
+    onApplyAppearance: (ViewerAppearance) -> Unit,
 ) {
     val tab = viewModel.current ?: return
     var menuOpen by remember { mutableStateOf(false) }
@@ -659,7 +659,7 @@ private fun ViewerScreen(
     var appearanceOpen by remember { mutableStateOf(false) }
     // Per v0.5.2a: while non-null, the viewer renders with this edited appearance (press-and-hold
     // "Preview" in the Appearance dialog sets it and hides the dialog); null = use tab.appearance.
-    var previewAppearance by remember { mutableStateOf<com.krystals.core.ViewerAppearance?>(null) }
+    var previewAppearance by remember { mutableStateOf<ViewerAppearance?>(null) }
     var floatingX by remember(tab.id) { mutableFloatStateOf(0f) }
     var floatingY by remember(tab.id) { mutableFloatStateOf(0f) }
     // Per v0.4.2: only the main ball (the 54dp center FAB) must stay on-screen — the radial tool
@@ -692,12 +692,12 @@ private fun ViewerScreen(
     // on the Main thread inside `remember`, so a large cell (materialising ~77k shell atoms) froze
     // the UI and OOM'd with no way to cancel. Now a key change cancels the prior build (the stale
     // result is discarded) and shows a spinner while the new one computes.
-    var sceneResult by remember(tab.structure, tab.expansion) { mutableStateOf<Result<SceneSnapshot>?>(null) }
+    var sceneResult by remember(tab.structure, tab.expansion) { mutableStateOf<Result<BondNetwork>?>(null) }
     LaunchedEffect(tab.structure, tab.expansion) {
         sceneResult = null
         sceneResult = runCatching {
             withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
-                withContext(Dispatchers.Default) { CrystalEngine.buildScene(tab.structure, tab.expansion) }
+                withContext(Dispatchers.Default) { BondDetector.buildNetwork(tab.structure, tab.expansion) }
             } ?: throw IllegalStateException("Scene build timed out after ${BUILD_SCENE_TIMEOUT_MS / 1000}s")
         }
     }
@@ -1015,7 +1015,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
     val rules = tab.structure.bondRules
     // Per v0.5.2b: expand + grid once for the BONDS tab's hasMatchingBond filter (MOF-scale cells).
     val bondGrid = remember(tab.structure) {
-        val atoms = CrystalEngine.expandAsymmetricUnit(tab.structure)
+        val atoms = SymmetryExpander.expand(tab.structure)
         BondGrid(atoms, tab.structure, BondRuleMatching.estimateCellSize(tab.structure)) to atoms
     }
     val allSitesVisible = siteIds.isNotEmpty() && tab.visibility.hiddenSites.intersect(siteIds).isEmpty()
@@ -1362,7 +1362,7 @@ private fun CollapsibleGroupHeader(
 
 @Composable
 private fun InfoDialog(tab: DocumentTab, onDismiss: () -> Unit) {
-    val info = remember(tab.structure) { CrystalEngine.info(tab.structure) }
+    val info = remember(tab.structure) { StructureAnalyzer.info(tab.structure) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(localized("晶体信息", "Crystal information")) },

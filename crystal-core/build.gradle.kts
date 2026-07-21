@@ -7,6 +7,7 @@ kotlin {
 }
 
 dependencies {
+    implementation(project(":crystal-data"))
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.13.1")
 }

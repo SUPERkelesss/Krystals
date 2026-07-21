@@ -6,16 +6,13 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
-import com.krystals.core.CifCodec
-import com.krystals.core.CrystalEditor
-import com.krystals.core.CrystalStructure
-import com.krystals.core.Expansion
-import com.krystals.core.ParsedStructure
-import com.krystals.core.RadiusSource
-import com.krystals.core.ViewerAppearance
-import com.krystals.renderer.LockedMeasurement
-import com.krystals.renderer.MeasurementMode
-import com.krystals.renderer.ViewerVisibility
+import com.krystals.crystal.analysis.editing.CrystalEditor
+import com.krystals.crystal.analysis.model.*
+import com.krystals.crystal.io.CifCodec
+import com.krystals.crystal.io.ParsedStructure
+import com.krystals.crystal.renderer.LockedMeasurement
+import com.krystals.crystal.renderer.MeasurementMode
+import com.krystals.crystal.renderer.ViewerVisibility
 import java.util.UUID
 
 enum class AtomEditMode { NONE, MODIFY_NEXT, DELETE_NEXT }
