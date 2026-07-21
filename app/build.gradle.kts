@@ -41,8 +41,8 @@ android {
         applicationId = "com.krystals.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.5.1"
+        versionCode = 2
+        versionName = "0.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
         // Paid-module activation: salt + SHA-256 hashes of the 1000 valid 16-char codes.
@@ -93,7 +93,7 @@ android {
 }
 
 dependencies {
-    implementation(project(":crystal-core"))
+    implementation(project(":crystal-io"))
     implementation(project(":renderer"))
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
     implementation(composeBom)

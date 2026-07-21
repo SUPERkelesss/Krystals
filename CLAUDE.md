@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-Krystals is an Android CIF crystal viewer and editor. It is a Kotlin/Gradle project with three modules:
+Krystals is an Android CIF crystal viewer and editor. It is a Kotlin/Gradle project with four modules:
 
-- `crystal-core`: pure JVM module for loss-aware CIF parsing/writing, crystallographic math, symmetry expansion, bond inference, and structure editing commands.
+- `crystal-core`: pure JVM module for crystallographic math, symmetry expansion, bond inference, and structure editing commands.
+- `crystal-io`: pure JVM module for loss-aware CIF parsing/writing. It depends on `crystal-core` and preserves the existing `com.krystals.core.CifCodec` API.
 - `renderer`: Android library that renders the crystal with Compose Canvas and exports PNG images.
 - `app`: Android application that wires the UI, file I/O, tab state, and editors together.
 
@@ -21,8 +22,9 @@ Use `gradlew`/`gradlew.bat` from the repository root. The bootstrap script sets 
 | Bootstrap environment and build debug APK (Windows) | `\.\scripts\bootstrap-build.ps1` |
 | Build debug APK | `.\gradlew.bat :app:assembleDebug` |
 | Run JVM unit tests for `crystal-core` | `.\gradlew.bat :crystal-core:test` |
-| Run a single test class | `.\gradlew.bat :crystal-core:test --tests "com.krystals.core.CoreTest"` |
-| Run a single test method | `.\gradlew.bat :crystal-core:test --tests "com.krystals.core.CoreTest.parsesAndExpandsSymmetry"` |
+| Run JVM unit tests for `crystal-io` | `.\gradlew.bat :crystal-io:test` |
+| Run a single core test class | `.\gradlew.bat :crystal-core:test --tests "com.krystals.core.CoreTest"` |
+| Run a single CIF test method | `.\gradlew.bat :crystal-io:test --tests "com.krystals.core.CifCodecTest.parsesAndExpandsSymmetry"` |
 | Run Android instrumented tests | `.\gradlew.bat :app:connectedAndroidTest` |
 | Lint | `.\gradlew.bat lint` |
 | Clean | `.\gradlew.bat clean` |
@@ -37,12 +39,15 @@ The debug APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 The core module contains no Android dependencies.
 
 - **Geometry** (`Geometry.kt`): `Vec3`, `Int3`, `Mat3` (stored by columns to match lattice-vector notation), and `UnitCell` with conversions between fractional and Cartesian coordinates.
-- **CIF codec** (`CifCodec.kt`): parses multi-block CIF 1.1 files into `CifDocument`/`CifBlock`/`CifLoop`/`CifPair`, preserves comments and non-structural items, and writes back by surgically replacing only the structural tags (`_cell_*`, `_atom_site_*`, `_space_group_*`, `_symmetry_equiv_pos_*`, `_krystals_bond_rule_*`). Use `CifCodec.parseStructure` to get a `ParsedStructure`, which carries both the original document and the derived `CrystalStructure`.
 - **Model** (`Model.kt`): `CrystalStructure`, `AtomSite`, `ExpandedAtom` (with `isShell`, and per v0.3.41 `isBoundaryImage` / derived `isExternalShell` to split neighbour-cell images into "boundary images" sitting on the primary-box faces vs. genuine external shell), `BondRule` (per v0.3.0 `extendAcrossCell` gates cross-cell bond/atom visibility), `Bond`, `Expansion`, `ViewerAppearance`, and `SceneSnapshot`. `PeriodicTable` carries radius/color tables. Per v0.4.1 two radius sources are baked in: **BONDING** (键合半径, CC BY-SA 4.0 / arXiv:2601.02017v1 [cond-mat.mtrl-sci] 05 Jan 2026) and **VDW**; BONDING is the bonding-radius table with the covalent single-bond table (`.todos/atomic_radii.md`, Wikipedia "Atomic radii of the elements" `Covalant(single bond)` column) as its fallback for elements it lacks, then the legacy `covalentRadius`/`radii` map for elements neither covers (D, the `XX` placeholder, Fr, 97+ actinides). VDW comes from the same `atomic_radii.md` `vdW` column with the `covalentRadius` fallback. Per v0.5.0 a third source **SMART_IONIC** (智能离子) is the default: `BondValence.smartIonicRules` estimates each cation site's oxidation state via a bond-valence sum (BVS, IUCr BVPARM2020 R0/B parameters in `.todos/bondvalence/bvparm2020.cif`), reads its coordination number from a bonding-radius neighbour count, then looks up a Shannon crystal radius (R. D. Shannon 1976, `.todos/bondvalence/Radii for All Species.html`, high-spin preferred) for (element, valence, CN) and builds per-site-pair rules; anions carry fixed valences (O −2, F/Cl/Br/I −1, S/Se/Te −2, N/P/As −3; H and C are treated as cations/covalent, not fixed anions, so e.g. C–C and O–H still get rules) and **both anion and cation sites are looked up in the Shannon table** at their (valence, CN) — anions at the fixed valence, cations at the BVS-estimated one — with cation/anion roles split by Pauling electronegativity. Same-site or non-ionic pairs and any site lacking bvparm/Shannon data fall back to the bonding radius. An RGB color table (`.todos/elements.ini` columns 6–8) sets the default element color via `elementArgb`, with `vestaArgb` as the fallback; `resolveArgb`/`resolveSiteArgb` route through it so site/element overrides still take precedence.
 - **Engine** (`CrystalEngine.kt`): expands the asymmetric unit via symmetry operations, builds supercells, infers bonds, and computes crystal info such as density and Hill-ordered composition. Per v0.3.4 it materialises a shell of neighbour cells around the primary expansion region; bonds are computed from primary **and boundary-image** atoms to atoms in their 3×3×3 neighbouring cells using real Cartesian distances (no minimum-image offsets). Per v0.3.44 the shell is **two cells thick** (`[-2, ex+2)³`): a boundary-image centre sits at offset ±1 on a primary-box face, so its outward neighbours land at offset ±2 and must be materialised for that centre's coordination polyhedron to be complete (a 1-cell shell only completed the primary `(0,0,0)` site). Atoms in the second layer are external shell (hidden by default; kept when referenced by a bond). Shell atoms that do not participate in any bond are discarded before the `SceneSnapshot` is returned. `MAX_RENDERED_ATOMS` is 100,000. Same-site integer-translation pairs (periodic images of one atom, e.g. Cs–Cs) are suppressed by the auto covalent-radius fallback but allowed when an explicit rule exists for the pair.
 - **Editor** (`CrystalEditor.kt`): applies immutable `EditCommand` values to a `CrystalStructure`. Commands cover cell/space-group changes, atom add/update/delete, bond rules, and 3x3 integer transformation matrices. `ensureAutoBondRules` (called on preset open, atom add, and transforms) is the v0.5.0 default: it runs `BondValence.smartIonicRules` (per-site Shannon radii) and falls back to bonding radii when the structure can't be analysed or exceeds `SMART_IONIC_ATOM_LIMIT` (100 expanded atoms, a performance guard for high-symmetry supercells). `rebuildBondRules(structure, source, epsilon)` clears all existing rules **and** `disabledBondPairs`, then regenerates every pair under the chosen radius source (`SMART_IONIC`/`BONDING`/`VDW`) with bond threshold ε (max = rA + rB + ε, default 0.45); it backs the bond editor's "自动应用半径" button. SMART_IONIC is not size-guarded when chosen manually, but if it can't analyse the structure it falls back to bonding radii and sets the `SMART_IONIC_UNAVAILABLE` warning sentinel (surfaced by the UI). Anion–anion site pairs (O–O, O–F, …) are skipped — in an ionic model two anions don't bond, and their wide radius sum would otherwise flag non-bonding O–O distances as bonds.
 - **Space groups** (`SpaceGroupCatalog.kt`): catalogs all 230 space-group symbols and derives crystal system/point group. `operations()` returns the symmetry-operation strings for all 230 groups (baked into `operationsTable`); unrecognised names fall back to identity. The table was generated from Hall symbols via `scripts/dev/generate_spacegroups.py` (spglib) — regenerate from there if a group's operations ever need correction.
 - **Expression parser** (`ExpressionParser.kt`): small arithmetic evaluator used for fractional coordinates and cell parameters in the UI.
+
+### `crystal-io`
+
+- **CIF codec** (`CifCodec.kt`): parses multi-block CIF 1.1 files into `CifDocument`/`CifBlock`/`CifLoop`/`CifPair`, preserves comments and non-structural items, and writes back by surgically replacing only the structural tags (`_cell_*`, `_atom_site_*`, `_space_group_*`, `_symmetry_equiv_pos_*`, `_krystals_bond_rule_*`). Use `CifCodec.parseStructure` to get a `ParsedStructure`, which carries both the original document and the derived `CrystalStructure`.
 
 ### `renderer`
 
@@ -61,15 +66,15 @@ The core module contains no Android dependencies.
 
 ### Data flow
 
-1. A CIF file is opened and parsed into a `ParsedStructure`.
+1. A CIF file is opened by `app` and parsed by `crystal-io` into a `ParsedStructure`.
 2. The UI mutates a working `CrystalStructure` through `EditCommand`s.
 3. `CrystalEngine.buildScene(structure, expansion)` produces a `SceneSnapshot` of atoms and bonds.
 4. `CrystalViewport` renders the snapshot and returns tap events; `CrystalImageExporter` renders the same view to a bitmap.
-5. Saving writes the working structure back into the original document via `CifCodec.write`, preserving unrelated content.
+5. Saving writes the working structure back into the original document via `crystal-io`'s `CifCodec.write`, preserving unrelated content.
 
 ## Notes for contributors
 
-- `crystal-core` tests use JUnit 5 (`useJUnitPlatform`). The sample CIF corpus lives under `res/cifs_example` and is exercised by `SampleCifTest`.
+- `crystal-core` and `crystal-io` tests use JUnit 5 (`useJUnitPlatform`). The sample CIF corpus lives under `res/cifs_example` and is exercised by `crystal-io`'s `SampleCifTest`.
 - The app module packages the `res/` directory as assets (`sourceSets["main"].assets.srcDir(rootProject.file("res"))`), so bundled images and CIF samples are available at runtime without copying them into `app/src/main/assets`.
 - Rendering is Compose Canvas-based (no Filament); changes to 3D rendering should be done in `CrystalViewport` / `CrystalImageExporter`.
 
