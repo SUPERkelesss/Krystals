@@ -5,6 +5,7 @@ import com.krystals.crystal.analysis.bonding.BondDetector
 import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondValence
 import com.krystals.crystal.analysis.bonding.VoronoiNeighbours
+import com.krystals.crystal.analysis.bonding.VoronoiSearchLimitExceededException
 import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
 import com.krystals.crystal.analysis.editing.CrystalEditor
 import com.krystals.crystal.analysis.editing.EditCommand
@@ -23,6 +24,7 @@ import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -102,6 +104,28 @@ class AnalysisTest {
                 (1.9 * kotlin.math.sin(Math.toRadians(5.0))).let { it * it },
         )
         assertTrue(neighbours.any { (_, _, distance) -> kotlin.math.abs(distance - shortImage) < 1e-8 })
+    }
+
+    @Test fun nearDegenerateCellStopsVoronoiBeforeCandidateAllocation() {
+        val structure = CrystalStructure(
+            blockName = "near-degenerate",
+            lattice = Lattice(10.0, 10.0, 10.0, 90.0, 90.0, 0.001),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(
+                Site("Na", "Na1", Species("Na"), FractionalCoordinate.ZERO),
+                Site("Cl", "Cl1", Species("Cl"), FractionalCoordinate(0.5, 0.5, 0.5)),
+            ),
+        )
+        val atoms = SymmetryExpander.expand(structure)
+
+        assertFailsWith<VoronoiSearchLimitExceededException> {
+            VoronoiNeighbours.find(structure, atoms)
+        }
+        assertFailsWith<VoronoiSearchLimitExceededException> {
+            BondValence.smartIonicRules(structure, BondConfiguration())
+        }
+        assertTrue(BondValence.bondValenceSums(structure, BondConfiguration()).isEmpty())
     }
 
     @Test fun preservesBondAndBoundaryImageResults() {

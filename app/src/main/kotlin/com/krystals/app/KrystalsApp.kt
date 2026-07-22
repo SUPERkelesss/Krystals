@@ -145,6 +145,7 @@ import com.krystals.crystal.analysis.bonding.BondNetwork
 import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondRuleMatching
 import com.krystals.crystal.analysis.bonding.BondValence
+import com.krystals.crystal.analysis.bonding.VoronoiSearchLimitExceededException
 import com.krystals.crystal.analysis.editing.*
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.*
@@ -239,6 +240,7 @@ fun KrystalsRoot(
     // Per v0.5.0: global "计算中..." overlay shown while bond rules are recomputed (open file, add/
     // delete atom, transform, hex/rhom conversion) off the UI thread.
     var computing by remember { mutableStateOf(false) }
+    var voronoiWarningOpen by remember { mutableStateOf(false) }
     var pendingOpen by remember { mutableStateOf<PendingOpen?>(null) }
     var pendingSaveTabId by remember { mutableStateOf<String?>(null) }
     var closeRequest by remember { mutableStateOf<Int?>(null) }
@@ -275,6 +277,10 @@ fun KrystalsRoot(
 
     // Per v0.5.2b: resolved string for the smart-ionic timeout snackbar (localized() is @Composable).
     val smartIonicTimeoutMessage = localized("智能离子计算超时，已回退键合半径", "Smart ionic timed out, fell back to bonding radii")
+    val voronoiWarningMessage = localized(
+        "周期 Voronoi 搜索范围过大，继续计算可能耗尽内存。请调整晶胞参数或改用键合半径。",
+        "The periodic Voronoi search is too large and may exhaust memory. Adjust the cell or use bonding radii.",
+    )
 
     // Per v0.5.3b: when an opened cell expands to more than [LARGE_CELL_WARN_THRESHOLD] atoms the
     // user is warned before the (possibly degraded) scene is built. Resolved once; reused below.
@@ -295,7 +301,10 @@ fun KrystalsRoot(
             result.getOrNull()?.let { editResult ->
                 viewModel.current?.let { viewModel.updateAnalysis(it, editResult) }
             }
-            result.onFailure { showMessage(it.message ?: "Operation failed") }
+            result.onFailure { error ->
+                if (error is VoronoiSearchLimitExceededException) voronoiWarningOpen = true
+                else showMessage(error.message ?: "Operation failed")
+            }
         }
     }
 
@@ -325,7 +334,10 @@ fun KrystalsRoot(
             result.onSuccess { editResult ->
                 if (CrystalEditor.SMART_IONIC_TIMEOUT in editResult.warnings) showMessage(smartIonicTimeoutMessage)
                 viewModel.current?.let { viewModel.updateAnalysis(it, editResult) }
-            }.onFailure { showMessage(it.message ?: "Operation failed") }
+            }.onFailure { error ->
+                if (error is VoronoiSearchLimitExceededException) voronoiWarningOpen = true
+                else showMessage(error.message ?: "Operation failed")
+            }
         }
     }
 
@@ -458,6 +470,7 @@ fun KrystalsRoot(
     }
     BackHandler(enabled = true) {
         when {
+            voronoiWarningOpen -> voronoiWarningOpen = false
             exitRequest -> exitRequest = false
             closeRequest != null -> closeRequest = null
             pendingOpen != null -> pendingOpen = null
@@ -560,6 +573,18 @@ fun KrystalsRoot(
                     }
                 }
             }
+        }
+        if (voronoiWarningOpen) {
+            AlertDialog(
+                onDismissRequest = { voronoiWarningOpen = false },
+                title = { Text(localized("计算已停止", "Calculation stopped")) },
+                text = { Text(voronoiWarningMessage) },
+                confirmButton = {
+                    TextButton(onClick = { voronoiWarningOpen = false }) {
+                        Text(stringResource(R.string.confirm))
+                    }
+                },
+            )
         }
         pendingOpen?.let { pending ->
         val document = remember(pending) { CifCodec.parse(pending.text) }

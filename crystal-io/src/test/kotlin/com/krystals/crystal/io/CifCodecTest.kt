@@ -6,6 +6,7 @@ import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class CifCodecTest {
@@ -40,6 +41,19 @@ class CifCodecTest {
         val atoms = SymmetryExpander.expand(parsed.structure)
         assertEquals(2, atoms.size)
         assertEquals(1.0 / 3.0, parsed.structure.sites.single().fractionalCoordinate.x, 1e-8)
+    }
+
+    @Test
+    fun rejectsCifWithDegenerateCellGeometry() {
+        val invalid = simple
+            .replace("_cell_angle_alpha 90", "_cell_angle_alpha 10")
+            .replace("_cell_angle_beta 90", "_cell_angle_beta 10")
+            .replace("_cell_angle_gamma 90", "_cell_angle_gamma 170")
+
+        val exception = assertFailsWith<IllegalArgumentException> {
+            CifCodec.parseStructure(invalid)
+        }
+        assertTrue(exception.message.orEmpty().contains("non-degenerate volume"))
     }
 
     @Test

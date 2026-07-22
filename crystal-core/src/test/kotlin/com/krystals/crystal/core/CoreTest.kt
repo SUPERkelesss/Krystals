@@ -17,6 +17,7 @@ import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class CoreTest {
@@ -44,6 +45,18 @@ class CoreTest {
         assertEquals(fractional.z, roundTrip.z, 1e-10)
         assertTrue(lattice.volume > 0.0)
         assertEquals(lattice.a, Lattice.fromMatrix(lattice.matrix).a, 1e-10)
+    }
+
+    @Test fun rejectsInvalidAndDegenerateLattices() {
+        assertFailsWith<IllegalArgumentException> {
+            Lattice(4.0, 4.0, 4.0, 90.0, 90.0, 180.0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Lattice(4.0, 4.0, 4.0, 10.0, 10.0, 170.0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Lattice(Double.POSITIVE_INFINITY, 4.0, 4.0, 90.0, 90.0, 90.0)
+        }
     }
 
     @Test fun periodicBoundaryPreservesExistingSemantics() {

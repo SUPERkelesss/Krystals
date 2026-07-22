@@ -8,10 +8,21 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.ceil
 
+class VoronoiSearchLimitExceededException(
+    val estimatedCandidatesPerCenter: Long,
+    val shellX: Int,
+    val shellY: Int,
+    val shellZ: Int,
+) : IllegalStateException(
+    "Periodic Voronoi search exceeds the safe candidate limit " +
+        "($estimatedCandidatesPerCenter candidates per center; shell=$shellX,$shellY,$shellZ)",
+)
+
 /** Periodic 3D Voronoi neighbours, represented once per undirected periodic atom pair. */
 internal object VoronoiNeighbours {
     private const val EPS = 1e-8
     private const val MIN_FACE_AREA = 1e-8
+    private const val MAX_CANDIDATES_PER_CENTER = 500_000L
 
     private data class Candidate(
         val atomId: Long,
@@ -91,6 +102,8 @@ internal object VoronoiNeighbours {
         shellY: Int,
         shellZ: Int,
     ): List<Candidate> {
+        require(shellX >= 0 && shellY >= 0 && shellZ >= 0)
+        ensureCandidateBudget(atoms.size, shellX, shellY, shellZ)
         val lattice = structure.lattice.matrix
         val centerPosition = center.cartesianCoordinate.toVec3()
         return buildList {
@@ -107,6 +120,21 @@ internal object VoronoiNeighbours {
                 }
             }
         }.sortedBy { it.distance }
+    }
+
+    private fun ensureCandidateBudget(atomCount: Int, shellX: Int, shellY: Int, shellZ: Int) {
+        var candidateCount = atomCount.toLong()
+        for (shell in intArrayOf(shellX, shellY, shellZ)) {
+            val imageCount = 2L * shell + 1L
+            candidateCount = if (candidateCount > Long.MAX_VALUE / imageCount) {
+                Long.MAX_VALUE
+            } else {
+                candidateCount * imageCount
+            }
+        }
+        if (candidateCount > MAX_CANDIDATES_PER_CENTER) {
+            throw VoronoiSearchLimitExceededException(candidateCount, shellX, shellY, shellZ)
+        }
     }
 
     private fun buildCell(candidates: List<Candidate>): List<Face> {

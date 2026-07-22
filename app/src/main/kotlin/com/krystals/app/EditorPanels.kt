@@ -90,6 +90,7 @@ import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.bonding.BondRuleMatching
 import com.krystals.crystal.analysis.bonding.BondValence
+import com.krystals.crystal.analysis.bonding.VoronoiSearchLimitExceededException
 import com.krystals.crystal.analysis.editing.*
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.*
@@ -478,12 +479,18 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
     var radiiMenuOpen by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var confirmSmartIonic by remember { mutableStateOf(false) }
+    var voronoiWarningOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     // Per v0.5.0: smart-ionic unavailable warning + ε hint. localized() is @Composable, so resolve
     // them here in the composable body and reuse inside non-composable lambdas below.
     val unavailableMessage = localized("智能离子规则在该晶体下不可用", "Smart ionic rules are unavailable for this crystal")
     val confirmTitle = localized("确认计算", "Confirm")
     val confirmMessage = localized("当前晶胞原子数过多，计算时间可能较长。确认自动计算化学键规则吗？", "This cell has many atoms; computation may take a while. Recompute bond rules anyway?")
+    val voronoiWarningTitle = localized("计算已停止", "Calculation stopped")
+    val voronoiWarningMessage = localized(
+        "周期 Voronoi 搜索范围过大，继续计算可能耗尽内存。请调整晶胞参数或改用键合半径。",
+        "The periodic Voronoi search is too large and may exhaust memory. Adjust the cell or use bonding radii.",
+    )
     val computingMessage = localized("计算中...", "Computing...")
     val epsilonHint = localized("max = rA + rB + ε，建议在 0.35–0.45 之间", "max = rA + rB + ε, suggested 0.35–0.45")
     val rules = tab.bondConfiguration.rules
@@ -517,17 +524,24 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
         }
         loading = true
         scope.launch(Dispatchers.Default) {
-            val result = CrystalEditor.rebuildBondRules(
-                tab.structure,
-                tab.bondConfiguration,
-                source,
-                epsilon,
-            )
+            val outcome = runCatching {
+                CrystalEditor.rebuildBondRules(
+                    tab.structure,
+                    tab.bondConfiguration,
+                    source,
+                    epsilon,
+                )
+            }
             withContext(Dispatchers.Main) {
                 loading = false
-                tab.lastRadiusSource = source
-                if (CrystalEditor.SMART_IONIC_UNAVAILABLE in result.warnings) onMessage(unavailableMessage)
-                onStructure(result)
+                outcome.onSuccess { result ->
+                    tab.lastRadiusSource = source
+                    if (CrystalEditor.SMART_IONIC_UNAVAILABLE in result.warnings) onMessage(unavailableMessage)
+                    onStructure(result)
+                }.onFailure { error ->
+                    if (error is VoronoiSearchLimitExceededException) voronoiWarningOpen = true
+                    else onMessage(error.message ?: "Bond calculation failed")
+                }
             }
         }
     }
@@ -630,6 +644,18 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
                 rebuildAsync(RadiusSource.SMART_IONIC, tab.bondEpsilon, skipConfirm = true)
             }) { Text(stringResource(R.string.confirm)) } },
             dismissButton = { TextButton(onClick = { confirmSmartIonic = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    if (voronoiWarningOpen) {
+        AlertDialog(
+            onDismissRequest = { voronoiWarningOpen = false },
+            title = { Text(voronoiWarningTitle) },
+            text = { Text(voronoiWarningMessage) },
+            confirmButton = {
+                TextButton(onClick = { voronoiWarningOpen = false }) {
+                    Text(stringResource(R.string.confirm))
+                }
+            },
         )
     }
     if (addOpen) BondRuleDialog(sites, editingRule = null, onDismiss = { addOpen = false }) { siteA, siteB, min, max, extend ->

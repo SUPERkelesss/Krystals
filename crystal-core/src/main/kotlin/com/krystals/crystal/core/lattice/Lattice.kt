@@ -8,7 +8,6 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.cos
-import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -21,22 +20,37 @@ data class Lattice(
     val gamma: Double,
 ) {
     init {
-        require(a > 0 && b > 0 && c > 0) { "Cell lengths must be positive" }
-        require(alpha in 0.0..180.0 && beta in 0.0..180.0 && gamma in 0.0..180.0) {
-            "Cell angles must be between 0 and 180 degrees"
+        require(listOf(a, b, c).all { it.isFinite() && it > 0.0 }) {
+            "Cell lengths must be finite and positive"
+        }
+        require(listOf(alpha, beta, gamma).all { it.isFinite() && it > 0.0 && it < 180.0 }) {
+            "Cell angles must be finite and strictly between 0 and 180 degrees"
         }
     }
 
-    val matrix: Mat3 by lazy {
+    val matrix: Mat3 = buildMatrix().also { value ->
+        val determinant = abs(value.determinant())
+        require(determinant.isFinite() && determinant > MIN_CELL_VOLUME) {
+            "Cell geometry must define a finite, non-degenerate volume"
+        }
+    }
+
+    private fun buildMatrix(): Mat3 {
         val ar = alpha * PI / 180.0
         val br = beta * PI / 180.0
         val gr = gamma * PI / 180.0
+        val cosAlpha = cos(ar)
+        val cosBeta = cos(br)
+        val cosGamma = cos(gr)
+        val sinGamma = sin(gr)
+        val volumeFactorSquared = 1.0 + 2.0 * cosAlpha * cosBeta * cosGamma -
+            cosAlpha * cosAlpha - cosBeta * cosBeta - cosGamma * cosGamma
         val av = Vec3(a, 0.0, 0.0)
-        val bv = Vec3(b * cos(gr), b * sin(gr), 0.0)
-        val cx = c * cos(br)
-        val cy = c * (cos(ar) - cos(br) * cos(gr)) / max(1e-12, sin(gr))
-        val cz = sqrt(max(0.0, c * c - cx * cx - cy * cy))
-        Mat3(av, bv, Vec3(cx, cy, cz))
+        val bv = Vec3(b * cosGamma, b * sinGamma, 0.0)
+        val cx = c * cosBeta
+        val cy = c * (cosAlpha - cosBeta * cosGamma) / sinGamma
+        val cz = c * sqrt(volumeFactorSquared) / sinGamma
+        return Mat3(av, bv, Vec3(cx, cy, cz))
     }
 
     val volume: Double get() = abs(matrix.determinant())
@@ -48,6 +62,8 @@ data class Lattice(
         FractionalCoordinate.fromVec3(matrix.inverse() * cartesian.toVec3())
 
     companion object {
+        private const val MIN_CELL_VOLUME = 1e-12
+
         val DEFAULT = Lattice(1.0, 1.0, 1.0, 90.0, 90.0, 90.0)
 
         fun fromMatrix(matrix: Mat3): Lattice {

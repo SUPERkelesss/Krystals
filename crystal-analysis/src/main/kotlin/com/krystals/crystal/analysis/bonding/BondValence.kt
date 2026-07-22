@@ -87,7 +87,11 @@ object BondValence {
         // remember() in the viewer) stall the UI. Skip it above the smart-ionic atom limit; the
         // atom-info window then simply omits "s = X.XX" for those structures.
         if (SymmetryExpander.expand(structure).size > SMART_IONIC_ATOM_LIMIT) return emptyMap()
-        val analysis = analyze(structure) ?: return emptyMap()
+        val analysis = try {
+            analyze(structure)
+        } catch (_: VoronoiSearchLimitExceededException) {
+            return emptyMap()
+        } ?: return emptyMap()
         val siteValence = analysis.siteValence
         val atomById = analysis.atoms.associateBy { it.id }
         // Per expanded-atom BVS.
