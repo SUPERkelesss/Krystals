@@ -36,6 +36,7 @@ if ($VersionText -ne $MaterialAbiVersion) {
 }
 
 $Names = @(
+    'atom_opaque', 'atom_transparent',
     'opaque', 'transparent', 'polyhedron',
     'unlit_opaque', 'unlit_transparent', 'unlit_polyhedron',
     'highlight', 'depth_cueing', 'picking'

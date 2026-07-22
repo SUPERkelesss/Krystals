@@ -87,14 +87,17 @@ object BondDetector {
         val boundaryEps = 1e-6
 
         val primaryAtoms = ArrayList<AtomImage>(base.size * expansion.multiplier)
+        val primaryIdByBaseId = HashMap<Long, Long>(base.size)
         var tempId = 1L
         fun nextTempId() = tempId++
         for (ix in 0 until ex) for (iy in 0 until ey) for (iz in 0 until ez) {
             base.forEach { atom ->
                 val offset = Int3(ix, iy, iz)
                 val fractional = atom.fractionalCoordinate + offset
+                val primaryId = nextTempId()
+                if (ix == 0 && iy == 0 && iz == 0) primaryIdByBaseId[atom.id] = primaryId
                 primaryAtoms += atom.copy(
-                    id = nextTempId(),
+                    id = primaryId,
                     fractionalCoordinate = fractional,
                     cartesianCoordinate = structure.lattice.toCartesian(fractional),
                     cellOffset = offset,
@@ -114,6 +117,9 @@ object BondDetector {
         // must act as a bond centre to reach its ±2 outward neighbour). The offset range is ±1; ±2
         // outward ligands are created on demand by the bond sweep.
         val boundaryImages = ArrayList<AtomImage>()
+        // Pre-index boundary images by the zero-cell primary atom they were copied from. This keeps
+        // getShellAtom's existing key semantics without scanning all primary atoms by coordinates.
+        val shellByKey = HashMap<Pair<Long, Int3>, AtomImage>()
         for (ix in -1..ex + 1) for (iy in -1..ey + 1) for (iz in -1..ez + 1) {
             if (ix in 0 until ex && iy in 0 until ey && iz in 0 until ez) continue
             base.forEach { atom ->
@@ -131,7 +137,7 @@ object BondDetector {
                         (fractional.z >= -boundaryEps && fractional.z <= boundaryEps) ||
                         (fractional.z >= ez - boundaryEps && fractional.z <= ez + boundaryEps)
                 if (!inPrimaryBox || !onFace) return@forEach
-                boundaryImages += atom.copy(
+                val boundaryImage = atom.copy(
                     id = nextTempId(),
                     fractionalCoordinate = fractional,
                     cartesianCoordinate = structure.lattice.toCartesian(fractional),
@@ -139,6 +145,8 @@ object BondDetector {
                     isShell = true,
                     isBoundaryImage = true,
                 )
+                boundaryImages += boundaryImage
+                shellByKey[primaryIdByBaseId.getValue(atom.id) to offset] = boundaryImage
             }
         }
 
@@ -168,20 +176,6 @@ object BondDetector {
         // spawning duplicates at the same image position (e.g. Cs@(0,0,0) imaged to (1,0,0) is both a
         // boundary image and a bond target — it must be a single atom, or boundary centres would be
         // skipped and their ±2 outward neighbours never reached).
-        val shellByKey = HashMap<Pair<Long, Int3>, AtomImage>()
-        for (b in boundaryImages) {
-            val primaryId = primaryAtoms.firstOrNull {
-                it.siteId == b.siteId && it.fractionalCoordinate.almostEquals(
-                    FractionalCoordinate(
-                        b.fractionalCoordinate.x - b.cellOffset.x,
-                        b.fractionalCoordinate.y - b.cellOffset.y,
-                        b.fractionalCoordinate.z - b.cellOffset.z,
-                    ),
-                )
-            }?.id
-            if (primaryId != null) shellByKey[primaryId to b.cellOffset] = b
-        }
-
         // Per v0.3.41: a shell atom is a boundary image iff its (raw, unwrapped) fractional
         // position lies on a primary-box face AND within the [0,ex] closure. Testing the offset
         // instead would mis-classify e.g. Cl(½,½,½) imaged to (0,0,1) → position (½,½,1.5), which is

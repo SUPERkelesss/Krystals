@@ -13,6 +13,7 @@ import android.os.Looper
 import android.view.Choreographer
 import android.view.Surface
 import com.google.android.filament.Camera
+import com.google.android.filament.Colors
 import com.google.android.filament.Engine
 import com.google.android.filament.EntityManager
 import com.google.android.filament.Filament
@@ -95,6 +96,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         camera = engine.createCamera(cameraEntity)
         view.scene = filamentScene
         view.camera = camera
+        view.setPostProcessingEnabled(false)
         meshUploader = MeshUploader(engine)
         materialFactory = MaterialFactory(appContext, engine)
         gpuInstances = GpuInstanceManager(engine, filamentScene, meshUploader, materialFactory)
@@ -112,7 +114,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         detachInternal()
         require(surface.isValid) { "Filament surface is not valid" }
         swapChain = engine.createSwapChain(surface)
-        requestFrames(2)
+        requestFrames(3)
     }
 
     override fun detach() = onMain { detachInternal() }
@@ -131,7 +133,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         updateClearColor(scene)
         updateLightingAndDepth()
         updateCamera()
-        requestFrames(2)
+        requestFrames(3)
     }
 
     override fun updateInteraction(state: InteractionState) {
@@ -148,7 +150,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         if (documentChanged) submittedScene?.let { gpuInstances.updateInteraction(it, state) }
         if (cameraChanged || viewportChanged) updateCamera()
         if (cameraChanged) updateLightingAndDepth()
-        if (documentChanged || cameraChanged || viewportChanged) requestFrames(1)
+        if (documentChanged || cameraChanged || viewportChanged) requestFrames(if (documentChanged) 2 else 1)
     }
 
     fun updateOverlayData(bondValenceBySite: Map<String, Double>) {
@@ -166,9 +168,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     )
 
     override suspend fun pick(x: Float, y: Float): PickResult? {
-        if (swapChain == null) return pickingRenderer.pick(x, y)
-        requestFrames(1)
-        return pickingRenderer.pickGpu(view, x, y, mainHandler, gpuInstances::objectIdForEntity)
+        return pickingRenderer.pick(x, y)
     }
 
     override suspend fun renderToBitmap(width: Int, height: Int): Bitmap? {
@@ -466,15 +466,9 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private fun Double.formatFract() = "%.4f".format(this)
 
     private fun updateClearColor(scene: RenderScene) {
-        val argb = scene.environment.backgroundArgb
         renderer.clearOptions = Renderer.ClearOptions().apply {
             clear = true
-            clearColor = doubleArrayOf(
-                (argb ushr 16 and 0xFF).toDouble() / 255.0,
-                (argb ushr 8 and 0xFF).toDouble() / 255.0,
-                (argb and 0xFF).toDouble() / 255.0,
-                (argb ushr 24 and 0xFF).toDouble() / 255.0,
-            )
+            clearColor = filamentClearColor(scene.environment.backgroundArgb)
         }
     }
 
@@ -504,4 +498,19 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private fun onMain(block: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
     }
+}
+
+internal fun filamentClearColor(argb: Long): DoubleArray {
+    val linear = Colors.toLinear(
+        Colors.RgbType.SRGB,
+        (argb ushr 16 and 0xFF).toFloat() / 255f,
+        (argb ushr 8 and 0xFF).toFloat() / 255f,
+        (argb and 0xFF).toFloat() / 255f,
+    )
+    return doubleArrayOf(
+        linear[0].toDouble(),
+        linear[1].toDouble(),
+        linear[2].toDouble(),
+        (argb ushr 24 and 0xFF).toDouble() / 255.0,
+    )
 }

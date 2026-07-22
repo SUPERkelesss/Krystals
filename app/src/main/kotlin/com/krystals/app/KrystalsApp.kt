@@ -881,13 +881,13 @@ private fun ViewerScreen(
     // Per v0.5.3b: build the scene off the UI thread with a timeout. Previously this ran synchronously
     // on the Main thread inside `remember`, so a large cell (materialising ~77k shell atoms) froze
     // the UI and OOM'd with no way to cancel. Now a key change cancels the prior build (the stale
-    // result is discarded) and shows a spinner while the new one computes.
+    // result is discarded). The last successful scene stays mounted during rebuilds so the
+    // Filament Surface and Engine are not torn down for every appearance change.
     val renderedAppearance = previewAppearance ?: tab.appearance
-    var sceneResult by remember(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility) {
+    var sceneResult by remember(tab.id) {
         mutableStateOf<Result<RenderScene>?>(null)
     }
     LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility) {
-        sceneResult = null
         sceneResult = runCatching {
             withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
                 withContext(Dispatchers.Default) {

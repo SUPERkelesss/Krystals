@@ -2,6 +2,7 @@ package com.krystals.renderer.filament
 
 import android.content.Context
 import com.google.android.filament.Engine
+import com.google.android.filament.Colors
 import com.google.android.filament.Material
 import com.google.android.filament.MaterialInstance
 import com.krystals.renderer.core.style.RenderEnvironment
@@ -10,6 +11,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 enum class MaterialKind(val assetName: String) {
+    ATOM_OPAQUE("materials/atom_opaque.filamat"),
+    ATOM_TRANSPARENT("materials/atom_transparent.filamat"),
     OPAQUE("materials/opaque.filamat"),
     TRANSPARENT("materials/transparent.filamat"),
     POLYHEDRON("materials/polyhedron.filamat"),
@@ -49,30 +52,44 @@ class MaterialFactory(
             val red = (key.argb ushr 16 and 0xFF).toFloat() / 255f
             val green = (key.argb ushr 8 and 0xFF).toFloat() / 255f
             val blue = (key.argb and 0xFF).toFloat() / 255f
-            runCatching { instance.setParameter("baseColor", red, green, blue, alpha) }
-            runCatching { instance.setParameter("roughness", environment.worldLight.diffusion.coerceIn(0.04f, 1f)) }
-            runCatching { instance.setParameter("specular", if (key.reflective) environment.worldLight.intensity else 0f) }
+            runCatching { instance.setParameter("baseColor", Colors.RgbaType.SRGB, red, green, blue, alpha) }
+            runCatching { instance.setParameter("reflectionEnabled", if (key.reflective) 1f else 0f) }
             runCatching { instance.setParameter("occupancy", Double.fromBits(key.occupancyBits).toFloat()) }
             instances += instance
             instanceCache[kind to key] = instance
-            lastDepthState?.let { state -> applyDepthCueing(instance, state) }
+            applyEnvironment(instance, key, lastDepthState ?: DepthState(environment, 0f, 0f))
         }
     }
 
     fun updateDepthCueing(instance: MaterialInstance, environment: RenderEnvironment, near: Float, far: Float) {
-        applyDepthCueing(instance, DepthState(environment, near, far))
+        applyEnvironment(instance, instanceCache.entries.firstOrNull { it.value === instance }?.key?.second ?: return, DepthState(environment, near, far))
     }
 
-    private fun applyDepthCueing(instance: MaterialInstance, state: DepthState) {
+    private fun applyEnvironment(instance: MaterialInstance, key: MaterialKey, state: DepthState) {
         val environment = state.environment
         val cue = environment.depthCueing
         val argb = environment.backgroundArgb
         val viewRange = depthCueViewRange(cue, state.near, state.far)
+        val light = environment.worldLight
+        val azimuth = Math.toRadians(light.azimuthDegrees.toDouble())
+        val elevation = Math.toRadians(light.elevationDegrees.toDouble())
         runCatching { instance.setParameter("depthRange", viewRange.first, viewRange.second) }
         runCatching { instance.setParameter("depthCueEnabled", if (cue.enabled) 1f else 0f) }
+        runCatching { instance.setParameter("roughness", light.diffusion.coerceIn(0.04f, 1f)) }
+        runCatching { instance.setParameter("specular", if (key.reflective) light.intensity else 0f) }
+        runCatching {
+            instance.setParameter(
+                "highlightDirection",
+                (-kotlin.math.cos(azimuth) * kotlin.math.cos(elevation) * 0.95).toFloat(),
+                (kotlin.math.sin(azimuth) * kotlin.math.cos(elevation) * 0.95).toFloat(),
+            )
+        }
+        runCatching { instance.setParameter("highlightIntensity", light.intensity) }
+        runCatching { instance.setParameter("highlightRadius", 0.35f + 1.15f * light.diffusion) }
         runCatching {
             instance.setParameter(
                 "backgroundColor",
+                Colors.RgbType.SRGB,
                 (argb ushr 16 and 0xFF).toFloat() / 255f,
                 (argb ushr 8 and 0xFF).toFloat() / 255f,
                 (argb and 0xFF).toFloat() / 255f,
@@ -84,7 +101,7 @@ class MaterialFactory(
         val state = DepthState(environment, near, far)
         if (state == lastDepthState) return
         lastDepthState = state
-        instances.forEach { applyDepthCueing(it, state) }
+        instanceCache.forEach { (cacheKey, instance) -> applyEnvironment(instance, cacheKey.second, state) }
     }
 
     private fun load(kind: MaterialKind): Material? = runCatching {

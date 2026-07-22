@@ -138,6 +138,35 @@ class AnalysisTest {
         assertTrue(CoordinationAnalyzer.coordinationNumber(network, network.atoms.first().id) > 0)
     }
 
+    @Test fun boundaryImagesReuseTheirZeroCellPrimaryIdentity() {
+        val siteId = "C"
+        val structure = CrystalStructure(
+            blockName = "corner-atom",
+            lattice = Lattice(1.0, 1.0, 1.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(Site(siteId, "C1", Species("C"), FractionalCoordinate.ZERO)),
+        )
+        val rule = BondRule(siteId, siteId, 0.1, 1.01, extendAcrossCell = true)
+
+        fun verify(expansion: Expansion, boundaryOffset: Int3, boundaryPosition: FractionalCoordinate) {
+            val network = BondDetector.buildNetwork(structure, BondConfiguration(listOf(rule)), expansion)
+            val matchingAtoms = network.atoms.filter { atom ->
+                atom.siteId == siteId && atom.cellOffset == boundaryOffset &&
+                    atom.fractionalCoordinate == boundaryPosition
+            }
+            assertEquals(1, matchingAtoms.size)
+            val boundaryAtom = matchingAtoms.single()
+            assertTrue(boundaryAtom.isBoundaryImage)
+            assertTrue(network.bonds.any { bond ->
+                bond.atomA == boundaryAtom.id || bond.atomB == boundaryAtom.id
+            })
+        }
+
+        verify(Expansion(), Int3(1, 0, 0), FractionalCoordinate(1.0, 0.0, 0.0))
+        verify(Expansion(2, 2, 2), Int3(2, 0, 0), FractionalCoordinate(2.0, 0.0, 0.0))
+    }
+
     @Test fun bondConfigurationEditLifecycleIsIndependentFromStructure() {
         val rule = BondRule("Cs", "Cl", 0.1, 4.0)
         val addedDirectly = BondConfiguration().add(rule)

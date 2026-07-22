@@ -6,6 +6,7 @@ import com.google.android.filament.EntityManager
 import com.google.android.filament.RenderableManager
 import com.google.android.filament.Scene
 import com.krystals.renderer.core.primitive.MeshInstance
+import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.interaction.measure.DihedralTool
 import com.krystals.interaction.measure.MeasurementMode
@@ -26,12 +27,14 @@ class GpuInstanceManager(
     private val objectByEntity = linkedMapOf<Int, String>()
     private val ownedMeshByEntity = linkedMapOf<Int, UploadedMesh>()
     private val auxiliaryIds = linkedSetOf<String>()
+    private val sceneAuxiliaryIds = linkedSetOf<String>()
     private val auxiliaryMeshes = linkedMapOf<String, MeshData>()
     private val polyhedronBatchIds = linkedSetOf<String>()
     private val polyhedronOutlineIds = linkedSetOf<String>()
     private val model = InstanceManager()
     private var lastDocumentState: com.krystals.interaction.state.ViewerDocumentState? = null
     private var lastSnapshot: RenderScene? = null
+    private var atomsById: Map<Long, AtomInstance> = emptyMap()
 
     init {
         engine.isAutomaticInstancingEnabled = true
@@ -42,6 +45,7 @@ class GpuInstanceManager(
 
     fun sync(snapshot: RenderScene) {
         if (lastSnapshot === snapshot) return
+        atomsById = snapshot.atoms.associateBy { it.atom.id }
         val diff = model.sync(snapshot)
         (diff.removed + diff.updated).forEach(::destroy)
         val records = diff.batches.values.flatten().associateBy { it.objectId }
@@ -57,6 +61,8 @@ class GpuInstanceManager(
         polyhedronBatchIds.clear()
         polyhedronOutlineIds.toList().asReversed().forEach(::destroy)
         polyhedronOutlineIds.clear()
+        sceneAuxiliaryIds.toList().asReversed().forEach(::destroy)
+        sceneAuxiliaryIds.clear()
         meshes.mergePolyhedra(snapshot.meshes).forEachIndexed { index, merged ->
             val id = "polyhedron-batch:$index"
             auxiliaryMeshes[id] = merged.mesh
@@ -83,6 +89,7 @@ class GpuInstanceManager(
                 polyhedronOutlineIds += id
             }
         }
+        addFrameAndAxes(snapshot)
         lastDocumentState = null
         lastSnapshot = snapshot
     }
@@ -94,14 +101,13 @@ class GpuInstanceManager(
         lastDocumentState = state.document
         auxiliaryIds.toList().asReversed().forEach(::destroy)
         auxiliaryIds.clear()
-        auxiliaryMeshes.clear()
-        val atoms = snapshot.atoms.associateBy { it.atom.id }
+        auxiliaryMeshes.keys.removeAll { it.startsWith("aux:") }
         val lockedIds = state.document.lockedMeasurements.flatMap { it.atomIds }.toSet() +
             state.document.inspection.lockedInspectedAtomIds
         val highlighted = state.document.selection.selectedAtomIds.toSet() + lockedIds +
             listOfNotNull(state.document.inspection.inspectedAtomId)
         highlighted.forEach { atomId ->
-            val atom = atoms[atomId] ?: return@forEach
+            val atom = atomsById[atomId] ?: return@forEach
             val color = if (atomId in lockedIds) 0xFFCFA7F5 else 0xFF7542A5
             addAuxiliary(
                 InstanceRecord(
@@ -123,7 +129,7 @@ class GpuInstanceManager(
                 else -> 0
             }
             val points = if (expected > 0) {
-                measurement.atomIds.takeLast(expected).mapNotNull { atoms[it]?.atom?.cartesianCoordinate?.toVec3() }
+                measurement.atomIds.takeLast(expected).mapNotNull { atomsById[it]?.atom?.cartesianCoordinate?.toVec3() }
             } else {
                 emptyList()
             }
@@ -150,18 +156,19 @@ class GpuInstanceManager(
                 }
             }
         }
-        addFrameAndAxes(snapshot)
     }
 
     fun clear() {
         entities.keys.toList().asReversed().forEach(::destroy)
         model.clear()
         auxiliaryIds.clear()
+        sceneAuxiliaryIds.clear()
         auxiliaryMeshes.clear()
         polyhedronBatchIds.clear()
         polyhedronOutlineIds.clear()
         lastDocumentState = null
         lastSnapshot = null
+        atomsById = emptyMap()
     }
 
     override fun close() = clear()
@@ -202,7 +209,7 @@ class GpuInstanceManager(
             .receiveShadows(false)
             .build(engine, entity)
         val transform = engine.transformManager.create(entity)
-        engine.transformManager.setTransform(transform, record.transform)
+        engine.transformManager.setTransform(transform, filamentTransform(record))
         scene.addEntity(entity)
         if (record.batch.geometry == GeometryKind.POLYHEDRON) ownedMeshByEntity[entity] = uploaded
         return entity
@@ -221,7 +228,7 @@ class GpuInstanceManager(
             for (y in 0..limitY) for (z in 0..limitZ) segments += matrix.b * y.toDouble() + matrix.c * z.toDouble() to matrix.b * y.toDouble() + matrix.c * z.toDouble() + matrix.a * limitX.toDouble()
             val renderedSegments = if (snapshot.environment.frame.lineStyle == LineStyle.DASHED) segments.flatMap(::dash) else segments.toList()
             renderedSegments.forEachIndexed { index, (start, end) ->
-                addAuxiliary(
+                addSceneAuxiliary(
                     InstanceRecord(
                         "aux:frame:$index", 0,
                         BatchKey(GeometryKind.FRAME, MaterialKey(Material(0xFFA0A0AA, reflective = false))),
@@ -257,6 +264,13 @@ class GpuInstanceManager(
         create(record, snapshot)?.let { entity ->
             entities[record.objectId] = entity
             auxiliaryIds += record.objectId
+        }
+    }
+
+    private fun addSceneAuxiliary(record: InstanceRecord, snapshot: RenderScene) {
+        create(record, snapshot)?.let { entity ->
+            entities[record.objectId] = entity
+            sceneAuxiliaryIds += record.objectId
         }
     }
 
@@ -318,8 +332,21 @@ class GpuInstanceManager(
     }
 }
 
+internal fun filamentTransform(record: InstanceRecord): FloatArray {
+    if (record.batch.geometry != GeometryKind.CYLINDER || !record.objectId.startsWith("bond:")) return record.transform
+    return record.transform.copyOf().also { transform ->
+        for (index in intArrayOf(0, 1, 2, 8, 9, 10)) transform[index] *= 0.5f
+    }
+}
+
 internal fun materialKindFor(geometry: GeometryKind, material: MaterialKey): MaterialKind = when {
     geometry == GeometryKind.HIGHLIGHT -> MaterialKind.HIGHLIGHT
+    geometry == GeometryKind.SPHERE_HIGH && material.transparent -> MaterialKind.ATOM_TRANSPARENT
+    geometry == GeometryKind.SPHERE_MEDIUM && material.transparent -> MaterialKind.ATOM_TRANSPARENT
+    geometry == GeometryKind.SPHERE_LOW && material.transparent -> MaterialKind.ATOM_TRANSPARENT
+    geometry == GeometryKind.SPHERE_HIGH -> MaterialKind.ATOM_OPAQUE
+    geometry == GeometryKind.SPHERE_MEDIUM -> MaterialKind.ATOM_OPAQUE
+    geometry == GeometryKind.SPHERE_LOW -> MaterialKind.ATOM_OPAQUE
     geometry == GeometryKind.POLYHEDRON && material.reflective -> MaterialKind.POLYHEDRON
     geometry == GeometryKind.POLYHEDRON -> MaterialKind.UNLIT_POLYHEDRON
     material.transparent && material.reflective -> MaterialKind.TRANSPARENT

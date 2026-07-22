@@ -18,7 +18,9 @@ import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.interaction.state.InteractionState
 import com.krystals.interaction.state.ViewerSessionState
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class InstanceManagerTest {
@@ -67,12 +69,40 @@ class InstanceManagerTest {
         val litTransparent = MaterialKey(Material(0xFFFFFFFF, opacity = 0.5, reflective = true))
         val unlitTransparent = MaterialKey(Material(0xFFFFFFFF, opacity = 0.5, reflective = false))
 
-        assertEquals(MaterialKind.OPAQUE, materialKindFor(GeometryKind.SPHERE_HIGH, litOpaque))
-        assertEquals(MaterialKind.UNLIT_OPAQUE, materialKindFor(GeometryKind.SPHERE_HIGH, unlitOpaque))
+        assertEquals(MaterialKind.ATOM_OPAQUE, materialKindFor(GeometryKind.SPHERE_HIGH, litOpaque))
+        assertEquals(MaterialKind.ATOM_OPAQUE, materialKindFor(GeometryKind.SPHERE_HIGH, unlitOpaque))
+        assertEquals(MaterialKind.ATOM_TRANSPARENT, materialKindFor(GeometryKind.SPHERE_LOW, litTransparent))
+        assertEquals(MaterialKind.ATOM_TRANSPARENT, materialKindFor(GeometryKind.SPHERE_MEDIUM, unlitTransparent))
         assertEquals(MaterialKind.TRANSPARENT, materialKindFor(GeometryKind.CYLINDER, litTransparent))
         assertEquals(MaterialKind.UNLIT_TRANSPARENT, materialKindFor(GeometryKind.CYLINDER, unlitTransparent))
         assertEquals(MaterialKind.POLYHEDRON, materialKindFor(GeometryKind.POLYHEDRON, litTransparent))
         assertEquals(MaterialKind.UNLIT_POLYHEDRON, materialKindFor(GeometryKind.POLYHEDRON, unlitTransparent))
+    }
+
+    @Test
+    fun filamentHalvesOnlyBondCylinderRadius() {
+        val source = FloatArray(16) { (it + 1).toFloat() }
+        val material = MaterialKey(Material(0xFFFFFFFF))
+        val bond = InstanceRecord("bond:1:2:a", 1, BatchKey(GeometryKind.CYLINDER, material), source)
+        val measurement = InstanceRecord("aux:measurement:0:0", 0, BatchKey(GeometryKind.MEASUREMENT, material), source)
+
+        val transformed = filamentTransform(bond)
+        val expected = source.copyOf().also { values ->
+            for (index in intArrayOf(0, 1, 2, 8, 9, 10)) values[index] *= 0.5f
+        }
+        assertContentEquals(expected, transformed)
+        assertContentEquals(FloatArray(16) { (it + 1).toFloat() }, source)
+        assertSame(source, filamentTransform(measurement))
+    }
+
+    @Test
+    fun clearColorConvertsAppearanceSrgbToFilamentLinearSpace() {
+        val color = filamentClearColor(0x80808080)
+
+        assertEquals(0.21586, color[0], 0.00001)
+        assertEquals(color[0], color[1], 0.0)
+        assertEquals(color[1], color[2], 0.0)
+        assertEquals(128.0 / 255.0, color[3], 0.00001)
     }
 
     @Test
