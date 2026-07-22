@@ -24,8 +24,8 @@ import com.krystals.interaction.state.SelectionState
 import com.krystals.interaction.state.ViewerCommand
 import com.krystals.interaction.state.ViewerDocumentState
 import com.krystals.interaction.state.VisibilityState as ViewerVisibility
-import com.krystals.renderer.legacy.RenderConfiguration
-import com.krystals.renderer.legacy.ViewerAppearance
+import com.krystals.renderer.core.style.RenderConfiguration
+import com.krystals.renderer.core.style.ViewerAppearance
 import java.util.UUID
 
 enum class AtomEditMode { NONE, MODIFY_NEXT, DELETE_NEXT }

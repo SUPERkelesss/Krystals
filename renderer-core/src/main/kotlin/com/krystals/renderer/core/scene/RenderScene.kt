@@ -7,6 +7,7 @@ import com.krystals.renderer.core.camera.Projection
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
 import com.krystals.renderer.core.primitive.MeshInstance
+import com.krystals.renderer.core.style.RenderEnvironment
 
 data class RenderScene(
     val structure: CrystalStructure,
@@ -14,6 +15,7 @@ data class RenderScene(
     val objects: List<RenderObject>,
     val camera: Camera = Camera(),
     val projection: Projection = Projection.Orthographic(),
+    val environment: RenderEnvironment = RenderEnvironment(),
 ) {
     val atoms: List<AtomInstance> = objects.filterIsInstance<AtomInstance>()
     val bonds: List<BondInstance> = objects.filterIsInstance<BondInstance>()

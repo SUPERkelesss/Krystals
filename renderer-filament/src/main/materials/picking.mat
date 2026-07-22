@@ -1,0 +1,14 @@
+material {
+    name : KrystalsPicking,
+    shadingModel : unlit,
+    blending : opaque,
+    colorWrite : true,
+    depthWrite : true,
+    parameters : [ { type : float4, name : baseColor } ]
+}
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.baseColor;
+    }
+}

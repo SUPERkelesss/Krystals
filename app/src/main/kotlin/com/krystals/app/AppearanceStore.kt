@@ -1,10 +1,10 @@
 package com.krystals.app
 
-import com.krystals.renderer.legacy.AxisMode
-import com.krystals.renderer.legacy.BondColorMode
-import com.krystals.renderer.legacy.FrameMode
-import com.krystals.renderer.legacy.LineStyle
-import com.krystals.renderer.legacy.ViewerAppearance
+import com.krystals.renderer.core.style.AxisMode
+import com.krystals.renderer.core.style.BondColorMode
+import com.krystals.renderer.core.style.FrameMode
+import com.krystals.renderer.core.style.LineStyle
+import com.krystals.renderer.core.style.ViewerAppearance
 import org.json.JSONObject
 
 /**

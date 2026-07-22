@@ -55,6 +55,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -95,12 +98,12 @@ import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
-import com.krystals.renderer.legacy.RenderPalette
-import com.krystals.renderer.legacy.AxisMode
-import com.krystals.renderer.legacy.BondColorMode
-import com.krystals.renderer.legacy.FrameMode
-import com.krystals.renderer.legacy.LineStyle
-import com.krystals.renderer.legacy.ViewerAppearance
+import com.krystals.renderer.core.style.RenderPalette
+import com.krystals.renderer.core.style.AxisMode
+import com.krystals.renderer.core.style.BondColorMode
+import com.krystals.renderer.core.style.FrameMode
+import com.krystals.renderer.core.style.LineStyle
+import com.krystals.renderer.core.style.ViewerAppearance
 import kotlin.math.max
 import kotlin.math.PI
 import kotlin.math.abs
@@ -757,6 +760,8 @@ fun AppearanceDialog(
     tab: DocumentTab,
     onDismiss: () -> Unit,
     onApplied: (ViewerAppearance) -> Unit = {},
+    rendererBackend: RendererBackend = RendererBackend.FILAMENT,
+    onRendererBackendChanged: (RendererBackend) -> Unit = {},
     // Per v0.5.2a: press-and-hold Preview callbacks. onPreviewStart hands the in-dialog appearance
     // up so the viewer can render with it; onPreviewEnd restores the dialog.
     onPreviewStart: (ViewerAppearance) -> Unit = {},
@@ -897,6 +902,22 @@ fun AppearanceDialog(
                         LabeledSlider(localized("终止值", "Far"), appearance.dofFar, -5f..5f) { v -> appearance = appearance.copy(dofFar = v.coerceAtMost(appearance.dofNear)) }
                     }
                     DepthCueingPreview(appearance, Modifier.padding(start = 10.dp).size(112.dp))
+                }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            Text(localized("渲染引擎", "Rendering engine"), fontWeight = FontWeight.Bold)
+            val backends = listOf(
+                RendererBackend.FILAMENT to "Filament",
+                RendererBackend.CANVAS_LEGACY to "Canvas (Legacy)",
+            )
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                backends.forEachIndexed { index, (backend, label) ->
+                    SegmentedButton(
+                        selected = rendererBackend == backend,
+                        onClick = { onRendererBackendChanged(backend) },
+                        shape = SegmentedButtonDefaults.itemShape(index, backends.size),
+                        label = { Text(label) },
+                    )
                 }
             }
         }

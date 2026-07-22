@@ -1,0 +1,32 @@
+material {
+    name : KrystalsTransparent,
+    shadingModel : lit,
+    blending : transparent,
+    doubleSided : true,
+    transparency : twoPassesOneSide,
+    parameters : [
+        { type : float4, name : baseColor },
+        { type : float, name : roughness },
+        { type : float, name : specular },
+        { type : float3, name : backgroundColor },
+        { type : float2, name : depthRange },
+        { type : float, name : depthCueEnabled },
+        { type : float, name : occupancy }
+    ]
+}
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 color = materialParams.baseColor;
+        float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
+        float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
+        float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
+        color.rgb = mix(color.rgb, materialParams.backgroundColor, fog);
+        vec3 viewNormal = normalize(mat3(getViewFromWorldMatrix()) * getWorldNormalVector());
+        float clockwiseFromTwelve = fract(atan(viewNormal.x, viewNormal.y) / 6.28318530 + 1.0);
+        color.a *= mix(0.15, 1.0, step(clockwiseFromTwelve, clamp(materialParams.occupancy, 0.0, 1.0)));
+        material.baseColor = color;
+        material.roughness = clamp(materialParams.roughness, 0.04, 1.0);
+        material.reflectance = clamp(materialParams.specular, 0.0, 1.0);
+    }
+}

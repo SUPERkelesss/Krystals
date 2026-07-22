@@ -13,6 +13,8 @@ import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.primitive.MeshKind
 import com.krystals.renderer.core.scene.RenderObject
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.renderer.core.style.BondColorMode
+import com.krystals.renderer.core.style.RenderEnvironment
 
 data class SceneBuildOptions(
     val hiddenSiteIds: Set<String> = emptySet(),
@@ -21,12 +23,15 @@ data class SceneBuildOptions(
     val polyhedronSiteIds: Set<String> = emptySet(),
     val atomRadiusByElement: Map<String, Double> = emptyMap(),
     val atomMaterialBySite: Map<String, Material> = emptyMap(),
+    val bondMaterialBySite: Map<String, Material> = emptyMap(),
     val polyhedronMaterialBySite: Map<String, Material> = emptyMap(),
     val defaultAtomMaterial: Material = Material(0xFFB8B8B8L),
     val defaultBondMaterial: Material = Material(0xFF9A90A0L),
     val defaultPolyhedronMaterial: Material = Material(0x809A90A0L, opacity = 0.5, doubleSided = true),
     val defaultAtomRadius: Double = 0.35,
     val bondRadius: Double = 0.20,
+    val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
+    val environment: RenderEnvironment = RenderEnvironment(),
 ) {
     init {
         require(defaultAtomRadius > 0.0) { "default atom radius must be positive" }
@@ -59,6 +64,11 @@ class CrystalSceneBuilder {
         fun atomMaterial(atom: AtomImage): Material =
             options.atomMaterialBySite[atom.siteId] ?: options.defaultAtomMaterial
 
+        fun bondMaterial(atom: AtomImage): Material = when (options.bondColorMode) {
+            BondColorMode.BICOLOR -> options.bondMaterialBySite[atom.siteId] ?: options.defaultBondMaterial
+            BondColorMode.UNICOLOR -> options.defaultBondMaterial
+        }
+
         val objects = mutableListOf<RenderObject>()
         analysis.atoms.forEach { atom ->
             objects += AtomInstance(
@@ -82,8 +92,8 @@ class CrystalSceneBuilder {
                 start = start.cartesianCoordinate.toVec3(),
                 end = end.cartesianCoordinate.toVec3(),
                 radius = options.bondRadius,
-                startMaterial = atomMaterial(start),
-                endMaterial = atomMaterial(end),
+                startMaterial = bondMaterial(start),
+                endMaterial = bondMaterial(end),
                 visible = options.showBonds && bond.rule.key !in options.hiddenBondKeys && externalAllowed,
             )
         }
@@ -123,6 +133,7 @@ class CrystalSceneBuilder {
             structure = structure,
             expansion = analysis.expansion,
             objects = objects.toList(),
+            environment = options.environment,
         )
     }
 

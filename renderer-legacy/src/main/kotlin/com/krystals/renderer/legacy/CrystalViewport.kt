@@ -104,6 +104,7 @@ private data class PolyhedronFaceRenderable(
 }
 
 @Stable
+@Deprecated("Use InteractionState with a renderer backend; retained for Canvas compatibility")
 class ViewerController : Picker {
     private var session by mutableStateOf(ViewerSessionState())
     private var commandSink: ((ViewerCommand) -> Unit)? = null
@@ -174,7 +175,7 @@ class ViewerController : Picker {
         .minByOrNull { (it.point - position).getDistance() - it.depth.toFloat() * 0.0001f }
         ?.atom
 
-    override fun pick(x: Float, y: Float): PickResult? = pick(Offset(x, y))?.let { atom ->
+    override suspend fun pick(x: Float, y: Float): PickResult? = pick(Offset(x, y))?.let { atom ->
         PickResult(objectId = "atom:${atom.id}", atomId = atom.id, siteId = atom.siteId)
     }
 }
@@ -185,6 +186,7 @@ fun rememberViewerController() = remember { ViewerController() }
 private data class TapEvent(val time: Long, val position: Offset)
 
 @Composable
+@Deprecated("Use the Filament backend; retained as Canvas-Legacy fallback")
 fun CrystalViewport(
     scene: RenderScene,
     interactionState: InteractionState,

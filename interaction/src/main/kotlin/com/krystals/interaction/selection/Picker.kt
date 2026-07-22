@@ -7,7 +7,7 @@ data class PickResult(
 )
 
 fun interface Picker {
-    fun pick(x: Float, y: Float): PickResult?
+    suspend fun pick(x: Float, y: Float): PickResult?
 }
 
 class SelectionManager(private val maxSelection: Int = 4) {

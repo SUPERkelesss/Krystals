@@ -157,10 +157,11 @@ import com.krystals.interaction.state.InteractionReducer
 import com.krystals.interaction.state.ViewerCommand
 import com.krystals.renderer.legacy.CrystalViewport
 import com.krystals.renderer.legacy.CrystalImageExporter
-import com.krystals.renderer.legacy.LegacyRenderSceneAdapter
-import com.krystals.renderer.legacy.RenderPalette
-import com.krystals.renderer.legacy.ViewerAppearance
+import com.krystals.renderer.core.builder.CrystalRenderSceneFactory
+import com.krystals.renderer.core.style.RenderPalette
+import com.krystals.renderer.core.style.ViewerAppearance
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.renderer.filament.FilamentRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -763,6 +764,20 @@ private fun ViewerScreen(
     onApplyAppearance: (ViewerAppearance) -> Unit,
 ) {
     val tab = viewModel.current ?: return
+    val scope = rememberCoroutineScope()
+    var preferredBackend by remember { mutableStateOf(RendererBackendStore.load(preferences)) }
+    var filamentSessionFailed by remember(preferredBackend) { mutableStateOf(false) }
+    var activeFilamentRenderer by remember { mutableStateOf<FilamentRenderer?>(null) }
+    val effectiveBackend = effectiveBackend(preferredBackend, filamentSessionFailed)
+    val filamentFallbackMessage = localized(
+        "Filament 初始化失败，本次会话已切换到 Canvas",
+        "Filament failed to initialize; using Canvas for this session",
+    )
+    fun selectBackend(backend: RendererBackend) {
+        preferredBackend = backend
+        filamentSessionFailed = false
+        RendererBackendStore.save(preferences, backend)
+    }
     @Suppress("UNUSED_VARIABLE") val historyVersion = tab.historyVersion
     var menuOpen by remember { mutableStateOf(false) }
     var toolOpen by remember(tab.id) { mutableStateOf(false) }
@@ -842,16 +857,25 @@ private fun ViewerScreen(
     // on the Main thread inside `remember`, so a large cell (materialising ~77k shell atoms) froze
     // the UI and OOM'd with no way to cancel. Now a key change cancels the prior build (the stale
     // result is discarded) and shows a spinner while the new one computes.
-    var sceneResult by remember(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, tab.appearance, tab.renderConfiguration, tab.visibility) {
+    val renderedAppearance = previewAppearance ?: tab.appearance
+    var sceneResult by remember(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility) {
         mutableStateOf<Result<RenderScene>?>(null)
     }
-    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, tab.appearance, tab.renderConfiguration, tab.visibility) {
+    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility) {
         sceneResult = null
         sceneResult = runCatching {
             withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
                 withContext(Dispatchers.Default) {
                     val analysis = BondDetector.buildNetwork(tab.structure, tab.bondConfiguration, tab.expansion)
-                    LegacyRenderSceneAdapter.build(analysis, tab.appearance, tab.renderConfiguration, tab.visibility)
+                    CrystalRenderSceneFactory.build(
+                        analysis = analysis,
+                        appearance = renderedAppearance,
+                        renderConfiguration = tab.renderConfiguration,
+                        hiddenSiteIds = tab.visibility.hiddenSites,
+                        hiddenBondKeys = tab.visibility.hiddenBondPairs,
+                        showBonds = tab.visibility.showBonds,
+                        polyhedronSiteIds = tab.visibility.polyhedronSites,
+                    )
                 }
             } ?: throw IllegalStateException("Scene build timed out after ${BUILD_SCENE_TIMEOUT_MS / 1000}s")
         }
@@ -875,7 +899,15 @@ private fun ViewerScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
                     menuOpen = false
                     sceneResult?.getOrNull()?.let { scene ->
-                        onExport(CrystalImageExporter.render(scene, tab.appearance, tab.renderConfiguration, tab.interactionState, bondValenceBySite))
+                        scope.launch {
+                            val filamentBitmap = if (effectiveBackend == RendererBackend.FILAMENT) {
+                                runCatching { activeFilamentRenderer?.renderToBitmap(1080, 1080) }.getOrNull()
+                            } else null
+                            val bitmap = filamentBitmap ?: withContext(Dispatchers.Default) {
+                                CrystalImageExporter.render(scene, tab.appearance, tab.renderConfiguration, tab.interactionState, bondValenceBySite)
+                            }
+                            onExport(bitmap)
+                        }
                     } ?: onMessage("Unable to export current crystal")
                 })
                 HorizontalDivider()
@@ -901,14 +933,7 @@ private fun ViewerScreen(
                 }
                 current.isSuccess -> {
                     val scene = current.getOrThrow()
-                    CrystalViewport(
-                        scene = scene,
-                        interactionState = tab.interactionState,
-                        onCommand = ::dispatchViewerCommand,
-                        appearance = previewAppearance ?: tab.appearance,
-                        renderConfiguration = tab.renderConfiguration,
-                        bondValenceBySite = bondValenceBySite,
-                        onAtomTap = { atom ->
+                    val handleAtomTap: (com.krystals.crystal.core.model.AtomImage) -> Boolean = { atom ->
                             when (tab.atomEditMode) {
                                 AtomEditMode.DELETE_NEXT -> {
                                     tab.atomEditMode = AtomEditMode.NONE
@@ -926,8 +951,31 @@ private fun ViewerScreen(
                                 }
                                 AtomEditMode.NONE -> false
                             }
-                        },
-                    )
+                    }
+                    if (effectiveBackend == RendererBackend.FILAMENT) {
+                        FilamentViewport(
+                            scene = scene,
+                            interactionState = tab.interactionState,
+                            onCommand = ::dispatchViewerCommand,
+                            onAtomTap = handleAtomTap,
+                            onFailure = {
+                                if (!filamentSessionFailed) onMessage(filamentFallbackMessage)
+                                filamentSessionFailed = true
+                            },
+                            onRendererChanged = { activeFilamentRenderer = it },
+                            bondValenceBySite = bondValenceBySite,
+                        )
+                    } else {
+                        CrystalViewport(
+                            scene = scene,
+                            interactionState = tab.interactionState,
+                            onCommand = ::dispatchViewerCommand,
+                            appearance = previewAppearance ?: tab.appearance,
+                            renderConfiguration = tab.renderConfiguration,
+                            bondValenceBySite = bondValenceBySite,
+                            onAtomTap = handleAtomTap,
+                        )
+                    }
                 }
                 else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(current.exceptionOrNull()?.message ?: "Unable to build scene", color = MaterialTheme.colorScheme.error)
@@ -1083,6 +1131,8 @@ private fun ViewerScreen(
         tab,
         onDismiss = { appearanceOpen = false },
         onApplied = { appearance -> viewModel.tabs.forEach { it.recordHistory() }; onApplyAppearance(appearance) },
+        rendererBackend = preferredBackend,
+        onRendererBackendChanged = ::selectBackend,
         onPreviewStart = { previewAppearance = it },
         onPreviewEnd = { previewAppearance = null },
     )
