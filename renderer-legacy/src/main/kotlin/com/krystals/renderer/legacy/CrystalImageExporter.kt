@@ -256,7 +256,7 @@ object CrystalImageExporter {
                 atom.siteLabel,
                 x,
                 y,
-                rotated.z,
+                legacyCameraDepth(rotated),
                 (RenderPalette.defaultRadius(atom.species.symbol).toFloat() * scale).coerceIn(4.5f, 42f),
                 atom.occupancy,
                 atom.fractionalCoordinate.toVec3(),
@@ -281,7 +281,7 @@ object CrystalImageExporter {
                 DihedralPlanePrimitive(
                     screenVerts = rotated.map { screen(it) },
                     normalCam = controller.rotation * plane.normal,
-                    depth = rotated.map { it.z }.average(),
+                    depth = rotated.map(::legacyCameraDepth).average(),
                 )
             }
         }
@@ -325,7 +325,7 @@ object CrystalImageExporter {
                     }
                 }
             }
-        }.sortedBy { it.depth }
+        }.legacyBackToFront { it.depth }
 
         val depthRange = expandedCellDepthRange(
             snapshot.structure.lattice,
@@ -365,7 +365,7 @@ object CrystalImageExporter {
         val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
         val normal = if (plane.normalCam.z >= 0.0) plane.normalCam else plane.normalCam * -1.0
         val strength = (0.58f + normal.normalized().dot(light).coerceIn(0.0, 1.0).toFloat() * appearance.lightIntensity * 0.42f).coerceIn(0f, 1f)
-        val alpha = (0.44f * (1f - fog * 0.7f) * 255f).toInt().coerceIn(0, 255)
+        val alpha = (0.44f * 255f).toInt().coerceIn(0, 255)
         val path = Path().apply {
             moveTo(plane.screenVerts[0].first, plane.screenVerts[0].second)
             plane.screenVerts.drop(1).forEach { lineTo(it.first, it.second) }
@@ -377,8 +377,12 @@ object CrystalImageExporter {
             plane.screenVerts[3].first,
             plane.screenVerts[3].second,
             intArrayOf(
-                Color.argb(alpha, (150 * strength).toInt(), (95 * strength).toInt(), (205 * strength).toInt()),
-                Color.argb(alpha / 2, 128, 72, 180),
+                legacyBlendArgbPreservingAlpha(
+                    Color.argb(alpha, (150 * strength).toInt(), (95 * strength).toInt(), (205 * strength).toInt()),
+                    bgArgb,
+                    fog,
+                ),
+                legacyBlendArgbPreservingAlpha(Color.argb(alpha / 2, 128, 72, 180), bgArgb, fog),
                 Color.TRANSPARENT,
             ),
             null,
@@ -402,8 +406,8 @@ object CrystalImageExporter {
             }
             return
         }
-        val baseArgb = blend(rawArgb, bgArgb, fog)
-        val darkArgb = blend(darken(rawArgb, 0.65f), bgArgb, fog)
+        val baseArgb = legacyBlendArgbPreservingAlpha(rawArgb, bgArgb, fog)
+        val darkArgb = legacyBlendArgbPreservingAlpha(darken(rawArgb, 0.65f), bgArgb, fog)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             alpha = (opacity * 255).toInt()
             shader = RadialGradient(
@@ -435,6 +439,7 @@ object CrystalImageExporter {
             paint.alpha = (opacity * 255).toInt()
         }
         if (appearance.reflectionEnabled) {
+            val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
             val offset = legacyHighlightOffset(
                 point.radius.toDouble(),
                 appearance.lightAzimuth,
@@ -444,15 +449,17 @@ object CrystalImageExporter {
             val offsetY = offset.y.toFloat()
             // Per v0.5.4: highlight alpha 含 opacity + lightIntensity + (1-fog);paint.alpha 置 255 让
             // shader 自带 alpha 唯一生效,避免与 sphere 的 paint.alpha 叠乘成 opacity²(viewport 不叠乘)。
-            val highlightAlpha = (appearance.lightIntensity.coerceIn(.05f, 1f) * opacity * (1f - fog) * 255).toInt().coerceIn(0, 255)
+            val highlightAlpha = (reflection.highlightAlpha * opacity * (1f - fog) * 255).toInt().coerceIn(0, 255)
+            val highlightMiddleAlpha = (reflection.highlightMiddleAlpha * opacity * (1f - fog) * 255).toInt().coerceIn(0, 255)
             val highlight = Color.argb(highlightAlpha, 255, 255, 255)
+            val highlightMiddle = Color.argb(highlightMiddleAlpha, 255, 255, 255)
             paint.alpha = 255
             paint.shader = RadialGradient(
                 point.x - offsetX,
                 point.y - offsetY,
-                point.radius * (0.35f + 0.75f * appearance.diffusion),
-                intArrayOf(highlight, Color.TRANSPARENT),
-                null,
+                point.radius * reflection.radialRadiusMultiplier,
+                intArrayOf(highlight, highlightMiddle, Color.TRANSPARENT),
+                floatArrayOf(0f, 0.45f, 1f),
                 Shader.TileMode.CLAMP,
             )
             // Highlight only on the solid wedge for partial-occ atoms; full circle otherwise.
@@ -516,14 +523,14 @@ object CrystalImageExporter {
         fun pack(argb: Int, op: Float) = (argb and 0x00FFFFFF) or ((op * 255).toInt().coerceIn(0, 255) shl 24)
         if (appearance.bondColorMode == BondColorMode.UNICOLOR) {
             val u = appearance.uniformBondArgb.toInt()
-            drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, pack(blend(u, bgArgb, fogA), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
-            drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, pack(blend(u, bgArgb, fogB), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+            drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, pack(legacyBlendArgbPreservingAlpha(u, bgArgb, fogA), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+            drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, pack(legacyBlendArgbPreservingAlpha(u, bgArgb, fogB), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         } else {
             val configuration = RenderConfiguration(elementArgbOverrides, siteArgbOverrides)
             val baseA = RenderPalette.resolveSiteArgb(a.siteId, a.element, configuration).toInt()
             val baseB = RenderPalette.resolveSiteArgb(b.siteId, b.element, configuration).toInt()
-            drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, pack(blend(baseA, bgArgb, fogA), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
-            drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, pack(blend(baseB, bgArgb, fogB), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+            drawBondCylinder(canvas, start, midA, width, perpX, perpY, lightOnPerp, pack(legacyBlendArgbPreservingAlpha(baseA, bgArgb, fogA), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+            drawBondCylinder(canvas, midB, end, width, perpX, perpY, lightOnPerp, pack(legacyBlendArgbPreservingAlpha(baseB, bgArgb, fogB), opacity), opacity, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         }
     }
 
@@ -552,8 +559,9 @@ object CrystalImageExporter {
         val base = baseArgb
         val shadowA = darken(baseArgb, 1f - 0.45f * lightIntensity)
         val shadowB = darken(baseArgb, 1f - 0.35f * lightIntensity)
-        val highlight = if (reflectionEnabled) lighten(baseArgb, 0.55f * lightIntensity) else base
-        val band = 0.06f + 0.20f * diffusion  // Per v0.5.4: 对齐 viewport(原 0.08+0.18d)
+        val reflection = legacyReflectionParameters(lightIntensity, diffusion)
+        val highlight = if (reflectionEnabled) lighten(baseArgb, reflection.bondHighlightFactor) else base
+        val band = reflection.bondHighlightBand
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             strokeWidth = width
             strokeCap = Paint.Cap.BUTT
@@ -589,7 +597,7 @@ object CrystalImageExporter {
             RenderConfiguration(elementArgbOverrides, siteArgbOverrides),
         ).toInt()
         // Per v0.5.3a: fog the RGB toward the background; alpha = polyhedron opacity only.
-        val baseArgb = blend(rawArgb, bgArgb, fog)
+        val baseArgb = legacyBlendArgbPreservingAlpha(rawArgb, bgArgb, fog)
         val alpha = appearance.polyhedronOpacity.coerceIn(0f, 1f)
         val baseColor = Color.argb((alpha * 255).toInt(), Color.red(baseArgb), Color.green(baseArgb), Color.blue(baseArgb))
         val cam = rotation * face.normal
@@ -608,7 +616,8 @@ object CrystalImageExporter {
                 val spec = Math.pow(cam.dot(half).coerceIn(0.0, 1.0), 48.0)
                 val ambient = (1f - 0.6f * appearance.lightIntensity).coerceIn(0.4f, 1f)
                 val diffFactor = (ambient + (1f - ambient) * diff.toFloat()).coerceIn(0f, 1f)
-                val specAmount = (spec.toFloat() * appearance.lightIntensity * 0.6f).coerceIn(0f, 1f)
+                val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
+                val specAmount = (spec.toFloat() * reflection.polyhedronSpecularFactor).coerceIn(0f, 1f)
                 Color.argb(
                     Color.alpha(baseColor),
                     (Color.red(baseColor) * diffFactor + specAmount * 255f).toInt().coerceIn(0, 255),
@@ -716,8 +725,9 @@ object CrystalImageExporter {
             val highlightPos = (0.5 - lightOnPerp * 0.35).toFloat().coerceIn(0.1f, 0.9f)
             val shadowA = darken(color, 1f - 0.45f * appearance.lightIntensity)
             val shadowB = darken(color, 1f - 0.35f * appearance.lightIntensity)
-            val highlight = if (appearance.bondReflectionEnabled) lighten(color, 0.55f * appearance.lightIntensity) else color
-            val band = 0.06f + 0.20f * appearance.diffusion  // Per v0.5.4: 对齐 viewport
+            val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
+            val highlight = if (appearance.bondReflectionEnabled) lighten(color, reflection.bondHighlightFactor) else color
+            val band = reflection.bondHighlightBand
             paint.style = Paint.Style.FILL
             paint.shader = LinearGradient(
                 baseX + perpX * headHalf, baseY + perpY * headHalf,
@@ -745,6 +755,7 @@ object CrystalImageExporter {
         canvas.drawCircle(origin.x, origin.y, hubRadius, paint)
         paint.shader = null
         if (appearance.reflectionEnabled) {
+            val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
             val offset = legacyHighlightOffset(
                 hubRadius.toDouble(),
                 appearance.lightAzimuth,
@@ -753,9 +764,13 @@ object CrystalImageExporter {
             paint.shader = RadialGradient(
                 origin.x - offset.x.toFloat(),
                 origin.y - offset.y.toFloat(),
-                hubRadius * (0.35f + 0.75f * appearance.diffusion),
-                Color.argb((appearance.lightIntensity.coerceIn(0.05f, 1f) * 255f).toInt(), 255, 255, 255),
-                Color.TRANSPARENT,
+                hubRadius * reflection.radialRadiusMultiplier,
+                intArrayOf(
+                    Color.argb((reflection.highlightAlpha * 255f).toInt(), 255, 255, 255),
+                    Color.argb((reflection.highlightMiddleAlpha * 255f).toInt(), 255, 255, 255),
+                    Color.TRANSPARENT,
+                ),
+                floatArrayOf(0f, 0.45f, 1f),
                 Shader.TileMode.CLAMP,
             )
             canvas.drawCircle(origin.x, origin.y, hubRadius, paint)

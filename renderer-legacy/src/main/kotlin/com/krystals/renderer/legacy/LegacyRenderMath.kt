@@ -10,6 +10,16 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 internal const val LEGACY_HIGHLIGHT_EDGE_FRACTION = 0.95
+internal const val LEGACY_NORMALIZED_DEPTH_EXTENT = 3.0
+
+internal data class LegacyReflectionParameters(
+    val highlightAlpha: Float,
+    val highlightMiddleAlpha: Float,
+    val radialRadiusMultiplier: Float,
+    val bondHighlightFactor: Float,
+    val bondHighlightBand: Float,
+    val polyhedronSpecularFactor: Float,
+)
 
 internal data class LegacyDepthRange(val min: Double, val max: Double) {
     init {
@@ -21,9 +31,15 @@ internal data class LegacyDepthRange(val min: Double, val max: Double) {
     fun normalizedDepth(depth: Double): Float? {
         if (span <= 1e-9) return null
         val center = (min + max) / 2.0
-        return ((depth - center) / (span / 2.0) * 5.0).toFloat()
+        return ((depth - center) / (span / 2.0) * LEGACY_NORMALIZED_DEPTH_EXTENT).toFloat()
     }
 }
+
+/** Canvas draws later items over earlier ones, so negative/far depth must precede positive/near depth. */
+internal fun <T> Iterable<T>.legacyBackToFront(depthOf: (T) -> Double): List<T> = sortedBy(depthOf)
+
+/** Legacy camera space uses +Z toward the viewer and -Z away from the viewer. */
+internal fun legacyCameraDepth(cameraSpace: Vec3): Double = cameraSpace.z
 
 /** Screen-space light direction. X points right, Y points down and +Z points at the viewer. */
 internal fun legacyLightDirection(azimuthDegrees: Float, elevationDegrees: Float): Vec3 {
@@ -55,7 +71,7 @@ internal fun expandedCellDepthRange(
             for (y in listOf(0.0, expansion.y.toDouble())) {
                 for (z in listOf(0.0, expansion.z.toDouble())) {
                     val cartesian = lattice.toCartesian(FractionalCoordinate(x, y, z)).toVec3()
-                    add((rotation * (cartesian - center)).z)
+                    add(legacyCameraDepth(rotation * (cartesian - center)))
                 }
             }
         }
@@ -76,8 +92,35 @@ internal fun legacyDepthCueFog(
 }
 
 internal fun legacyDepthCueFogValue(depth: Float, near: Float, far: Float): Float {
-    if (near <= far) return if (depth >= near) 0f else 1f
-    if (depth >= near) return 0f
-    if (depth <= far) return 1f
-    return ((near - depth) / (near - far)).coerceIn(0f, 1f)
+    val start = far
+    val end = near
+    if (start >= end) return if (depth < end) 1f else 0f
+    if (depth <= start) return 1f
+    if (depth >= end) return 0f
+    return ((end - depth) / (end - start)).coerceIn(0f, 1f)
+}
+
+/** Mixes RGB toward the background without changing the source alpha. */
+internal fun legacyBlendArgbPreservingAlpha(source: Int, background: Int, mix: Float): Int {
+    val amount = mix.coerceIn(0f, 1f)
+    val inverse = 1f - amount
+    fun channel(shift: Int): Int {
+        val sourceChannel = source ushr shift and 0xFF
+        val backgroundChannel = background ushr shift and 0xFF
+        return (sourceChannel * inverse + backgroundChannel * amount).toInt().coerceIn(0, 255)
+    }
+    return (source and -0x1000000) or (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
+}
+
+internal fun legacyReflectionParameters(intensity: Float, diffusion: Float): LegacyReflectionParameters {
+    val normalizedIntensity = intensity.coerceIn(0f, 1f)
+    val normalizedDiffusion = diffusion.coerceIn(0f, 1f)
+    return LegacyReflectionParameters(
+        highlightAlpha = normalizedIntensity,
+        highlightMiddleAlpha = normalizedIntensity * 0.4f,
+        radialRadiusMultiplier = 0.35f + 1.15f * normalizedDiffusion,
+        bondHighlightFactor = 0.75f * normalizedIntensity,
+        bondHighlightBand = 0.06f + 0.26f * normalizedDiffusion,
+        polyhedronSpecularFactor = 0.85f * normalizedIntensity,
+    )
 }

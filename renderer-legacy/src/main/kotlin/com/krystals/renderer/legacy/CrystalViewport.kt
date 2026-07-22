@@ -442,7 +442,7 @@ private fun LegacyCanvasViewport(
         val projected = snapshot.atoms.map { atom ->
             val v = rotated.getValue(atom)
             val radius = (RenderPalette.defaultRadius(atom.species.symbol).toFloat() * scale).coerceIn(4.5f, 42f)
-            ProjectedAtom(atom, project(v), v.z, radius)
+            ProjectedAtom(atom, project(v), legacyCameraDepth(v), radius)
         }
         val byId = projected.associateBy { it.atom.id }
 
@@ -488,7 +488,7 @@ private fun LegacyCanvasViewport(
                 DihedralPlaneRenderable(
                     screenVerts = rotatedVertices.map(::project),
                     normalCam = controller.rotation * plane.normal,
-                    depth = rotatedVertices.map { it.z }.average(),
+                    depth = rotatedVertices.map(::legacyCameraDepth).average(),
                 )
             }
         }
@@ -542,7 +542,7 @@ private fun LegacyCanvasViewport(
                     }
                 }
             }
-        }.sortedBy { it.depth }
+        }.legacyBackToFront { it.depth }
 
         // Depth normalization comes from the displayed supercell bounds, so rotating a sparse or
         // partially hidden structure cannot change the cueing scale.
@@ -648,6 +648,7 @@ private fun DrawScope.drawAtom(
         drawPath(wedgePath(-90f + occSweep, 360f - occSweep), faded)
     }
     if (appearance.reflectionEnabled) {
+        val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
         val highlightOffset = legacyHighlightOffset(
             atom.radius.toDouble(),
             appearance.lightAzimuth,
@@ -656,12 +657,13 @@ private fun DrawScope.drawAtom(
         val highlightCenter = atom.point - Offset(highlightOffset.x.toFloat(), highlightOffset.y.toFloat())
         // Per v0.5.3a: highlight alpha dims with fog so distant atoms lose their sheen naturally.
         val highlight = Brush.radialGradient(
-            colors = listOf(
-                Color.White.copy(alpha = appearance.lightIntensity.coerceIn(0.05f, 1f) * opacity * (1f - fog)),
-                Color.Transparent,
+            colorStops = arrayOf(
+                0f to Color.White.copy(alpha = reflection.highlightAlpha * opacity * (1f - fog)),
+                0.45f to Color.White.copy(alpha = reflection.highlightMiddleAlpha * opacity * (1f - fog)),
+                1f to Color.Transparent,
             ),
             center = highlightCenter,
-            radius = atom.radius * (0.35f + 0.75f * appearance.diffusion),
+            radius = atom.radius * reflection.radialRadiusMultiplier,
         )
         // Highlight only on the solid wedge for partial-occ atoms (looks natural; the faded wedge
         // stays matte). Full-occ atoms keep the full-circle highlight.
@@ -804,8 +806,9 @@ private fun DrawScope.drawBondCylinder(
     val highlightPos = (0.5 - lightOnPerp * 0.35).toFloat().coerceIn(0.1f, 0.9f)
     val shadowA = base.darken(1f - 0.45f * lightIntensity)
     val shadowB = base.darken(1f - 0.35f * lightIntensity)
-    val highlight = if (reflectionEnabled) base.lighten(0.55f * lightIntensity) else base
-    val band = 0.06f + 0.20f * diffusion
+    val reflection = legacyReflectionParameters(lightIntensity, diffusion)
+    val highlight = if (reflectionEnabled) base.lighten(reflection.bondHighlightFactor) else base
+    val band = reflection.bondHighlightBand
     val brush = Brush.linearGradient(
         colorStops = arrayOf(
             0.0f to shadowA,
@@ -827,8 +830,7 @@ private fun Color.lighten(factor: Float) = Color(
     blue + (1f - blue) * factor,
     alpha,
 )
-// Per v0.5.2: blend this colour toward [target] by [t] (0..1). Kept for the axis arrowhead
-// gradient interpolation; depth cueing now uses pure alpha fade (no colour blend).
+// Blend RGB toward [target] while preserving the source opacity.
 private fun Color.blend(target: Color, t: Float) = Color(
     red + (target.red - red) * t,
     green + (target.green - green) * t,
@@ -938,7 +940,8 @@ private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appeara
             val spec = Math.pow(face.normalCam.dot(half).coerceIn(0.0, 1.0), 48.0)
             val ambient = (1f - 0.6f * appearance.lightIntensity).coerceIn(0.4f, 1f)
             val diffFactor = (ambient + (1f - ambient) * diff.toFloat()).coerceIn(0f, 1f)
-            val specAmount = (spec.toFloat() * appearance.lightIntensity * 0.6f).coerceIn(0f, 1f)
+            val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
+            val specAmount = (spec.toFloat() * reflection.polyhedronSpecularFactor).coerceIn(0f, 1f)
             fadedBase.copy(
                 red = (fadedBase.red * diffFactor + specAmount).coerceIn(0f, 1f),
                 green = (fadedBase.green * diffFactor + specAmount).coerceIn(0f, 1f),
@@ -1088,8 +1091,9 @@ private fun DrawScope.drawAxes(
         val highlightPos = (0.5 - lightOnPerp * 0.35).toFloat().coerceIn(0.1f, 0.9f)
         val shadowA = color.darken(1f - 0.45f * appearance.lightIntensity)
         val shadowB = color.darken(1f - 0.35f * appearance.lightIntensity)
-        val highlight = if (appearance.bondReflectionEnabled) color.lighten(0.55f * appearance.lightIntensity) else color
-        val band = 0.06f + 0.20f * appearance.diffusion
+        val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
+        val highlight = if (appearance.bondReflectionEnabled) color.lighten(reflection.bondHighlightFactor) else color
+        val band = reflection.bondHighlightBand
         val brush = Brush.linearGradient(
             colorStops = arrayOf(
                 0.0f to shadowA,
@@ -1117,6 +1121,7 @@ private fun DrawScope.drawAxes(
         origin,
     )
     if (appearance.reflectionEnabled) {
+        val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
         val offset = legacyHighlightOffset(
             hubRadius.toDouble(),
             appearance.lightAzimuth,
@@ -1124,12 +1129,13 @@ private fun DrawScope.drawAxes(
         )
         drawCircle(
             Brush.radialGradient(
-                listOf(
-                    Color.White.copy(alpha = appearance.lightIntensity.coerceIn(0.05f, 1f)),
-                    Color.Transparent,
+                colorStops = arrayOf(
+                    0f to Color.White.copy(alpha = reflection.highlightAlpha),
+                    0.45f to Color.White.copy(alpha = reflection.highlightMiddleAlpha),
+                    1f to Color.Transparent,
                 ),
                 center = origin - Offset(offset.x.toFloat(), offset.y.toFloat()),
-                radius = hubRadius * (0.35f + 0.75f * appearance.diffusion),
+                radius = hubRadius * reflection.radialRadiusMultiplier,
             ),
             hubRadius,
             origin,
