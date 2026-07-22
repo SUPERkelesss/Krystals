@@ -13,9 +13,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -38,14 +38,16 @@ import com.krystals.interaction.measure.DihedralTool
 import com.krystals.interaction.measure.DistanceTool
 import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.measure.MeasurementSelection
+import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.renderer.core.scene.SceneBounds
+import com.krystals.renderer.core.scene.visibleBounds
 import com.krystals.renderer.core.style.AxisMode
 import com.krystals.renderer.filament.FilamentRenderer
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
-import kotlin.math.max
 import kotlin.math.sin
 
 private class OverlayHitRegions {
@@ -54,6 +56,48 @@ private class OverlayHitRegions {
 }
 
 private class LastTap(var timeMillis: Long = 0L, var position: Offset = Offset.Unspecified)
+
+private data class OverlaySceneCache(
+    val bounds: SceneBounds?,
+    val atomsById: Map<Long, AtomInstance>,
+)
+
+internal fun Modifier.filamentViewerGestures(
+    key: Any,
+    isLocked: () -> Boolean,
+    onCommand: (ViewerCommand) -> Unit,
+    onTap: (Offset) -> Unit,
+): Modifier = pointerInput(key) {
+    awaitEachGesture {
+        val first = awaitFirstDown(requireUnconsumed = false)
+        val down = first.position
+        var moved = false
+        while (true) {
+            val event = awaitPointerEvent()
+            val pressed = event.changes.filter { it.pressed }
+            val movement = event.changes.sumOf {
+                (it.position - it.previousPosition).getDistance().toDouble()
+            }
+            if (movement > 2.0) moved = true
+            if (!isLocked()) {
+                if (pressed.size == 1) {
+                    val delta = pressed.first().position - pressed.first().previousPosition
+                    if (delta.getDistance() > 0f) onCommand(ViewerCommand.Orbit(delta.x, delta.y))
+                } else if (pressed.size >= 2) {
+                    val zoom = event.calculateZoom()
+                    val pan = event.calculatePan()
+                    if (abs(zoom - 1f) > 0.001f) onCommand(ViewerCommand.Zoom(zoom))
+                    if (pan.getDistance() > 0.5f) onCommand(ViewerCommand.Pan(pan.x, pan.y))
+                }
+            }
+            event.changes.forEach { it.consume() }
+            if (pressed.isEmpty()) {
+                if (!moved) onTap(down)
+                break
+            }
+        }
+    }
+}
 
 @Composable
 fun FilamentViewport(
@@ -72,6 +116,10 @@ fun FilamentViewport(
     val scope = rememberCoroutineScope()
     val hitRegions = remember { OverlayHitRegions() }
     val lastTap = remember { LastTap() }
+    val currentScene = rememberUpdatedState(scene)
+    val currentInteraction = rememberUpdatedState(interactionState)
+    val currentOnCommand = rememberUpdatedState(onCommand)
+    val currentOnAtomTap = rememberUpdatedState(onAtomTap)
 
     LaunchedEffect(rendererResult) { rendererResult.exceptionOrNull()?.let(onFailure) }
     if (renderer == null) {
@@ -86,79 +134,52 @@ fun FilamentViewport(
             renderer.close()
         }
     }
-    SideEffect {
-        renderer.submit(scene)
-        renderer.updateInteraction(interactionState)
-        renderer.updateOverlayData(bondValenceBySite)
-    }
+    LaunchedEffect(renderer, scene) { renderer.submit(scene) }
+    LaunchedEffect(renderer, interactionState) { renderer.updateInteraction(interactionState) }
+    LaunchedEffect(renderer, bondValenceBySite) { renderer.updateOverlayData(bondValenceBySite) }
 
     Box(
         modifier
             .fillMaxSize()
             .onSizeChanged { onCommand(ViewerCommand.SetViewport(it.width, it.height)) }
-            .pointerInput(renderer, scene, interactionState) {
-                awaitEachGesture {
-                    val first = awaitFirstDown(requireUnconsumed = false)
-                    val down = first.position
-                    var moved = false
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val pressed = event.changes.filter { it.pressed }
-                        val movement = event.changes.sumOf {
-                            (it.position - it.previousPosition).getDistance().toDouble()
-                        }
-                        if (movement > 2.0) moved = true
-                        if (!interactionState.session.locked) {
-                            if (pressed.size == 1) {
-                                val delta = pressed.first().position - pressed.first().previousPosition
-                                if (delta.getDistance() > 0f) onCommand(ViewerCommand.Orbit(delta.x, delta.y))
-                            } else if (pressed.size >= 2) {
-                                val zoom = event.calculateZoom()
-                                val pan = event.calculatePan()
-                                if (abs(zoom - 1f) > 0.001f) onCommand(ViewerCommand.Zoom(zoom))
-                                if (pan.getDistance() > 0.5f) onCommand(ViewerCommand.Pan(pan.x, pan.y))
+            .filamentViewerGestures(
+                key = renderer,
+                isLocked = { currentInteraction.value.session.locked },
+                onCommand = { currentOnCommand.value(it) },
+                onTap = { down ->
+                    val measurementHit = hitRegions.measurements.firstOrNull { it.first.contains(down) }
+                    val inspectionHit = hitRegions.inspections.firstOrNull { it.first.contains(down) }
+                    when {
+                        measurementHit != null -> currentOnCommand.value(
+                            ViewerCommand.ToggleMeasurementLock(measurementHit.second, measurementHit.third),
+                        )
+                        inspectionHit != null -> currentOnCommand.value(
+                            ViewerCommand.ToggleInspectionLock(inspectionHit.second, inspectionHit.third),
+                        )
+                        else -> scope.launch {
+                            val hit = renderer.pick(down.x, down.y)
+                            val atom = hit?.atomId?.let { id ->
+                                currentScene.value.atoms.firstOrNull { it.atom.id == id }?.atom
                             }
-                        }
-                        event.changes.forEach { it.consume() }
-                        if (pressed.isEmpty()) {
-                            if (!moved) {
-                                val measurementHit = hitRegions.measurements.firstOrNull { it.first.contains(down) }
-                                val inspectionHit = hitRegions.inspections.firstOrNull { it.first.contains(down) }
-                                when {
-                                    measurementHit != null -> onCommand(
-                                        ViewerCommand.ToggleMeasurementLock(measurementHit.second, measurementHit.third),
-                                    )
-                                    inspectionHit != null -> onCommand(
-                                        ViewerCommand.ToggleInspectionLock(inspectionHit.second, inspectionHit.third),
-                                    )
-                                    else -> scope.launch {
-                                        val hit = renderer.pick(down.x, down.y)
-                                        val atom = hit?.atomId?.let { id ->
-                                            scene.atoms.firstOrNull { it.atom.id == id }?.atom
-                                        }
-                                        if (atom == null) {
-                                            onCommand(ViewerCommand.ClearTransientViewerState)
-                                        } else {
-                                            val now = SystemClock.uptimeMillis()
-                                            val isDoubleTap = now - lastTap.timeMillis < 300L &&
-                                                lastTap.position != Offset.Unspecified &&
-                                                (down - lastTap.position).getDistance() < 24f
-                                            lastTap.timeMillis = now
-                                            lastTap.position = down
-                                            if (isDoubleTap) {
-                                                onCommand(ViewerCommand.InspectAtom(atom.id))
-                                            } else if (!onAtomTap(atom)) {
-                                                onCommand(ViewerCommand.SelectAtom(atom.id, atom.siteId))
-                                            }
-                                        }
-                                    }
+                            if (atom == null) {
+                                currentOnCommand.value(ViewerCommand.ClearTransientViewerState)
+                            } else {
+                                val now = SystemClock.uptimeMillis()
+                                val isDoubleTap = now - lastTap.timeMillis < 300L &&
+                                    lastTap.position != Offset.Unspecified &&
+                                    (down - lastTap.position).getDistance() < 24f
+                                lastTap.timeMillis = now
+                                lastTap.position = down
+                                if (isDoubleTap) {
+                                    currentOnCommand.value(ViewerCommand.InspectAtom(atom.id))
+                                } else if (!currentOnAtomTap.value(atom)) {
+                                    currentOnCommand.value(ViewerCommand.SelectAtom(atom.id, atom.siteId))
                                 }
                             }
-                            break
                         }
                     }
-                }
-            },
+                },
+            ),
     ) {
         AndroidView(
             factory = { viewContext ->
@@ -191,30 +212,26 @@ private fun FilamentOverlay(
     bondValenceBySite: Map<String, Double>,
     hitRegions: OverlayHitRegions,
 ) {
-    Canvas(Modifier.fillMaxSize()) {
-        val atoms = scene.atoms.filter { it.visible }
-        if (atoms.isEmpty()) return@Canvas
-        val center = com.krystals.crystal.core.math.Vec3(
-            (atoms.minOf { it.atom.cartesianCoordinate.x } + atoms.maxOf { it.atom.cartesianCoordinate.x }) * 0.5,
-            (atoms.minOf { it.atom.cartesianCoordinate.y } + atoms.maxOf { it.atom.cartesianCoordinate.y }) * 0.5,
-            (atoms.minOf { it.atom.cartesianCoordinate.z } + atoms.maxOf { it.atom.cartesianCoordinate.z }) * 0.5,
+    val cache = remember(scene) {
+        OverlaySceneCache(
+            bounds = scene.visibleBounds(),
+            atomsById = scene.atoms.asSequence().filter { it.visible }.associateBy { it.atom.id },
         )
+    }
+    Canvas(Modifier.fillMaxSize()) {
+        val bounds = cache.bounds ?: return@Canvas
+        val atomsById = cache.atomsById
         val camera = state.session.camera
-        val rotated = atoms.associate { atom -> atom.atom.id to camera.rotation * (atom.atom.cartesianCoordinate.toVec3() - center - camera.target) }
-        val extentX = atoms.maxOf { it.atom.cartesianCoordinate.x } - atoms.minOf { it.atom.cartesianCoordinate.x }
-        val extentY = atoms.maxOf { it.atom.cartesianCoordinate.y } - atoms.minOf { it.atom.cartesianCoordinate.y }
-        val extentZ = atoms.maxOf { it.atom.cartesianCoordinate.z } - atoms.minOf { it.atom.cartesianCoordinate.z }
-        val sceneRadius = max(1.0, max(extentX, max(extentY, extentZ)) / 1.44)
-        val span = sceneRadius / camera.zoom
+        val span = bounds.radius / camera.zoom
         val aspect = size.width.toDouble() / size.height.coerceAtLeast(1f)
         val scale = (size.height / (span * 2.0)).toFloat()
-        fun point(id: Long): Offset? = rotated[id]?.let {
+        fun point(id: Long): Offset? = atomsById[id]?.let { atom ->
+            val rotated = camera.rotation * (atom.atom.cartesianCoordinate.toVec3() - bounds.center - camera.target)
             Offset(
-                size.width / 2f + camera.panX.toFloat() + (it.x / (span * aspect) * size.width * 0.5).toFloat(),
-                size.height / 2f + camera.panY.toFloat() - (it.y / span * size.height * 0.5).toFloat(),
+                size.width / 2f + camera.panX.toFloat() + (rotated.x / (span * aspect) * size.width * 0.5).toFloat(),
+                size.height / 2f + camera.panY.toFloat() - (rotated.y / span * size.height * 0.5).toFloat(),
             )
         }
-        val atomsById = atoms.associateBy { it.atom.id }
         val lockedIds = state.document.lockedMeasurements.flatMap { it.atomIds }.toSet() + state.document.inspection.lockedInspectedAtomIds
         val highlighted = state.document.selection.selectedAtomIds.toSet() + lockedIds + listOfNotNull(state.document.inspection.inspectedAtomId)
         highlighted.forEach { id ->

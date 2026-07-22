@@ -26,6 +26,7 @@ class MaterialFactory(
     private val materials = linkedMapOf<MaterialKind, Material>()
     private val instances = mutableListOf<MaterialInstance>()
     private val instanceCache = linkedMapOf<Pair<MaterialKind, MaterialKey>, MaterialInstance>()
+    private var lastDepthState: DepthState? = null
 
     companion object {
         fun requirePayloads(context: Context) {
@@ -51,13 +52,19 @@ class MaterialFactory(
             runCatching { instance.setParameter("occupancy", Double.fromBits(key.occupancyBits).toFloat()) }
             instances += instance
             instanceCache[kind to key] = instance
+            lastDepthState?.let { state -> applyDepthCueing(instance, state) }
         }
     }
 
     fun updateDepthCueing(instance: MaterialInstance, environment: RenderEnvironment, near: Float, far: Float) {
+        applyDepthCueing(instance, DepthState(environment, near, far))
+    }
+
+    private fun applyDepthCueing(instance: MaterialInstance, state: DepthState) {
+        val environment = state.environment
         val cue = environment.depthCueing
         val argb = environment.backgroundArgb
-        val viewRange = depthCueViewRange(cue, near, far)
+        val viewRange = depthCueViewRange(cue, state.near, state.far)
         runCatching { instance.setParameter("depthRange", viewRange.first, viewRange.second) }
         runCatching { instance.setParameter("depthCueEnabled", if (cue.enabled) 1f else 0f) }
         runCatching {
@@ -71,7 +78,10 @@ class MaterialFactory(
     }
 
     fun updateDepthCueing(environment: RenderEnvironment, near: Float, far: Float) {
-        instances.forEach { updateDepthCueing(it, environment, near, far) }
+        val state = DepthState(environment, near, far)
+        if (state == lastDepthState) return
+        lastDepthState = state
+        instances.forEach { applyDepthCueing(it, state) }
     }
 
     private fun load(kind: MaterialKind): Material? = runCatching {
@@ -86,8 +96,15 @@ class MaterialFactory(
         instances.clear()
         instanceCache.clear()
         materials.clear()
+        lastDepthState = null
     }
 }
+
+private data class DepthState(
+    val environment: RenderEnvironment,
+    val near: Float,
+    val far: Float,
+)
 
 /** Maps Legacy's normalized visible-depth scale (+3 near, -3 far) to Filament view-space Z. */
 internal fun depthCueViewRange(cue: DepthCueing, visibleNear: Float, visibleFar: Float): Pair<Float, Float> {

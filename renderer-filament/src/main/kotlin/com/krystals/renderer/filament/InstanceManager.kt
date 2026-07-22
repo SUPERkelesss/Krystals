@@ -6,7 +6,7 @@ import com.krystals.renderer.core.primitive.BondInstance
 import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.scene.RenderScene
 
-enum class GeometryKind { SPHERE, CYLINDER, POLYHEDRON, HIGHLIGHT, FRAME, AXIS, MEASUREMENT }
+enum class GeometryKind { SPHERE_HIGH, SPHERE_MEDIUM, SPHERE_LOW, CYLINDER, POLYHEDRON, HIGHLIGHT, FRAME, AXIS, MEASUREMENT }
 
 data class MaterialKey(
     val argb: Long,
@@ -52,9 +52,10 @@ class InstanceManager {
 
     fun sync(scene: RenderScene): SceneDiff {
         val next = linkedMapOf<String, InstanceRecord>()
+        val sphereGeometry = sphereGeometryForVisibleAtoms(scene.atoms.count(AtomInstance::visible))
         scene.atoms.asSequence().filter(AtomInstance::visible).forEach { atom ->
             next[atom.id] = InstanceRecord(
-                atom.id, pickId(atom.id), BatchKey(GeometryKind.SPHERE, MaterialKey(atom.material, atom.atom.occupancy)),
+                atom.id, pickId(atom.id), BatchKey(sphereGeometry, MaterialKey(atom.material, atom.atom.occupancy)),
                 transform(atom.atom.cartesianCoordinate.x, atom.atom.cartesianCoordinate.y, atom.atom.cartesianCoordinate.z, atom.radius, atom.radius, atom.radius),
             )
         }
@@ -124,4 +125,12 @@ class InstanceManager {
     }
 
     private fun identity() = transform(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+
+    companion object {
+        fun sphereGeometryForVisibleAtoms(count: Int): GeometryKind = when {
+            count <= 2_000 -> GeometryKind.SPHERE_HIGH
+            count <= 20_000 -> GeometryKind.SPHERE_MEDIUM
+            else -> GeometryKind.SPHERE_LOW
+        }
+    }
 }

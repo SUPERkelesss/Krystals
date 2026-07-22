@@ -31,6 +31,8 @@ import com.krystals.interaction.measure.DistanceTool
 import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.state.InteractionState
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.renderer.core.scene.SceneBounds
+import com.krystals.renderer.core.scene.visibleBounds
 import com.krystals.renderer.core.style.AxisMode
 import com.krystals.crystal.core.math.Vec3
 import java.nio.ByteBuffer
@@ -42,6 +44,15 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
+
+internal data class RendererPerformanceSnapshot(
+    val sceneSubmissions: Long,
+    val interactionUpdates: Long,
+    val framesRendered: Long,
+    val pendingFrames: Int,
+    val frameScheduled: Boolean,
+    val depthPointsEvaluated: Int,
+)
 
 /** Single owner for Filament engine, surface, scene, resources and frame scheduling. */
 class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.FrameCallback {
@@ -61,9 +72,15 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private var submittedScene: RenderScene? = null
     private var interaction = InteractionState()
     private var frameScheduled = false
+    private val frameBudget = DirtyFrameBudget()
     private var sceneRadius = 10.0
     private var sceneCenter = Vec3.ZERO
+    private var sceneBounds: SceneBounds? = null
     private var bondValenceBySite: Map<String, Double> = emptyMap()
+    private var sceneSubmissions = 0L
+    private var interactionUpdates = 0L
+    private var framesRendered = 0L
+    private var depthPointsEvaluated = 0
     private val lightEntity: Int
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -95,36 +112,58 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         detachInternal()
         require(surface.isValid) { "Filament surface is not valid" }
         swapChain = engine.createSwapChain(surface)
-        scheduleFrame()
+        requestFrames(2)
     }
 
     override fun detach() = onMain { detachInternal() }
 
     override fun submit(scene: RenderScene) {
         checkOpen()
+        if (submittedScene === scene) return
         submittedScene = scene
+        sceneSubmissions++
         gpuInstances.sync(scene)
+        gpuInstances.updateInteraction(scene, interaction)
         pickingRenderer.submit(scene)
-        updateSceneRadius(scene)
+        sceneBounds = scene.visibleBounds()
+        sceneCenter = sceneBounds?.center ?: Vec3.ZERO
+        sceneRadius = sceneBounds?.radius ?: 10.0
         updateClearColor(scene)
         updateLightingAndDepth()
         updateCamera()
-        scheduleFrame()
+        requestFrames(2)
     }
 
     override fun updateInteraction(state: InteractionState) {
         checkOpen()
+        if (interaction == state) return
+        val previous = interaction
         interaction = state
+        interactionUpdates++
         pickingRenderer.updateInteraction(state)
-        submittedScene?.let { gpuInstances.updateInteraction(it, state) }
-        updateCamera()
-        updateLightingAndDepth()
-        scheduleFrame()
+        val documentChanged = previous.document != state.document
+        val cameraChanged = previous.session.camera != state.session.camera
+        val viewportChanged = previous.session.viewportWidth != state.session.viewportWidth ||
+            previous.session.viewportHeight != state.session.viewportHeight
+        if (documentChanged) submittedScene?.let { gpuInstances.updateInteraction(it, state) }
+        if (cameraChanged || viewportChanged) updateCamera()
+        if (cameraChanged) updateLightingAndDepth()
+        if (documentChanged || cameraChanged || viewportChanged) requestFrames(1)
     }
 
     fun updateOverlayData(bondValenceBySite: Map<String, Double>) {
+        if (this.bondValenceBySite == bondValenceBySite) return
         this.bondValenceBySite = bondValenceBySite
     }
+
+    internal fun performanceSnapshot() = RendererPerformanceSnapshot(
+        sceneSubmissions = sceneSubmissions,
+        interactionUpdates = interactionUpdates,
+        framesRendered = framesRendered,
+        pendingFrames = frameBudget.pending,
+        frameScheduled = frameScheduled,
+        depthPointsEvaluated = depthPointsEvaluated,
+    )
 
     override suspend fun pick(x: Float, y: Float): PickResult? {
         if (swapChain == null) return pickingRenderer.pick(x, y)
@@ -176,6 +215,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                             engine.destroyTexture(color)
                             val bitmap = Bitmap.createBitmap(argb, width, height, Bitmap.Config.ARGB_8888)
                             composeOverlay(bitmap)
+                            requestFrames(1)
                             continuation.resume(bitmap)
                         }
                     }
@@ -187,25 +227,33 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
 
     override fun clear() {
         submittedScene = null
+        sceneBounds = null
+        sceneCenter = Vec3.ZERO
+        sceneRadius = 10.0
         gpuInstances.clear()
         pickingRenderer.clear()
+        requestFrames(1)
     }
 
     override fun doFrame(frameTimeNanos: Long) {
         frameScheduled = false
         if (closed.get()) return
         val chain = swapChain ?: return
+        if (!frameBudget.hasPending) return
         if (renderer.beginFrame(chain, frameTimeNanos)) {
             renderer.render(view)
             renderer.endFrame()
+            framesRendered++
+            frameBudget.rendered()
         }
-        if (swapChain != null) scheduleFrame()
+        if (frameBudget.hasPending && swapChain != null) scheduleFrame()
     }
 
     override fun close() = onMain {
         if (!closed.compareAndSet(false, true)) return@onMain
         if (frameScheduled) Choreographer.getInstance().removeFrameCallback(this)
         frameScheduled = false
+        frameBudget.reset()
         detachInternal()
         gpuInstances.close()
         filamentScene.removeEntity(lightEntity)
@@ -238,21 +286,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         camera.lookAt(eye.x, eye.y, eye.z, target.x, target.y, target.z, up.x, up.y, up.z)
     }
 
-    private fun updateSceneRadius(scene: RenderScene) {
-        val visibleAtoms = scene.atoms.filter { it.visible }
-        if (visibleAtoms.isEmpty()) { sceneRadius = 10.0; sceneCenter = Vec3.ZERO; return }
-        val points = visibleAtoms.map { it.atom.cartesianCoordinate }
-        val extentX = points.maxOf { it.x } - points.minOf { it.x }
-        val extentY = points.maxOf { it.y } - points.minOf { it.y }
-        val extentZ = points.maxOf { it.z } - points.minOf { it.z }
-        sceneCenter = Vec3(
-            (points.minOf { it.x } + points.maxOf { it.x }) * 0.5,
-            (points.minOf { it.y } + points.maxOf { it.y }) * 0.5,
-            (points.minOf { it.z } + points.maxOf { it.z }) * 0.5,
-        )
-        sceneRadius = max(1.0, max(extentX, max(extentY, extentZ)) / 1.44)
-    }
-
     private fun updateLightingAndDepth() {
         val scene = submittedScene ?: return
         val light = scene.environment.worldLight
@@ -269,10 +302,10 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         val rotation = interaction.session.camera.rotation
         val target = sceneCenter + interaction.session.camera.target
         val cameraDistance = max(50.0, sceneRadius * 4.0)
-        scene.atoms.forEach { atom ->
-            if (!atom.visible) return@forEach
-            val coordinate = atom.atom.cartesianCoordinate
-            val depth = ((rotation * (Vec3(coordinate.x, coordinate.y, coordinate.z) - target)).z - cameraDistance).toFloat()
+        val corners = sceneBounds?.corners.orEmpty()
+        depthPointsEvaluated = corners.size
+        corners.forEach { coordinate ->
+            val depth = ((rotation * (coordinate - target)).z - cameraDistance).toFloat()
             if (depth > near) near = depth
             if (depth < far) far = depth
         }
@@ -444,7 +477,13 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         }
     }
 
-    private fun scheduleFrame() = onMain {
+    private fun requestFrames(count: Int) = onMain {
+        if (closed.get()) return@onMain
+        frameBudget.request(count)
+        scheduleFrame()
+    }
+
+    private fun scheduleFrame() {
         if (!frameScheduled && !closed.get() && swapChain != null) {
             frameScheduled = true
             Choreographer.getInstance().postFrameCallback(this)
@@ -452,6 +491,9 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     }
 
     private fun detachInternal() {
+        if (frameScheduled) Choreographer.getInstance().removeFrameCallback(this)
+        frameScheduled = false
+        frameBudget.reset()
         swapChain?.let(engine::destroySwapChain)
         swapChain = null
     }

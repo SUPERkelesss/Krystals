@@ -168,7 +168,9 @@ class GpuInstanceManager(
 
     private fun create(record: InstanceRecord, snapshot: RenderScene): Int? {
         val uploaded = when (record.batch.geometry) {
-            GeometryKind.SPHERE, GeometryKind.HIGHLIGHT -> meshes.sharedSphere()
+            GeometryKind.SPHERE_HIGH, GeometryKind.HIGHLIGHT -> meshes.sharedSphere(SphereLod.HIGH)
+            GeometryKind.SPHERE_MEDIUM -> meshes.sharedSphere(SphereLod.MEDIUM)
+            GeometryKind.SPHERE_LOW -> meshes.sharedSphere(SphereLod.LOW)
             GeometryKind.CYLINDER -> meshes.sharedCylinder()
             GeometryKind.POLYHEDRON -> {
                 val mesh = auxiliaryMeshes[record.objectId]
@@ -186,11 +188,21 @@ class GpuInstanceManager(
         }
         val material = materials.create(materialKind, record.batch.material, snapshot.environment) ?: return null
         val entity = EntityManager.get().create()
+        val bounds = uploaded.bounds
         RenderableManager.Builder(1)
             .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, uploaded.vertexBuffer, uploaded.indexBuffer, 0, uploaded.indexCount)
             .material(0, material)
-            .boundingBox(Box(0f, 0f, 0f, 1.5f, 1.5f, 1.5f))
-            .culling(false)
+            .boundingBox(
+                Box(
+                    bounds.centerX,
+                    bounds.centerY,
+                    bounds.centerZ,
+                    bounds.halfExtentX.coerceAtLeast(0.001f),
+                    bounds.halfExtentY.coerceAtLeast(0.001f),
+                    bounds.halfExtentZ.coerceAtLeast(0.001f),
+                ),
+            )
+            .culling(true)
             .castShadows(false)
             .receiveShadows(false)
             .build(engine, entity)

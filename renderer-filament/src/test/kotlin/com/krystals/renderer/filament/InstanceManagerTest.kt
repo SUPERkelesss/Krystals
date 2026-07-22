@@ -49,6 +49,46 @@ class InstanceManagerTest {
         assertEquals(0x563412, PickingRenderer().decodePickId(0x12, 0x34, 0x56))
     }
 
+    @Test
+    fun sphereLodUsesStableSceneSizeThresholds() {
+        assertEquals(GeometryKind.SPHERE_HIGH, InstanceManager.sphereGeometryForVisibleAtoms(2_000))
+        assertEquals(GeometryKind.SPHERE_MEDIUM, InstanceManager.sphereGeometryForVisibleAtoms(2_001))
+        assertEquals(GeometryKind.SPHERE_MEDIUM, InstanceManager.sphereGeometryForVisibleAtoms(20_000))
+        assertEquals(GeometryKind.SPHERE_LOW, InstanceManager.sphereGeometryForVisibleAtoms(20_001))
+    }
+
+    @Test
+    fun meshBoundsAreComputedFromLocalGeometry() {
+        val bounds = MeshBounds.fromPositions(
+            floatArrayOf(-2f, 1f, 3f, 4f, 5f, -1f, 1f, -3f, 2f),
+        )
+
+        assertEquals(1f, bounds.centerX)
+        assertEquals(1f, bounds.centerY)
+        assertEquals(1f, bounds.centerZ)
+        assertEquals(3f, bounds.halfExtentX)
+        assertEquals(4f, bounds.halfExtentY)
+        assertEquals(2f, bounds.halfExtentZ)
+    }
+
+    @Test
+    fun dirtyFrameBudgetStopsAfterRequestedFrames() {
+        val budget = DirtyFrameBudget()
+        budget.request(2)
+        budget.request(1)
+
+        assertEquals(2, budget.pending)
+        budget.rendered()
+        assertTrue(budget.hasPending)
+        budget.rendered()
+        assertEquals(0, budget.pending)
+        assertTrue(!budget.hasPending)
+
+        budget.request(1)
+        budget.reset()
+        assertEquals(0, budget.pending)
+    }
+
     private fun scene(count: Int): RenderScene {
         val species = Species("C")
         val material = Material(0xFF505050)

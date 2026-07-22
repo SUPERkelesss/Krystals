@@ -12,7 +12,53 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
-enum class SharedGeometry { SPHERE, CYLINDER, LINE, AXIS, MEASUREMENT }
+enum class SharedGeometry { SPHERE_HIGH, SPHERE_MEDIUM, SPHERE_LOW, CYLINDER, LINE, AXIS, MEASUREMENT }
+
+enum class SphereLod(val rings: Int, val sectors: Int) {
+    HIGH(16, 24),
+    MEDIUM(10, 16),
+    LOW(6, 12),
+}
+
+data class MeshBounds(
+    val centerX: Float,
+    val centerY: Float,
+    val centerZ: Float,
+    val halfExtentX: Float,
+    val halfExtentY: Float,
+    val halfExtentZ: Float,
+) {
+    companion object {
+        fun fromPositions(positions: FloatArray): MeshBounds {
+            require(positions.isNotEmpty() && positions.size % 3 == 0)
+            var minX = Float.POSITIVE_INFINITY
+            var minY = Float.POSITIVE_INFINITY
+            var minZ = Float.POSITIVE_INFINITY
+            var maxX = Float.NEGATIVE_INFINITY
+            var maxY = Float.NEGATIVE_INFINITY
+            var maxZ = Float.NEGATIVE_INFINITY
+            for (index in positions.indices step 3) {
+                val x = positions[index]
+                val y = positions[index + 1]
+                val z = positions[index + 2]
+                if (x < minX) minX = x
+                if (y < minY) minY = y
+                if (z < minZ) minZ = z
+                if (x > maxX) maxX = x
+                if (y > maxY) maxY = y
+                if (z > maxZ) maxZ = z
+            }
+            return MeshBounds(
+                centerX = (minX + maxX) * 0.5f,
+                centerY = (minY + maxY) * 0.5f,
+                centerZ = (minZ + maxZ) * 0.5f,
+                halfExtentX = (maxX - minX) * 0.5f,
+                halfExtentY = (maxY - minY) * 0.5f,
+                halfExtentZ = (maxZ - minZ) * 0.5f,
+            )
+        }
+    }
+}
 
 data class MeshData(
     val positions: FloatArray,
@@ -24,6 +70,7 @@ data class UploadedMesh(
     val vertexBuffer: VertexBuffer,
     val indexBuffer: IndexBuffer,
     val indexCount: Int,
+    val bounds: MeshBounds,
 )
 
 data class MergedMesh(val material: Material, val mesh: MeshData, val objectIds: List<String>)
@@ -33,7 +80,14 @@ class MeshUploader(private val engine: Engine) : AutoCloseable {
     private val shared = linkedMapOf<SharedGeometry, UploadedMesh>()
     private val uploaded = mutableListOf<UploadedMesh>()
 
-    fun sharedSphere(): UploadedMesh = shared.getOrPut(SharedGeometry.SPHERE) { upload(uvSphere()) }
+    fun sharedSphere(lod: SphereLod): UploadedMesh {
+        val geometry = when (lod) {
+            SphereLod.HIGH -> SharedGeometry.SPHERE_HIGH
+            SphereLod.MEDIUM -> SharedGeometry.SPHERE_MEDIUM
+            SphereLod.LOW -> SharedGeometry.SPHERE_LOW
+        }
+        return shared.getOrPut(geometry) { upload(uvSphere(lod.rings, lod.sectors)) }
+    }
 
     fun sharedCylinder(): UploadedMesh = shared.getOrPut(SharedGeometry.CYLINDER) { upload(cylinder()) }
 
@@ -66,7 +120,7 @@ class MeshUploader(private val engine: Engine) : AutoCloseable {
             .build(engine)
         vertices.setBufferAt(engine, 0, interleaved)
         indices.setBuffer(engine, indexBytes)
-        return UploadedMesh(vertices, indices, mesh.indices.size).also(uploaded::add)
+        return UploadedMesh(vertices, indices, mesh.indices.size, MeshBounds.fromPositions(mesh.positions)).also(uploaded::add)
     }
 
     fun destroy(mesh: UploadedMesh) {
@@ -120,7 +174,7 @@ class MeshUploader(private val engine: Engine) : AutoCloseable {
         shared.clear()
     }
 
-    private fun uvSphere(rings: Int = 16, sectors: Int = 24): MeshData {
+    private fun uvSphere(rings: Int, sectors: Int): MeshData {
         val positions = ArrayList<Float>()
         val normals = ArrayList<Float>()
         for (ring in 0..rings) {
