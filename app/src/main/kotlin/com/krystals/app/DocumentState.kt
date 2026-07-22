@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import com.krystals.crystal.analysis.bonding.BondConfiguration
@@ -22,6 +23,44 @@ import com.krystals.crystal.renderer.ViewerVisibility
 import java.util.UUID
 
 enum class AtomEditMode { NONE, MODIFY_NEXT, DELETE_NEXT }
+
+data class DocumentSnapshot(
+    val structure: CrystalStructure,
+    val bondConfiguration: BondConfiguration,
+    val renderConfiguration: RenderConfiguration,
+    val name: String,
+    val dirty: Boolean,
+    val editorOpen: Boolean,
+    val appearance: ViewerAppearance,
+    val expansion: Expansion,
+    val visibility: ViewerVisibility,
+    val selectedAtomIds: List<Long>,
+    val measurementMode: MeasurementMode,
+    val lockedMeasurements: List<LockedMeasurement>,
+    val atomEditMode: AtomEditMode,
+    val editingSiteId: String?,
+    val inspectedAtomId: Long?,
+    val lockedInspectedAtomIds: List<Long>,
+    val bondEpsilon: Double,
+    val lastRadiusSource: RadiusSource,
+) {
+    fun restore(tab: DocumentTab) {
+        tab.structure = structure; tab.bondConfiguration = bondConfiguration; tab.renderConfiguration = renderConfiguration
+        tab.name = name; tab.dirty = dirty; tab.editorOpen = editorOpen; tab.appearance = appearance
+        tab.expansion = expansion; tab.visibility = visibility; tab.selectedAtomIds = selectedAtomIds
+        tab.measurementMode = measurementMode; tab.lockedMeasurements = lockedMeasurements; tab.atomEditMode = atomEditMode
+        tab.editingSiteId = editingSiteId; tab.inspectedAtomId = inspectedAtomId
+        tab.lockedInspectedAtomIds = lockedInspectedAtomIds; tab.bondEpsilon = bondEpsilon; tab.lastRadiusSource = lastRadiusSource
+    }
+    companion object {
+        fun capture(tab: DocumentTab) = DocumentSnapshot(
+            tab.structure, tab.bondConfiguration, tab.renderConfiguration, tab.name, tab.dirty, tab.editorOpen,
+            tab.appearance, tab.expansion, tab.visibility, tab.selectedAtomIds, tab.measurementMode,
+            tab.lockedMeasurements, tab.atomEditMode, tab.editingSiteId, tab.inspectedAtomId,
+            tab.lockedInspectedAtomIds, tab.bondEpsilon, tab.lastRadiusSource,
+        )
+    }
+}
 
 class DocumentTab(
     val id: String = UUID.randomUUID().toString(),
@@ -61,6 +100,12 @@ class DocumentTab(
     // reapply when adjusted (default smart-ionic).
     var bondEpsilon by mutableStateOf(0.45)
     var lastRadiusSource by mutableStateOf(RadiusSource.SMART_IONIC)
+    val history = HistoryController<DocumentSnapshot>(10)
+    var historyVersion by mutableIntStateOf(0)
+    var floatingPosition by mutableStateOf(FloatingBallPosition())
+    fun recordHistory() { history.record(DocumentSnapshot.capture(this)); historyVersion++ }
+    fun undo() { history.undo(DocumentSnapshot.capture(this))?.let { it.restore(this); historyVersion++ } }
+    fun redo() { history.redo(DocumentSnapshot.capture(this))?.let { it.restore(this); historyVersion++ } }
 }
 
 class KrystalsViewModel : ViewModel() {
@@ -163,9 +208,15 @@ class KrystalsViewModel : ViewModel() {
     fun close(index: Int) {
         if (index !in tabs.indices) return
         tabs.removeAt(index)
-        selectedIndex = selectedIndex.coerceAtMost((tabs.size - 1).coerceAtLeast(0))
+        selectedIndex = when {
+            tabs.isEmpty() -> 0
+            selectedIndex == index -> (index - 1).coerceAtLeast(0)
+            selectedIndex > index -> selectedIndex - 1
+            else -> selectedIndex.coerceAtMost(tabs.lastIndex)
+        }
     }
     fun updateAnalysis(tab: DocumentTab, result: EditResult) {
+        tab.recordHistory()
         tab.structure = result.structure
         tab.bondConfiguration = result.bondConfiguration
         tab.dirty = true

@@ -63,6 +63,7 @@ android {
         resources.excludes += setOf("META-INF/{AL2.0,LGPL2.1}", "META-INF/LICENSE*")
         jniLibs.useLegacyPackaging = true
     }
+    testOptions { unitTests.all { it.useJUnitPlatform() } }
     // Release signing: populate a keystore.properties (gitignored) next to the repo root with
     //   storeFile=/absolute/path/to/release.keystore
     //   storePassword=...
@@ -110,7 +111,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
-    testImplementation(kotlin("test"))
+    testImplementation("org.junit.jupiter:junit-jupiter:5.13.1")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

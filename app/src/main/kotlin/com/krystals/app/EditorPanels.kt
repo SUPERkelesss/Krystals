@@ -303,8 +303,8 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Ed
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { periodicOpen = true }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建", "New")) }
-            OutlinedButton(onClick = { tab.atomEditMode = AtomEditMode.MODIFY_NEXT; onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Text(localized("修改", "Modify")) }
-            OutlinedButton(onClick = { tab.atomEditMode = AtomEditMode.DELETE_NEXT; onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Text(localized("删除", "Delete")) }
+            OutlinedButton(onClick = { tab.recordHistory(); tab.atomEditMode = AtomEditMode.MODIFY_NEXT; onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Text(localized("修改", "Modify")) }
+            OutlinedButton(onClick = { tab.recordHistory(); tab.atomEditMode = AtomEditMode.DELETE_NEXT; onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Text(localized("删除", "Delete")) }
         }
         Text(localized("选择修改或删除后，在查看器中点击原子。", "Choose Modify or Delete, then tap an atom in the viewer."), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(8.dp))
         LazyColumn(Modifier.fillMaxSize()) {
