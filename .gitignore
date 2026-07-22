@@ -1,7 +1,11 @@
 .claude/
 /rebuild/
+/UI_modify/
+/worktrees/
 .todos/
 .gradle/
+.gradle-test-root/
+.kotlin/
 .idea/
 local.properties
 CLAUDE.md

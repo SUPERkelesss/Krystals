@@ -14,11 +14,11 @@ import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.CifDisplayMetadata
 import com.krystals.crystal.io.ParsedStructure
-import com.krystals.crystal.renderer.LockedMeasurement
-import com.krystals.crystal.renderer.MeasurementMode
-import com.krystals.crystal.renderer.RenderConfiguration
-import com.krystals.crystal.renderer.ViewerAppearance
-import com.krystals.crystal.renderer.ViewerVisibility
+import com.krystals.renderer.legacy.LockedMeasurement
+import com.krystals.renderer.legacy.MeasurementMode
+import com.krystals.renderer.legacy.RenderConfiguration
+import com.krystals.renderer.legacy.ViewerAppearance
+import com.krystals.renderer.legacy.ViewerVisibility
 import java.util.UUID
 
 enum class AtomEditMode { NONE, MODIFY_NEXT, DELETE_NEXT }

@@ -61,9 +61,17 @@ flowchart TB
         Repo["FileRepository<br/>CIF I/O / PNG export"]
         Act["ActivationManager<br/>paid activation"]
     end
-    subgraph renderer["renderer · rendering library"]
-        VP["CrystalViewport<br/>Canvas viewport"]
+    subgraph rendererCore["renderer-core · backend-neutral scene"]
+        Builder["CrystalSceneBuilder"]
+        Scene["RenderScene / RenderObject"]
+        Primitive["AtomInstance / BondInstance / MeshInstance"]
+    end
+    subgraph rendererLegacy["renderer-legacy · Canvas-Legacy"]
+        VP["CrystalViewport<br/>legacy Canvas viewport"]
         Exp["CrystalImageExporter<br/>high-res bitmap export"]
+    end
+    subgraph rendererFilament["renderer-filament · Filament boundary"]
+        Filament["FilamentSceneRenderer"]
     end
     subgraph io["crystal-io · CIF file IO"]
         Codec["CifCodec<br/>lossless CIF parse/write-back"]
@@ -92,8 +100,11 @@ flowchart TB
     Edit -->|"EditCommand"| Editor
     Editor --> Symmetry
     Symmetry --> Bonds
-    Bonds -->|"BondNetwork"| VP
-    Bonds -->|"BondNetwork"| Exp
+    Bonds -->|"BondNetwork"| Builder
+    Builder --> Scene
+    Scene --> Primitive
+    Scene --> VP
+    Scene --> Exp
     Bonds --> Coordination
     Coordination --> Hull
     Repo -->|"write back"| Codec
@@ -101,10 +112,12 @@ flowchart TB
     SG --> SpaceGroups
     Bonds --> Elements
 
-    app -.->|depends on| renderer
+    app -.->|depends on| rendererLegacy
     app -.->|depends on| analysis
     app -.->|depends on| io
-    renderer -.->|api dependency| analysis
+    rendererCore -.->|api dependency| analysis
+    rendererLegacy -.->|depends on| rendererCore
+    rendererFilament -.->|depends on| rendererCore
     io -.->|depends on| analysis
     analysis -.->|depends on| core
     analysis -.->|depends on| data
