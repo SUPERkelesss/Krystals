@@ -87,7 +87,7 @@ internal fun Modifier.filamentViewerGestures(
                     val zoom = event.calculateZoom()
                     val pan = event.calculatePan()
                     if (abs(zoom - 1f) > 0.001f) onCommand(ViewerCommand.Zoom(zoom))
-                    if (pan.getDistance() > 0.5f) onCommand(ViewerCommand.Pan(pan.x, pan.y))
+                    if (pan.getDistance() > 0.5f) onCommand(ViewerCommand.Pan(-pan.x, -pan.y))
                 }
             }
             event.changes.forEach { it.consume() }

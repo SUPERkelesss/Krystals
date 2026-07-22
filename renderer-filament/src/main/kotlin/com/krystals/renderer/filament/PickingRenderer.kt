@@ -2,12 +2,11 @@ package com.krystals.renderer.filament
 
 import android.os.Handler
 import com.google.android.filament.View
-import com.krystals.crystal.core.math.Vec3
 import com.krystals.interaction.selection.PickResult
 import com.krystals.interaction.state.InteractionState
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.renderer.core.scene.visibleBounds
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
@@ -47,7 +46,8 @@ class PickingRenderer {
                 } else {
                     val objectId = objectIdForEntity(result.renderable)
                     val atom = scene?.atoms?.firstOrNull { it.id == objectId }?.atom
-                    continuation.resume(objectId?.let { PickResult(it, atom?.id, atom?.siteId) })
+                    val gpuResult = objectId?.let { PickResult(it, atom?.id, atom?.siteId) }
+                    continuation.resume(gpuResult?.takeIf { it.atomId != null } ?: projectPick(x, y))
                 }
             }
         }
@@ -56,29 +56,23 @@ class PickingRenderer {
     fun decodePickId(red: Int, green: Int, blue: Int): Int =
         (red and 0xFF) or ((green and 0xFF) shl 8) or ((blue and 0xFF) shl 16)
 
-    private fun projectPick(x: Float, y: Float): PickResult? {
+    internal fun projectPick(x: Float, y: Float): PickResult? {
         val snapshot = scene ?: return null
-        val visible = snapshot.atoms.filter { it.visible }
-        if (visible.isEmpty()) return null
+        val bounds = snapshot.visibleBounds() ?: return null
         val camera = interaction.session.camera
         val width = interaction.session.viewportWidth.coerceAtLeast(1)
         val height = interaction.session.viewportHeight.coerceAtLeast(1)
-        val center = Vec3(
-            (visible.minOf { it.atom.cartesianCoordinate.x } + visible.maxOf { it.atom.cartesianCoordinate.x }) * 0.5,
-            (visible.minOf { it.atom.cartesianCoordinate.y } + visible.maxOf { it.atom.cartesianCoordinate.y }) * 0.5,
-            (visible.minOf { it.atom.cartesianCoordinate.z } + visible.maxOf { it.atom.cartesianCoordinate.z }) * 0.5,
-        )
-        val positions = visible.map { it to camera.rotation * (it.atom.cartesianCoordinate.toVec3() - center - camera.target) }
-        val minX = positions.minOf { it.second.x }; val maxX = positions.maxOf { it.second.x }
-        val minY = positions.minOf { it.second.y }; val maxY = positions.maxOf { it.second.y }
-        val scale = min(width / max(1.0, maxX - minX), height / max(1.0, maxY - minY)) * 0.72 * camera.zoom
-        return positions.asSequence().map { (atom, position) ->
-            val px = width / 2.0 + camera.panX + position.x * scale
-            val py = height / 2.0 + camera.panY - position.y * scale
-            val radius = (atom.radius * scale).coerceIn(4.5, 42.0)
+        val span = bounds.radius / camera.zoom
+        val aspect = width.toDouble() / height
+        val scale = height / (span * 2.0)
+        return snapshot.atoms.asSequence().filter { it.visible }.map { atom ->
+            val position = camera.rotation * (atom.atom.cartesianCoordinate.toVec3() - bounds.center - camera.target)
+            val px = width / 2.0 + camera.panX + position.x / (span * aspect) * width * 0.5
+            val py = height / 2.0 + camera.panY - position.y / span * height * 0.5
+            val radius = max(22.0, atom.radius * scale * 1.35)
             val distanceSquared = (px - x) * (px - x) + (py - y) * (py - y)
             Triple(atom, position.z, distanceSquared / (radius * radius))
-        }.filter { it.third <= 1.35 * 1.35 }
+        }.filter { it.third <= 1.0 }
             .minWithOrNull(compareBy<Triple<com.krystals.renderer.core.primitive.AtomInstance, Double, Double>> { it.third }.thenByDescending { it.second })
             ?.first?.let { PickResult(it.id, it.atom.id, it.atom.siteId) }
     }

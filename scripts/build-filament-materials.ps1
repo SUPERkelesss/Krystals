@@ -35,7 +35,11 @@ if ($VersionText -ne $MaterialAbiVersion) {
     throw "matc ABI mismatch: Filament $Version requires ABI $MaterialAbiVersion, got $VersionText"
 }
 
-$Names = @('opaque', 'transparent', 'polyhedron', 'highlight', 'depth_cueing', 'picking')
+$Names = @(
+    'opaque', 'transparent', 'polyhedron',
+    'unlit_opaque', 'unlit_transparent', 'unlit_polyhedron',
+    'highlight', 'depth_cueing', 'picking'
+)
 if (-not $VerifyOnly) {
     New-Item -ItemType Directory -Force -Path $Output | Out-Null
     foreach ($Name in $Names) {

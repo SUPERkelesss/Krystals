@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import com.krystals.interaction.state.InteractionReducer
 import com.krystals.interaction.state.InteractionState
 import com.krystals.interaction.state.ViewerCommand
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -80,14 +81,16 @@ class FilamentGestureTest {
         composeRule.onNodeWithTag("gesture-surface").performTouchInput {
             down(0, center - Offset(30f, 0f))
             down(1, center + Offset(30f, 0f))
-            moveTo(0, center - Offset(45f, 10f))
-            moveTo(1, center + Offset(45f, 10f))
+            moveTo(0, center - Offset(45f, 0f) + Offset(12f, 10f))
+            moveTo(1, center + Offset(45f, 0f) + Offset(12f, 10f))
             up(0)
             up(1)
         }
 
         assertTrue(commands.any { it is ViewerCommand.Zoom })
-        assertTrue(commands.any { it is ViewerCommand.Pan })
+        val pans = commands.filterIsInstance<ViewerCommand.Pan>()
+        assertEquals(-12f, pans.sumOf { it.dxPx.toDouble() }.toFloat(), 0.1f)
+        assertEquals(-10f, pans.sumOf { it.dyPx.toDouble() }.toFloat(), 0.1f)
         assertTrue(commands.none { it is ViewerCommand.Orbit })
     }
 }

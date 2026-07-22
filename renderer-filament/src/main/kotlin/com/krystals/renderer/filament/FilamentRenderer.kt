@@ -167,6 +167,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
 
     override suspend fun pick(x: Float, y: Float): PickResult? {
         if (swapChain == null) return pickingRenderer.pick(x, y)
+        requestFrames(1)
         return pickingRenderer.pickGpu(view, x, y, mainHandler, gpuInstances::objectIdForEntity)
     }
 

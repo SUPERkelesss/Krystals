@@ -180,12 +180,7 @@ class GpuInstanceManager(
             }
             GeometryKind.FRAME, GeometryKind.AXIS, GeometryKind.MEASUREMENT -> meshes.sharedCylinder()
         }
-        val materialKind = when {
-            record.batch.geometry == GeometryKind.HIGHLIGHT -> MaterialKind.HIGHLIGHT
-            record.batch.geometry == GeometryKind.POLYHEDRON -> MaterialKind.POLYHEDRON
-            record.batch.material.transparent -> MaterialKind.TRANSPARENT
-            else -> MaterialKind.OPAQUE
-        }
+        val materialKind = materialKindFor(record.batch.geometry, record.batch.material)
         val material = materials.create(materialKind, record.batch.material, snapshot.environment) ?: return null
         val entity = EntityManager.get().create()
         val bounds = uploaded.bounds
@@ -321,4 +316,14 @@ class GpuInstanceManager(
         }
         return MeshData(positions, normals, triangleIndices.toIntArray())
     }
+}
+
+internal fun materialKindFor(geometry: GeometryKind, material: MaterialKey): MaterialKind = when {
+    geometry == GeometryKind.HIGHLIGHT -> MaterialKind.HIGHLIGHT
+    geometry == GeometryKind.POLYHEDRON && material.reflective -> MaterialKind.POLYHEDRON
+    geometry == GeometryKind.POLYHEDRON -> MaterialKind.UNLIT_POLYHEDRON
+    material.transparent && material.reflective -> MaterialKind.TRANSPARENT
+    material.transparent -> MaterialKind.UNLIT_TRANSPARENT
+    material.reflective -> MaterialKind.OPAQUE
+    else -> MaterialKind.UNLIT_OPAQUE
 }

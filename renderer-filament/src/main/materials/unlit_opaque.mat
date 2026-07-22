@@ -1,0 +1,22 @@
+material {
+    name : KrystalsUnlitOpaque,
+    shadingModel : unlit,
+    blending : opaque,
+    parameters : [
+        { type : float4, name : baseColor },
+        { type : float3, name : backgroundColor },
+        { type : float2, name : depthRange },
+        { type : float, name : depthCueEnabled }
+    ]
+}
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 color = materialParams.baseColor;
+        float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
+        float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
+        float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
+        color.rgb = mix(color.rgb, materialParams.backgroundColor, fog);
+        material.baseColor = color;
+    }
+}

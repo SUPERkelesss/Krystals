@@ -12,8 +12,11 @@ import com.krystals.crystal.core.periodic.Int3
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
 import com.krystals.renderer.core.material.Material
+import com.krystals.renderer.core.camera.Camera
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.interaction.state.InteractionState
+import com.krystals.interaction.state.ViewerSessionState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -55,6 +58,67 @@ class InstanceManagerTest {
         assertEquals(GeometryKind.SPHERE_MEDIUM, InstanceManager.sphereGeometryForVisibleAtoms(2_001))
         assertEquals(GeometryKind.SPHERE_MEDIUM, InstanceManager.sphereGeometryForVisibleAtoms(20_000))
         assertEquals(GeometryKind.SPHERE_LOW, InstanceManager.sphereGeometryForVisibleAtoms(20_001))
+    }
+
+    @Test
+    fun reflectionSettingChoosesLitOrUnlitMaterial() {
+        val litOpaque = MaterialKey(Material(0xFFFFFFFF, reflective = true))
+        val unlitOpaque = MaterialKey(Material(0xFFFFFFFF, reflective = false))
+        val litTransparent = MaterialKey(Material(0xFFFFFFFF, opacity = 0.5, reflective = true))
+        val unlitTransparent = MaterialKey(Material(0xFFFFFFFF, opacity = 0.5, reflective = false))
+
+        assertEquals(MaterialKind.OPAQUE, materialKindFor(GeometryKind.SPHERE_HIGH, litOpaque))
+        assertEquals(MaterialKind.UNLIT_OPAQUE, materialKindFor(GeometryKind.SPHERE_HIGH, unlitOpaque))
+        assertEquals(MaterialKind.TRANSPARENT, materialKindFor(GeometryKind.CYLINDER, litTransparent))
+        assertEquals(MaterialKind.UNLIT_TRANSPARENT, materialKindFor(GeometryKind.CYLINDER, unlitTransparent))
+        assertEquals(MaterialKind.POLYHEDRON, materialKindFor(GeometryKind.POLYHEDRON, litTransparent))
+        assertEquals(MaterialKind.UNLIT_POLYHEDRON, materialKindFor(GeometryKind.POLYHEDRON, unlitTransparent))
+    }
+
+    @Test
+    fun projectedPickingUsesCurrentOrthographicCamera() {
+        val picker = PickingRenderer()
+        picker.submit(scene(3))
+        picker.updateInteraction(
+            InteractionState(
+                session = ViewerSessionState(
+                    camera = Camera(),
+                    viewportWidth = 1_000,
+                    viewportHeight = 500,
+                ),
+            ),
+        )
+
+        assertEquals(1L, picker.projectPick(500f, 250f)?.atomId)
+        assertEquals(null, picker.projectPick(20f, 20f))
+
+        picker.updateInteraction(
+            InteractionState(
+                session = ViewerSessionState(
+                    camera = Camera(zoom = 2.0, panX = 60.0, panY = -30.0),
+                    viewportWidth = 1_000,
+                    viewportHeight = 500,
+                ),
+            ),
+        )
+        assertEquals(0L, picker.projectPick(200f, 220f)?.atomId)
+    }
+
+    @Test
+    fun projectedPickingIgnoresHiddenAtoms() {
+        val snapshot = scene(3)
+        val picker = PickingRenderer()
+        picker.submit(snapshot.copy(objects = snapshot.objects.map {
+            val atom = it as? AtomInstance
+            if (atom?.atom?.id == 1L) atom.copy(visible = false) else it
+        }))
+        picker.updateInteraction(
+            InteractionState(
+                session = ViewerSessionState(camera = Camera(), viewportWidth = 1_000, viewportHeight = 500),
+            ),
+        )
+
+        assertEquals(null, picker.projectPick(500f, 250f))
     }
 
     @Test
