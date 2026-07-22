@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -26,6 +27,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import com.krystals.crystal.analysis.bonding.BondNetwork
 import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
 import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
@@ -41,6 +43,13 @@ import com.krystals.crystal.core.math.rotX
 import com.krystals.crystal.core.math.rotY
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.interaction.state.InteractionReducer
+import com.krystals.interaction.state.InteractionState
+import com.krystals.interaction.state.ViewerCommand
+import com.krystals.interaction.state.ViewerSessionState
+import com.krystals.interaction.measure.DihedralTool
+import com.krystals.interaction.selection.Picker
+import com.krystals.interaction.selection.PickResult
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -50,25 +59,17 @@ import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-enum class MeasurementMode { NONE, LENGTH, ANGLE, DIHEDRAL }
-
-/** A measurement (length / angle / dihedral) pinned on screen until dismissed. */
-data class LockedMeasurement(val atomIds: List<Long>, val mode: MeasurementMode)
-
-data class ViewerVisibility(
-    val hiddenSites: Set<String> = emptySet(),
-    val hiddenBondPairs: Set<String> = emptySet(),
-    val polyhedronSites: Set<String> = emptySet(),
-    val showBonds: Boolean = true,
-)
-
 internal data class ProjectedAtom(val atom: AtomImage, val point: Offset, val depth: Double, val radius: Float)
 
 private sealed interface Renderable {
     val depth: Double
 }
 
-private data class AtomRenderable(val atom: ProjectedAtom, val selected: Boolean) : Renderable {
+private data class AtomRenderable(
+    val atom: ProjectedAtom,
+    val selected: Boolean,
+    val lockedHighlight: Boolean = false,
+) : Renderable {
     override val depth = atom.depth
 }
 
@@ -103,21 +104,44 @@ private data class PolyhedronFaceRenderable(
 }
 
 @Stable
-class ViewerController {
-    // Per v0.5.1: orientation is a rotation matrix (world -> camera) instead of two accumulated
-    // Euler scalars. Drag deltas are applied as increments about the CAMERA's local axes (left
-    // multiply), so once the view is pitched/rolled the horizontal/vertical drags keep tracking
-    // the screen axes instead of the world axes — no more "skewed rotation after tilting".
-    var rotation: Mat3 by mutableStateOf(eulerYX(-28.0, 22.0))
-    var zoom by mutableFloatStateOf(1f)
-    var panX by mutableFloatStateOf(0f)
-    var panY by mutableFloatStateOf(0f)
-    var locked by mutableStateOf(false)
+class ViewerController : Picker {
+    private var session by mutableStateOf(ViewerSessionState())
+    private var commandSink: ((ViewerCommand) -> Unit)? = null
+
+    var rotation: Mat3
+        get() = session.camera.rotation
+        set(value) { session = session.copy(camera = session.camera.copy(rotation = value)) }
+    var zoom: Float
+        get() = session.camera.zoom.toFloat()
+        set(value) { session = session.copy(camera = session.camera.copy(zoom = value.toDouble().coerceIn(0.08, 25.0))) }
+    var panX: Float
+        get() = session.camera.panX.toFloat()
+        set(value) { session = session.copy(camera = session.camera.copy(panX = value.toDouble())) }
+    var panY: Float
+        get() = session.camera.panY.toFloat()
+        set(value) { session = session.copy(camera = session.camera.copy(panY = value.toDouble())) }
+    var locked: Boolean
+        get() = session.locked
+        set(value) {
+            if (value != session.locked) dispatch(ViewerCommand.ToggleLock)
+        }
     internal var projectedAtoms: List<ProjectedAtom> = emptyList()
-    var viewportWidth: Int = 1080
-        internal set
-    var viewportHeight: Int = 1080
-        internal set
+    val viewportWidth: Int get() = session.viewportWidth
+    val viewportHeight: Int get() = session.viewportHeight
+
+    internal fun bind(value: ViewerSessionState, sink: (ViewerCommand) -> Unit) {
+        session = value
+        commandSink = sink
+    }
+
+    internal fun dispatch(command: ViewerCommand) {
+        val sink = commandSink
+        if (sink != null) {
+            sink(command)
+        } else {
+            session = InteractionReducer.reduce(InteractionState(session = session), command).session
+        }
+    }
 
     /**
      * Apply a single-finger drag as a camera-local rotation increment. [dxPx]/[dyPx] are pixel
@@ -127,35 +151,21 @@ class ViewerController {
      * increment keeps it in the camera frame, which is what makes a tilted view still follow.
      */
     fun rotateByDrag(dxPx: Float, dyPx: Float, sensitivity: Float = 0.32f) {
-        val pitchInc = -dyPx * sensitivity
-        val yawInc = -dxPx * sensitivity
-        val increment = rotX(pitchInc.toDouble()) * rotY(yawInc.toDouble())
-        rotation = (increment * rotation).orthonormalized()
+        dispatch(ViewerCommand.Orbit(dxPx * sensitivity / 0.32f, dyPx * sensitivity / 0.32f))
     }
 
+    fun zoomBy(factor: Float) = dispatch(ViewerCommand.Zoom(factor))
+
+    fun panBy(dxPx: Float, dyPx: Float) = dispatch(ViewerCommand.Pan(dxPx, dyPx))
+
+    internal fun setViewport(width: Int, height: Int) = dispatch(ViewerCommand.SetViewport(width, height))
+
     fun align(axis: Char) {
-        val (yaw, pitch) = when (axis.lowercaseChar()) {
-            'x' -> -90f to 0f
-            'y' -> 0f to 90f
-            else -> 0f to 0f
-        }
-        rotation = eulerYX(yaw.toDouble(), pitch.toDouble())
-        panX = 0f
-        panY = 0f
+        dispatch(ViewerCommand.AlignCartesian(axis))
     }
 
     fun alignCellAxis(axis: Char, lattice: Lattice) {
-        val v = when (axis.lowercaseChar()) {
-            'a' -> lattice.matrix.a
-            'b' -> lattice.matrix.b
-            else -> lattice.matrix.c
-        }
-        val pitchRad = atan2(v.y, v.z)
-        val zPlane = v.y * sin(pitchRad) + v.z * cos(pitchRad)
-        val yawRad = atan2(-v.x, zPlane)
-        rotation = eulerYX(Math.toDegrees(yawRad.toDouble()), Math.toDegrees(pitchRad.toDouble()))
-        panX = 0f
-        panY = 0f
+        dispatch(ViewerCommand.AlignCellAxis(axis, lattice))
     }
 
     internal fun pick(position: Offset): AtomImage? = projectedAtoms
@@ -163,6 +173,10 @@ class ViewerController {
         .filter { (it.point - position).getDistance() <= max(22f, it.radius * 1.35f) }
         .minByOrNull { (it.point - position).getDistance() - it.depth.toFloat() * 0.0001f }
         ?.atom
+
+    override fun pick(x: Float, y: Float): PickResult? = pick(Offset(x, y))?.let { atom ->
+        PickResult(objectId = "atom:${atom.id}", atomId = atom.id, siteId = atom.siteId)
+    }
 }
 
 @Composable
@@ -171,6 +185,52 @@ fun rememberViewerController() = remember { ViewerController() }
 private data class TapEvent(val time: Long, val position: Offset)
 
 @Composable
+fun CrystalViewport(
+    scene: RenderScene,
+    interactionState: InteractionState,
+    onCommand: (ViewerCommand) -> Unit,
+    appearance: ViewerAppearance,
+    renderConfiguration: RenderConfiguration,
+    modifier: Modifier = Modifier,
+    bondValenceBySite: Map<String, Double> = emptyMap(),
+    onAtomTap: (AtomImage) -> Boolean = { false },
+) {
+    val controller = rememberViewerController()
+    SideEffect { controller.bind(interactionState.session, onCommand) }
+    val document = interactionState.document
+    CrystalViewport(
+        scene = scene,
+        appearance = appearance,
+        renderConfiguration = renderConfiguration,
+        modifier = modifier,
+        controller = controller,
+        visibility = document.visibility,
+        selectedAtomIds = document.selection.selectedAtomIds,
+        measurementMode = document.measurementMode,
+        lockedMeasurements = document.lockedMeasurements,
+        onMeasurementLockToggle = { measurement, locked ->
+            onCommand(ViewerCommand.ToggleMeasurementLock(measurement, locked))
+        },
+        inspectedAtomId = document.inspection.inspectedAtomId,
+        lockedInspectedAtomIds = document.inspection.lockedInspectedAtomIds,
+        bondValenceBySite = bondValenceBySite,
+        onInspectAtom = { onCommand(ViewerCommand.InspectAtom(it.id)) },
+        onInspectionLockToggle = { atomId, locked ->
+            onCommand(ViewerCommand.ToggleInspectionLock(atomId, locked))
+        },
+        onAtomTap = { atom -> if (!onAtomTap(atom)) onCommand(ViewerCommand.SelectAtom(atom.id, atom.siteId)) },
+        onBlankTap = { onCommand(ViewerCommand.ClearTransientViewerState) },
+    )
+}
+
+private data class DihedralPlaneRenderable(
+    val screenVerts: List<Offset>,
+    val normalCam: Vec3,
+    override val depth: Double,
+) : Renderable
+
+@Composable
+@Deprecated("Use the RenderScene + InteractionState overload")
 fun CrystalViewport(
     snapshot: BondNetwork,
     appearance: ViewerAppearance,
@@ -189,6 +249,7 @@ fun CrystalViewport(
     onInspectionLockToggle: (atomId: Long, isLocked: Boolean) -> Unit = { _, _ -> },
     onAtomTap: (AtomImage) -> Unit = {},
     onViewMoved: () -> Unit = {},
+    onBlankTap: () -> Unit = {},
 ) {
     val scene = remember(snapshot, appearance, renderConfiguration, visibility) {
         LegacyRenderSceneAdapter.build(snapshot, appearance, renderConfiguration, visibility)
@@ -211,10 +272,12 @@ fun CrystalViewport(
         onInspectionLockToggle = onInspectionLockToggle,
         onAtomTap = onAtomTap,
         onViewMoved = onViewMoved,
+        onBlankTap = onBlankTap,
     )
 }
 
 @Composable
+@Deprecated("Use the RenderScene + InteractionState overload")
 fun CrystalViewport(
     scene: RenderScene,
     appearance: ViewerAppearance,
@@ -233,6 +296,7 @@ fun CrystalViewport(
     onInspectionLockToggle: (atomId: Long, isLocked: Boolean) -> Unit = { _, _ -> },
     onAtomTap: (AtomImage) -> Unit = {},
     onViewMoved: () -> Unit = {},
+    onBlankTap: () -> Unit = {},
 ) {
     val snapshot = remember(scene) { LegacyRenderSceneAdapter.toBondNetwork(scene) }
     LegacyCanvasViewport(
@@ -253,6 +317,7 @@ fun CrystalViewport(
         onInspectionLockToggle = onInspectionLockToggle,
         onAtomTap = onAtomTap,
         onViewMoved = onViewMoved,
+        onBlankTap = onBlankTap,
     )
 }
 
@@ -275,6 +340,7 @@ private fun LegacyCanvasViewport(
     onInspectionLockToggle: (atomId: Long, isLocked: Boolean) -> Unit = { _, _ -> },
     onAtomTap: (AtomImage) -> Unit = {},
     onViewMoved: () -> Unit = {},
+    onBlankTap: () -> Unit = {},
 ) {
     val background = colorFromArgb(appearance.backgroundArgb)
     var lastTap by remember { mutableStateOf<TapEvent?>(null) }
@@ -283,6 +349,11 @@ private fun LegacyCanvasViewport(
     Canvas(
         modifier = modifier
             .fillMaxSize()
+            .onSizeChanged { size ->
+                if (size.width != controller.viewportWidth || size.height != controller.viewportHeight) {
+                    controller.setViewport(size.width, size.height)
+                }
+            }
             .pointerInput(snapshot, controller.locked, lockedMeasurements, lockedInspectedAtomIds) {
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false)
@@ -305,9 +376,8 @@ private fun LegacyCanvasViewport(
                             } else if (pressed.size >= 2) {
                                 val zoomDelta = event.calculateZoom()
                                 val pan = event.calculatePan()
-                                controller.zoom = (controller.zoom * zoomDelta).coerceIn(0.08f, 25f)
-                                controller.panX += pan.x
-                                controller.panY += pan.y
+                                controller.zoomBy(zoomDelta)
+                                controller.panBy(pan.x, pan.y)
                                 if (abs(zoomDelta - 1f) > 0.001f || pan.getDistance() > 0.5f) onViewMoved()
                             }
                         }
@@ -335,7 +405,7 @@ private fun LegacyCanvasViewport(
                                         } else {
                                             onAtomTap(atom)
                                         }
-                                    }
+                                    } ?: onBlankTap()
                                 }
                             }
                             break
@@ -345,8 +415,6 @@ private fun LegacyCanvasViewport(
             },
     ) {
         drawRect(background)
-        controller.viewportWidth = size.width.toInt().coerceAtLeast(1)
-        controller.viewportHeight = size.height.toInt().coerceAtLeast(1)
         measurementBoundsList = emptyList()
         atomInfoBoundsList = emptyList()
         if (snapshot.atoms.isEmpty()) {
@@ -406,8 +474,28 @@ private fun LegacyCanvasViewport(
         }
 
         val coordination = CoordinationAnalyzer.neighbors(snapshot, visibility.showBonds, visibility.hiddenBondPairs)
+        val lockedHighlightIds = lockedMeasurements.flatMap { it.atomIds }.toSet() + lockedInspectedAtomIds
+        val highlightedIds = selectedAtomIds.toSet() + lockedHighlightIds + listOfNotNull(inspectedAtomId)
+        val atomsById = snapshot.atoms.associateBy { it.id }
+        val dihedralSelections = lockedMeasurements.filter { it.mode == MeasurementMode.DIHEDRAL } +
+            if (measurementMode == MeasurementMode.DIHEDRAL && selectedAtomIds.size >= 4) {
+                listOf(LockedMeasurement(selectedAtomIds.takeLast(4), MeasurementMode.DIHEDRAL))
+            } else emptyList()
+        val dihedralPlanes = dihedralSelections.flatMap { measurement ->
+            val positions = measurement.atomIds.takeLast(4).mapNotNull { atomsById[it]?.cartesianCoordinate?.toVec3() }
+            if (positions.size != 4) return@flatMap emptyList()
+            DihedralTool.planes(positions[0], positions[1], positions[2], positions[3]).map { plane ->
+                val rotatedVertices = plane.vertices.map { controller.rotation * (it - center) }
+                DihedralPlaneRenderable(
+                    screenVerts = rotatedVertices.map(::project),
+                    normalCam = controller.rotation * plane.normal,
+                    depth = rotatedVertices.map { it.z }.average(),
+                )
+            }
+        }
         val renderables = buildList<Renderable> {
-            visibleProjected.forEach { add(AtomRenderable(it, it.atom.id in selectedAtomIds)) }
+            addAll(dihedralPlanes)
+            visibleProjected.forEach { add(AtomRenderable(it, it.atom.id in highlightedIds, it.atom.id in lockedHighlightIds)) }
             if (visibility.showBonds) {
                 snapshot.bonds.forEach { bond ->
                     val a = byId[bond.atomA] ?: return@forEach
@@ -425,7 +513,7 @@ private fun LegacyCanvasViewport(
                     // An external-shell atom sits outside the primary cell, so its ball must be drawn
                     // too (primary/boundary atoms are drawn above).
                     if (externalBond && b.atom.id in visibleExternalShellAtomIds) {
-                        add(AtomRenderable(b, b.atom.id in selectedAtomIds))
+                        add(AtomRenderable(b, b.atom.id in highlightedIds, b.atom.id in lockedHighlightIds))
                     }
                 }
             }
@@ -489,9 +577,10 @@ private fun LegacyCanvasViewport(
                 // Per v0.5.3a: depth cueing blends each object's colour toward the background by its
                 // fog amount; opacity is unchanged. Bonds split at the midpoint so each half fades by
                 // its endpoint atom's depth (continuous fade into the atoms).
-                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, appearance, renderConfiguration, dofFog(renderable.depth), bgColor)
+                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, renderable.lockedHighlight, appearance, renderConfiguration, dofFog(renderable.depth), bgColor)
                 is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, renderConfiguration, visibility.hiddenSites, ::dofFog, bgColor)
                 is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance, dofFog(renderable.depth), bgColor)
+                is DihedralPlaneRenderable -> drawDihedralPlane(renderable, appearance, dofFog(renderable.depth), bgColor)
             }
         }
         // Per v0.2.3: draw the locked (persistent) measurement/info windows first, then the active
@@ -518,6 +607,7 @@ private fun LegacyCanvasViewport(
 private fun DrawScope.drawAtom(
     atom: ProjectedAtom,
     selected: Boolean,
+    lockedHighlight: Boolean,
     appearance: ViewerAppearance,
     renderConfiguration: RenderConfiguration,
     fog: Float = 0f,
@@ -527,7 +617,12 @@ private fun DrawScope.drawAtom(
     // unchanged (atomOpacity only), so distant atoms dissolve into the bg rather than go transparent.
     val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
     if (opacity < 0.01f) {
-        if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))
+        if (selected) drawCircle(
+            if (lockedHighlight) Color(0xFFCFA7F5) else Color(0xFF7542A5),
+            atom.radius + 5f,
+            atom.point,
+            style = Stroke(if (lockedHighlight) 6f else 5f),
+        )
         return
     }
     val rawBase = colorFromArgb(
@@ -594,7 +689,44 @@ private fun DrawScope.drawAtom(
         }
     }
     drawCircle(Color.Black.copy(alpha = 0.28f * opacity), atom.radius, atom.point, style = Stroke(max(0.8f, atom.radius * 0.045f)))
-    if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))
+    if (selected) drawCircle(
+        if (lockedHighlight) Color(0xFFCFA7F5) else Color(0xFF7542A5),
+        atom.radius + 4f,
+        atom.point,
+        style = Stroke(if (lockedHighlight) 6f else 5f),
+    )
+}
+
+private fun DrawScope.drawDihedralPlane(
+    plane: DihedralPlaneRenderable,
+    appearance: ViewerAppearance,
+    fog: Float,
+    background: Color,
+) {
+    if (plane.screenVerts.size != 4) return
+    val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+    val normal = if (plane.normalCam.z >= 0.0) plane.normalCam else plane.normalCam * -1.0
+    val intensity = (0.58f + normal.normalized().dot(light).coerceIn(0.0, 1.0).toFloat() * appearance.lightIntensity * 0.42f)
+        .coerceIn(0f, 1f)
+    val shaded = Color(0xFF9966CC).copy(alpha = 0.44f).blend(background, fog).copy(
+        red = 0.60f * intensity,
+        green = 0.40f * intensity,
+        blue = 0.80f * intensity,
+        alpha = 0.44f,
+    )
+    val path = Path().apply {
+        moveTo(plane.screenVerts[0].x, plane.screenVerts[0].y)
+        plane.screenVerts.drop(1).forEach { lineTo(it.x, it.y) }
+        close()
+    }
+    drawPath(
+        path,
+        Brush.linearGradient(
+            listOf(shaded, shaded.copy(alpha = 0.25f), Color.Transparent),
+            start = plane.screenVerts[0],
+            end = plane.screenVerts[3],
+        ),
+    )
 }
 
 private fun DrawScope.drawBond(

@@ -21,6 +21,8 @@ import com.krystals.crystal.core.math.angleDegrees
 import com.krystals.crystal.core.math.dihedralDegrees
 import com.krystals.crystal.core.math.distance
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.interaction.measure.DihedralTool
+import com.krystals.interaction.state.InteractionState
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -58,6 +60,12 @@ object CrystalImageExporter {
         // Per v0.3.44: outline-only back faces — draw just the edges at low alpha, no fill.
         val outlineOnly: Boolean = false,
         val outlineAlpha: Float = 0.35f,
+        override val depth: Double,
+    ) : RenderPrimitive
+
+    private data class DihedralPlanePrimitive(
+        val screenVerts: List<Pair<Float, Float>>,
+        val normalCam: Vec3,
         override val depth: Double,
     ) : RenderPrimitive
 
@@ -111,6 +119,30 @@ object CrystalImageExporter {
             }
         }
         return result
+    }
+
+    fun render(
+        scene: RenderScene,
+        appearance: ViewerAppearance,
+        renderConfiguration: RenderConfiguration,
+        interactionState: InteractionState,
+        bondValenceBySite: Map<String, Double> = emptyMap(),
+    ): Bitmap {
+        val controller = ViewerController().also { it.bind(interactionState.session) {} }
+        val document = interactionState.document
+        return render(
+            scene = scene,
+            appearance = appearance,
+            renderConfiguration = renderConfiguration,
+            controller = controller,
+            visibility = document.visibility,
+            selectedAtomIds = document.selection.selectedAtomIds,
+            measurementMode = document.measurementMode,
+            inspectedAtomId = document.inspection.inspectedAtomId,
+            lockedMeasurements = document.lockedMeasurements,
+            lockedInspectedAtomIds = document.inspection.lockedInspectedAtomIds,
+            bondValenceBySite = bondValenceBySite,
+        )
     }
 
     fun render(
@@ -239,7 +271,24 @@ object CrystalImageExporter {
         val visiblePoints = points.filter { it.atomId in visiblePointIds }
         val byId = points.associateBy { it.atomId }
         val coordination = CoordinationAnalyzer.neighbors(snapshot, visibility.showBonds, visibility.hiddenBondPairs)
+        val dihedralSelections = lockedMeasurements.filter { it.mode == MeasurementMode.DIHEDRAL } +
+            if (measurementMode == MeasurementMode.DIHEDRAL && selectedAtomIds.size >= 4) {
+                listOf(LockedMeasurement(selectedAtomIds.takeLast(4), MeasurementMode.DIHEDRAL))
+            } else emptyList()
+        val dihedralPlanes = dihedralSelections.flatMap { measurement ->
+            val positions = measurement.atomIds.takeLast(4).mapNotNull { byId[it]?.cartesian }
+            if (positions.size != 4) return@flatMap emptyList()
+            DihedralTool.planes(positions[0], positions[1], positions[2], positions[3]).map { plane ->
+                val rotated = plane.vertices.map { controller.rotation * (it - center) }
+                DihedralPlanePrimitive(
+                    screenVerts = rotated.map { screen(it) },
+                    normalCam = controller.rotation * plane.normal,
+                    depth = rotated.map { it.z }.average(),
+                )
+            }
+        }
         val renderables = buildList<RenderPrimitive> {
+            addAll(dihedralPlanes)
             visiblePoints.forEach { add(AtomPrimitive(it)) }
             if (visibility.showBonds) {
                 snapshot.bonds.forEach { bond ->
@@ -304,13 +353,15 @@ object CrystalImageExporter {
 
         // Per v0.5.4: contact shadows removed (user request).
 
+        val highlightedAtomIds = selectedAtomIds.toSet() + lockedMeasurements.flatMap { it.atomIds } + lockedInspectedAtomIds + listOfNotNull(inspectedAtomId)
         renderables.forEach { primitive ->
             when (primitive) {
                 // Per v0.5.3a: each object's colour blends toward the background by its fog amount;
                 // opacity is unchanged. Bonds split at the midpoint (each half by its endpoint's fog).
-                is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, selectedAtomIds, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, dofFog(primitive.depth), bgArgb)
+                is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, highlightedAtomIds, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, dofFog(primitive.depth), bgArgb)
                 is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, visibility.hiddenSites, ::dofFog, bgArgb)
                 is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, controller.rotation, dofFog(primitive.depth), bgArgb)
+                is DihedralPlanePrimitive -> drawDihedralPlanePrimitive(canvas, primitive, appearance, dofFog(primitive.depth), bgArgb)
             }
         }
         // Per v0.3.0: draw locked (persistent) + active measurement/info windows.
@@ -321,7 +372,34 @@ object CrystalImageExporter {
         return bitmap
     }
 
-    private fun drawAtom(canvas: Canvas, point: Point, appearance: ViewerAppearance, selectedAtomIds: List<Long>, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), fog: Float = 0f, bgArgb: Int = 0xFF101014.toInt()) {
+    private fun drawDihedralPlanePrimitive(canvas: Canvas, plane: DihedralPlanePrimitive, appearance: ViewerAppearance, fog: Float, bgArgb: Int) {
+        if (plane.screenVerts.size != 4) return
+        val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+        val normal = if (plane.normalCam.z >= 0.0) plane.normalCam else plane.normalCam * -1.0
+        val strength = (0.58f + normal.normalized().dot(light).coerceIn(0.0, 1.0).toFloat() * appearance.lightIntensity * 0.42f).coerceIn(0f, 1f)
+        val alpha = (0.44f * (1f - fog * 0.7f) * 255f).toInt().coerceIn(0, 255)
+        val path = Path().apply {
+            moveTo(plane.screenVerts[0].first, plane.screenVerts[0].second)
+            plane.screenVerts.drop(1).forEach { lineTo(it.first, it.second) }
+            close()
+        }
+        val shader = LinearGradient(
+            plane.screenVerts[0].first,
+            plane.screenVerts[0].second,
+            plane.screenVerts[3].first,
+            plane.screenVerts[3].second,
+            intArrayOf(
+                Color.argb(alpha, (150 * strength).toInt(), (95 * strength).toInt(), (205 * strength).toInt()),
+                Color.argb(alpha / 2, 128, 72, 180),
+                Color.TRANSPARENT,
+            ),
+            null,
+            Shader.TileMode.CLAMP,
+        )
+        canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.shader = shader })
+    }
+
+    private fun drawAtom(canvas: Canvas, point: Point, appearance: ViewerAppearance, selectedAtomIds: Collection<Long>, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), fog: Float = 0f, bgArgb: Int = 0xFF101014.toInt()) {
         // Per v0.5.3a: depth cueing fades COLOUR toward the background by [fog]; opacity is unchanged.
         val rawArgb = RenderPalette.resolveSiteArgb(
             point.siteId,

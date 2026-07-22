@@ -152,14 +152,15 @@ import com.krystals.crystal.analysis.structure.StructureAnalyzer
 import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.ParsedStructure
+import com.krystals.interaction.measure.MeasurementMode
+import com.krystals.interaction.state.InteractionReducer
+import com.krystals.interaction.state.ViewerCommand
 import com.krystals.renderer.legacy.CrystalViewport
 import com.krystals.renderer.legacy.CrystalImageExporter
-import com.krystals.renderer.legacy.LockedMeasurement
-import com.krystals.renderer.legacy.MeasurementMode
+import com.krystals.renderer.legacy.LegacyRenderSceneAdapter
 import com.krystals.renderer.legacy.RenderPalette
 import com.krystals.renderer.legacy.ViewerAppearance
-import com.krystals.renderer.legacy.ViewerVisibility
-import com.krystals.renderer.legacy.rememberViewerController
+import com.krystals.renderer.core.scene.RenderScene
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -830,18 +831,27 @@ private fun ViewerScreen(
     val angleChoice = localized("角度", "Angle")
     val dihedralChoice = localized("二面角", "Dihedral")
     val offChoice = localized("关闭", "Off")
-    val controller = rememberViewerController()
+    fun dispatchViewerCommand(command: ViewerCommand) {
+        val before = tab.interactionState
+        val after = InteractionReducer.reduce(before, command)
+        if (after == before) return
+        if (after.document != before.document) tab.recordHistory()
+        tab.interactionState = after
+    }
     // Per v0.5.3b: build the scene off the UI thread with a timeout. Previously this ran synchronously
     // on the Main thread inside `remember`, so a large cell (materialising ~77k shell atoms) froze
     // the UI and OOM'd with no way to cancel. Now a key change cancels the prior build (the stale
     // result is discarded) and shows a spinner while the new one computes.
-    var sceneResult by remember(tab.structure, tab.expansion) { mutableStateOf<Result<BondNetwork>?>(null) }
-    LaunchedEffect(tab.structure, tab.expansion) {
+    var sceneResult by remember(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, tab.appearance, tab.renderConfiguration, tab.visibility) {
+        mutableStateOf<Result<RenderScene>?>(null)
+    }
+    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, tab.appearance, tab.renderConfiguration, tab.visibility) {
         sceneResult = null
         sceneResult = runCatching {
             withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
                 withContext(Dispatchers.Default) {
-                    BondDetector.buildNetwork(tab.structure, tab.bondConfiguration, tab.expansion)
+                    val analysis = BondDetector.buildNetwork(tab.structure, tab.bondConfiguration, tab.expansion)
+                    LegacyRenderSceneAdapter.build(analysis, tab.appearance, tab.renderConfiguration, tab.visibility)
                 }
             } ?: throw IllegalStateException("Scene build timed out after ${BUILD_SCENE_TIMEOUT_MS / 1000}s")
         }
@@ -864,8 +874,8 @@ private fun ViewerScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = { menuOpen = false; onSaveToPreset() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
                     menuOpen = false
-                    sceneResult?.getOrNull()?.let { snapshot ->
-                        onExport(CrystalImageExporter.render(snapshot, tab.appearance, tab.renderConfiguration, controller, tab.visibility, tab.selectedAtomIds, tab.measurementMode, tab.inspectedAtomId, tab.lockedMeasurements, tab.lockedInspectedAtomIds, bondValenceBySite))
+                    sceneResult?.getOrNull()?.let { scene ->
+                        onExport(CrystalImageExporter.render(scene, tab.appearance, tab.renderConfiguration, tab.interactionState, bondValenceBySite))
                     } ?: onMessage("Unable to export current crystal")
                 })
                 HorizontalDivider()
@@ -890,54 +900,14 @@ private fun ViewerScreen(
                     CircularProgressIndicator()
                 }
                 current.isSuccess -> {
-                    val snapshot = current.getOrThrow()
+                    val scene = current.getOrThrow()
                     CrystalViewport(
-                        snapshot = snapshot,
+                        scene = scene,
+                        interactionState = tab.interactionState,
+                        onCommand = ::dispatchViewerCommand,
                         appearance = previewAppearance ?: tab.appearance,
                         renderConfiguration = tab.renderConfiguration,
-                        controller = controller,
-                        visibility = tab.visibility,
-                        selectedAtomIds = tab.selectedAtomIds,
-                        measurementMode = tab.measurementMode,
-                        lockedMeasurements = tab.lockedMeasurements,
-                        onMeasurementLockToggle = { measurement, isLocked ->
-                            tab.recordHistory()
-                            // Tapping an unlocked (active) measurement box locks it into the list and
-                            // clears the active selection; tapping a locked box removes just that one.
-                            if (isLocked && measurement != null) {
-                                tab.lockedMeasurements = tab.lockedMeasurements.filterNot { it == measurement }
-                            } else if (!isLocked) {
-                                if (tab.measurementMode != MeasurementMode.NONE && tab.selectedAtomIds.isNotEmpty()) {
-                                    tab.lockedMeasurements = tab.lockedMeasurements + LockedMeasurement(tab.selectedAtomIds, tab.measurementMode)
-                                    tab.selectedAtomIds = emptyList()
-                                }
-                            }
-                        },
-                        inspectedAtomId = tab.inspectedAtomId,
-                        lockedInspectedAtomIds = tab.lockedInspectedAtomIds,
                         bondValenceBySite = bondValenceBySite,
-                        onInspectAtom = { atom ->
-                            // Per v0.2.4: double-tap opens an unlocked info window for the atom. Any
-                            // already-locked windows are preserved; the active window is replaceable.
-                            tab.recordHistory(); tab.inspectedAtomId = atom.id
-                        },
-                        onInspectionLockToggle = { atomId, isLocked ->
-                            tab.recordHistory()
-                            // Tapping an unlocked (active) info box locks it into the persistent list and
-                            // clears the active window; tapping a locked box removes just that one.
-                            if (isLocked) {
-                                tab.lockedInspectedAtomIds = tab.lockedInspectedAtomIds - atomId
-                            } else {
-                                tab.lockedInspectedAtomIds = tab.lockedInspectedAtomIds + atomId
-                                tab.inspectedAtomId = null
-                            }
-                        },
-                        onViewMoved = {
-                            if (tab.selectedAtomIds.isNotEmpty() || tab.inspectedAtomId != null) tab.recordHistory()
-                            if (tab.measurementMode != MeasurementMode.NONE) tab.selectedAtomIds = emptyList()
-                            // Moving the view dismisses the unlocked info window; locked ones persist.
-                            tab.inspectedAtomId = null
-                        },
                         onAtomTap = { atom ->
                             when (tab.atomEditMode) {
                                 AtomEditMode.DELETE_NEXT -> {
@@ -948,20 +918,13 @@ private fun ViewerScreen(
                                     if (deleted != null) onRunBondComputation {
                                         CrystalEditor.ensureAutoBondRules(deleted.structure, deleted.bondConfiguration)
                                     }
+                                    true
                                 }
                                 AtomEditMode.MODIFY_NEXT -> {
                                     tab.editingSiteId = atom.siteId; tab.atomEditMode = AtomEditMode.NONE; tab.editorOpen = true
+                                    true
                                 }
-                                AtomEditMode.NONE -> {
-                                    tab.recordHistory()
-                                    val expected = when (tab.measurementMode) { MeasurementMode.LENGTH -> 2; MeasurementMode.ANGLE -> 3; MeasurementMode.DIHEDRAL -> 4; else -> 1 }
-                                    tab.selectedAtomIds = if (tab.selectedAtomIds.size >= expected) listOf(atom.id) else tab.selectedAtomIds + atom.id
-                                }
-                            }
-                        },
-                        onBlankTap = {
-                            if (tab.selectedAtomIds.isNotEmpty() || tab.inspectedAtomId != null) {
-                                tab.recordHistory(); tab.selectedAtomIds = emptyList(); tab.inspectedAtomId = null
+                                AtomEditMode.NONE -> false
                             }
                         },
                     )
@@ -1052,7 +1015,9 @@ private fun ViewerScreen(
                         Tool(Icons.Default.Visibility, active = false) { displayOpen = true },
                         Tool(Icons.Default.Info, active = false) { infoOpen = true },
                         Tool(Icons.Default.Edit, active = false) { tab.editorOpen = true },
-                        Tool(if (controller.locked) Icons.Default.LockOpen else Icons.Default.Lock, active = controller.locked) { controller.locked = !controller.locked },
+                        Tool(if (tab.interactionState.session.locked) Icons.Default.LockOpen else Icons.Default.Lock, active = tab.interactionState.session.locked) {
+                            dispatchViewerCommand(ViewerCommand.ToggleLock)
+                        },
                     )
                     val offsets = FloatingBallLayout.toolOffsets(tab.floatingPosition.snap)
                     tools.forEachIndexed { index, (icon, active, action) ->
@@ -1087,8 +1052,8 @@ private fun ViewerScreen(
         onDismiss = { alignOpen = false },
         onChoice = { choice ->
             when (choice) {
-                "X", "Y", "Z" -> controller.align(choice.first())
-                "a", "b", "c" -> controller.alignCellAxis(choice.first(), tab.structure.lattice)
+                "X", "Y", "Z" -> dispatchViewerCommand(ViewerCommand.AlignCartesian(choice.first()))
+                "a", "b", "c" -> dispatchViewerCommand(ViewerCommand.AlignCellAxis(choice.first(), tab.structure.lattice))
             }
             alignOpen = false
         },
@@ -1101,14 +1066,13 @@ private fun ViewerScreen(
         onDismiss = { measureOpen = false },
         onChoice = { choice ->
             // Per v0.2.3: switching mode keeps any locked measurement; only the active selection resets.
-            tab.recordHistory()
-            tab.measurementMode = when {
+            val mode = when {
                 choice == lengthChoice -> MeasurementMode.LENGTH
                 choice == angleChoice -> MeasurementMode.ANGLE
                 choice == dihedralChoice -> MeasurementMode.DIHEDRAL
                 else -> MeasurementMode.NONE
             }
-            tab.selectedAtomIds = emptyList(); measureOpen = false
+            dispatchViewerCommand(ViewerCommand.SetMeasurementMode(mode)); measureOpen = false
         },
     )
     if (displayOpen) DisplayPanel(tab, viewModel, onDismiss = { displayOpen = false })

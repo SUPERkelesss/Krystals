@@ -15,11 +15,17 @@ import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.CifDisplayMetadata
 import com.krystals.crystal.io.ParsedStructure
-import com.krystals.renderer.legacy.LockedMeasurement
-import com.krystals.renderer.legacy.MeasurementMode
+import com.krystals.interaction.measure.MeasurementMode
+import com.krystals.interaction.measure.MeasurementSelection as LockedMeasurement
+import com.krystals.interaction.state.InspectionState
+import com.krystals.interaction.state.InteractionState
+import com.krystals.interaction.state.InteractionReducer
+import com.krystals.interaction.state.SelectionState
+import com.krystals.interaction.state.ViewerCommand
+import com.krystals.interaction.state.ViewerDocumentState
+import com.krystals.interaction.state.VisibilityState as ViewerVisibility
 import com.krystals.renderer.legacy.RenderConfiguration
 import com.krystals.renderer.legacy.ViewerAppearance
-import com.krystals.renderer.legacy.ViewerVisibility
 import java.util.UUID
 
 enum class AtomEditMode { NONE, MODIFY_NEXT, DELETE_NEXT }
@@ -33,31 +39,24 @@ data class DocumentSnapshot(
     val editorOpen: Boolean,
     val appearance: ViewerAppearance,
     val expansion: Expansion,
-    val visibility: ViewerVisibility,
-    val selectedAtomIds: List<Long>,
-    val measurementMode: MeasurementMode,
-    val lockedMeasurements: List<LockedMeasurement>,
+    val interactionDocument: ViewerDocumentState,
     val atomEditMode: AtomEditMode,
     val editingSiteId: String?,
-    val inspectedAtomId: Long?,
-    val lockedInspectedAtomIds: List<Long>,
     val bondEpsilon: Double,
     val lastRadiusSource: RadiusSource,
 ) {
     fun restore(tab: DocumentTab) {
         tab.structure = structure; tab.bondConfiguration = bondConfiguration; tab.renderConfiguration = renderConfiguration
         tab.name = name; tab.dirty = dirty; tab.editorOpen = editorOpen; tab.appearance = appearance
-        tab.expansion = expansion; tab.visibility = visibility; tab.selectedAtomIds = selectedAtomIds
-        tab.measurementMode = measurementMode; tab.lockedMeasurements = lockedMeasurements; tab.atomEditMode = atomEditMode
-        tab.editingSiteId = editingSiteId; tab.inspectedAtomId = inspectedAtomId
-        tab.lockedInspectedAtomIds = lockedInspectedAtomIds; tab.bondEpsilon = bondEpsilon; tab.lastRadiusSource = lastRadiusSource
+        tab.expansion = expansion; tab.interactionState = tab.interactionState.copy(document = interactionDocument)
+        tab.atomEditMode = atomEditMode; tab.editingSiteId = editingSiteId
+        tab.bondEpsilon = bondEpsilon; tab.lastRadiusSource = lastRadiusSource
     }
     companion object {
         fun capture(tab: DocumentTab) = DocumentSnapshot(
             tab.structure, tab.bondConfiguration, tab.renderConfiguration, tab.name, tab.dirty, tab.editorOpen,
-            tab.appearance, tab.expansion, tab.visibility, tab.selectedAtomIds, tab.measurementMode,
-            tab.lockedMeasurements, tab.atomEditMode, tab.editingSiteId, tab.inspectedAtomId,
-            tab.lockedInspectedAtomIds, tab.bondEpsilon, tab.lastRadiusSource,
+            tab.appearance, tab.expansion, tab.interactionState.document,
+            tab.atomEditMode, tab.editingSiteId, tab.bondEpsilon, tab.lastRadiusSource,
         )
     }
 }
@@ -84,17 +83,29 @@ class DocumentTab(
     var editorOpen by mutableStateOf(isNew)
     var appearance by mutableStateOf(ViewerAppearance())
     var expansion by mutableStateOf(Expansion())
-    var visibility by mutableStateOf(ViewerVisibility())
-    var selectedAtomIds by mutableStateOf(emptyList<Long>())
-    var measurementMode by mutableStateOf(MeasurementMode.NONE)
-    // Per v0.3.0: multiple measurements can be locked at once (mirrors the atom-info windows).
-    var lockedMeasurements by mutableStateOf(emptyList<LockedMeasurement>())
+    var interactionState by mutableStateOf(InteractionState())
+    var visibility: ViewerVisibility
+        get() = interactionState.document.visibility
+        set(value) { interactionState = InteractionReducer.reduce(interactionState, ViewerCommand.SetVisibility(value)) }
+    var selectedAtomIds: List<Long>
+        get() = interactionState.document.selection.selectedAtomIds
+        set(value) { interactionState = interactionState.copy(document = interactionState.document.copy(selection = SelectionState(value))) }
+    var measurementMode: MeasurementMode
+        get() = interactionState.document.measurementMode
+        set(value) { interactionState = interactionState.copy(document = interactionState.document.copy(measurementMode = value)) }
+    var lockedMeasurements: List<LockedMeasurement>
+        get() = interactionState.document.lockedMeasurements
+        set(value) { interactionState = interactionState.copy(document = interactionState.document.copy(lockedMeasurements = value)) }
     var atomEditMode by mutableStateOf(AtomEditMode.NONE)
     var editingSiteId by mutableStateOf<String?>(null)
-    var inspectedAtomId by mutableStateOf<Long?>(null)
+    var inspectedAtomId: Long?
+        get() = interactionState.document.inspection.inspectedAtomId
+        set(value) { interactionState = interactionState.copy(document = interactionState.document.copy(inspection = interactionState.document.inspection.copy(inspectedAtomId = value))) }
     // Per v0.2.4: multiple atom-info windows can be locked at once. Each locked window survives
     // starting a new inspection or moving the view. See CrystalViewport.onInspectionLockToggle.
-    var lockedInspectedAtomIds by mutableStateOf(emptyList<Long>())
+    var lockedInspectedAtomIds: List<Long>
+        get() = interactionState.document.inspection.lockedInspectedAtomIds
+        set(value) { interactionState = interactionState.copy(document = interactionState.document.copy(inspection = interactionState.document.inspection.copy(lockedInspectedAtomIds = value))) }
     // Per v0.5.0: bond-rule threshold ε (max = rA + rB + ε). Per-tab UI setting, not persisted to
     // CIF; new files default to 0.45. lastRadiusSource remembers which source the ε slider should
     // reapply when adjusted (default smart-ionic).

@@ -61,6 +61,11 @@ flowchart TB
         Repo["FileRepository<br/>CIF I/O / PNG export"]
         Act["ActivationManager<br/>paid activation"]
     end
+    subgraph interaction["interaction · backend-neutral viewer interaction"]
+        Commands["ViewerCommand / InteractionReducer"]
+        CameraControl["Orbit / Zoom / Pan / Alignment"]
+        ViewerTools["Selection / Picking / Measurement / Inspection / Visibility"]
+    end
     subgraph rendererCore["renderer-core · backend-neutral scene"]
         Builder["CrystalSceneBuilder"]
         Scene["RenderScene / RenderObject"]
@@ -92,7 +97,10 @@ flowchart TB
         SpaceGroups["space-group symbols / operations"]
     end
 
-    UI --> VP
+    UI --> Commands
+    Commands --> CameraControl
+    Commands --> ViewerTools
+    Commands --> VP
     UI --> Edit
     UI --> VM
     Repo -->|"parseStructure"| Codec
@@ -113,10 +121,13 @@ flowchart TB
     Bonds --> Elements
 
     app -.->|depends on| rendererLegacy
+    app -.->|depends on| interaction
     app -.->|depends on| analysis
     app -.->|depends on| io
     rendererCore -.->|api dependency| analysis
     rendererLegacy -.->|depends on| rendererCore
+    rendererLegacy -.->|input and picking adapter| interaction
+    interaction -.->|camera and scene contracts| rendererCore
     rendererFilament -.->|depends on| rendererCore
     io -.->|depends on| analysis
     analysis -.->|depends on| core

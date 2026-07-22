@@ -59,6 +59,11 @@ flowchart TB
         Repo["FileRepository<br/>CIF 读写 / PNG 导出"]
         Act["ActivationManager<br/>付费激活"]
     end
+    subgraph interaction["interaction · 后端无关视图交互"]
+        Commands["ViewerCommand / InteractionReducer"]
+        CameraControl["旋转 / 缩放 / 平移 / 对齐"]
+        ViewerTools["选择 / 拾取 / 测量 / 检查 / 可见性"]
+    end
     subgraph rendererCore["renderer-core · 后端无关场景"]
         Builder["CrystalSceneBuilder"]
         Scene["RenderScene / RenderObject"]
@@ -90,7 +95,10 @@ flowchart TB
         SpaceGroups["空间群符号 / 操作"]
     end
 
-    UI --> VP
+    UI --> Commands
+    Commands --> CameraControl
+    Commands --> ViewerTools
+    Commands --> VP
     UI --> Edit
     UI --> VM
     Repo -->|"parseStructure"| Codec
@@ -111,10 +119,13 @@ flowchart TB
     Bonds --> Elements
 
     app -.->|依赖| rendererLegacy
+    app -.->|依赖| interaction
     app -.->|依赖| analysis
     app -.->|依赖| io
     rendererCore -.->|api 依赖| analysis
     rendererLegacy -.->|依赖| rendererCore
+    rendererLegacy -.->|输入与拾取适配| interaction
+    interaction -.->|相机与场景契约| rendererCore
     rendererFilament -.->|依赖| rendererCore
     io -.->|依赖| analysis
     analysis -.->|依赖| core

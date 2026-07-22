@@ -31,4 +31,5 @@ include(
     ":renderer-core",
     ":renderer-filament",
     ":renderer-legacy",
+    ":interaction",
 )
