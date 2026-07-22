@@ -1,0 +1,60 @@
+package com.krystals.renderer.legacy
+
+import com.krystals.crystal.analysis.model.Expansion
+import com.krystals.crystal.core.lattice.Lattice
+import com.krystals.crystal.core.math.Mat3
+import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.math.rotX
+import kotlin.math.sqrt
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+
+class LegacyRenderMathTest {
+    @Test fun highlightMovesFromRimToCenterWithElevation() {
+        val grazing = legacyHighlightOffset(10.0, 0f, 0f)
+        assertEquals(9.5, grazing.x, 1e-9)
+        assertEquals(0.0, grazing.y, 1e-9)
+
+        val quarterTurn = legacyHighlightOffset(10.0, 90f, 0f)
+        assertEquals(0.0, quarterTurn.x, 1e-9)
+        assertEquals(9.5, quarterTurn.y, 1e-9)
+
+        val overhead = legacyHighlightOffset(10.0, 35f, 90f)
+        assertEquals(0.0, sqrt(overhead.x * overhead.x + overhead.y * overhead.y), 1e-9)
+    }
+
+    @Test fun expandedCellBoundsUseAllEightSupercellCorners() {
+        val lattice = Lattice(2.0, 4.0, 6.0, 90.0, 90.0, 90.0)
+        val range = expandedCellDepthRange(
+            lattice,
+            Expansion(2, 3, 4),
+            Vec3(2.0, 6.0, 12.0),
+            Mat3.IDENTITY,
+        )
+        assertNotNull(range)
+        assertEquals(-12.0, range.min, 1e-9)
+        assertEquals(12.0, range.max, 1e-9)
+        assertEquals(-5f, range.normalizedDepth(-12.0))
+        assertEquals(5f, range.normalizedDepth(12.0))
+    }
+
+    @Test fun rotatedBoundsFollowCellGeometry() {
+        val lattice = Lattice(2.0, 4.0, 6.0, 90.0, 90.0, 90.0)
+        val range = expandedCellDepthRange(
+            lattice,
+            Expansion(),
+            Vec3(1.0, 2.0, 3.0),
+            rotX(90.0),
+        )
+        assertNotNull(range)
+        assertEquals(-2.0, range.min, 1e-9)
+        assertEquals(2.0, range.max, 1e-9)
+    }
+
+    @Test fun fogUsesNearFarEndpointsAndLinearMiddle() {
+        assertEquals(0f, legacyDepthCueFogValue(2f, near = 2f, far = -2f))
+        assertEquals(1f, legacyDepthCueFogValue(-2f, near = 2f, far = -2f))
+        assertEquals(0.5f, legacyDepthCueFogValue(0f, near = 2f, far = -2f))
+    }
+}

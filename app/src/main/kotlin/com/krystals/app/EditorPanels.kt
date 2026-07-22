@@ -74,6 +74,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
@@ -81,6 +83,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogWindowProvider
 import com.krystals.crystal.analysis.bonding.BondDetector
 import com.krystals.crystal.analysis.bonding.BondGrid
 import com.krystals.crystal.analysis.bonding.BondRule
@@ -774,35 +777,6 @@ fun AppearanceDialog(
     // Preview button's pointerInput survives the press-and-hold and onPreviewEnd fires on release.
     // (v0.5.2a unmounted the dialog on press, killing the gesture → stuck preview.)
     var previewing by remember { mutableStateOf(false) }
-    // Per v0.5.4: 预览按住时消除平台 Dialog 窗口的 dim 黑遮罩。BasicAlertDialog 内部用
-    // androidx.compose.ui.window.Dialog 打开的平台窗口带 FLAG_DIM_BEHIND,DialogProperties 不暴露
-    // dimAmount,Modifier.alpha(0f) 无效。预览时反射取 Dialog 所在 Window 置 dimAmount=0,松手还原。
-    val hostView = LocalView.current
-    DisposableEffect(previewing) {
-        if (!previewing) return@DisposableEffect onDispose {}
-        var resolved: android.view.Window? = null
-        runCatching {
-            var v: android.view.View? = hostView
-            while (v != null) {
-                val ctx = v.context
-                var c: android.content.Context? = ctx
-                while (c != null) {
-                    if (c is android.app.Activity) { resolved = c.window; break }
-                    c = (c as? android.content.ContextWrapper)?.baseContext
-                }
-                if (resolved != null) break
-                v = v.parent as? android.view.View
-            }
-        }
-        val target = resolved
-        if (target != null) {
-            target.setDimAmount(0f)
-            onDispose { runCatching { target.setDimAmount(0.6f) } }
-        } else {
-            // 反射取不到 window 时静默降级:dim 不变,仅 alpha 隐藏(仍有黑遮罩,但不卡死)。
-            onDispose {}
-        }
-    }
     val frameLabels = listOf(localized("不显示框线", "No frame"), localized("单个晶胞", "Single cell"), localized("所有框线", "All frames"))
     val lineLabels = listOf(localized("实线", "Solid"), localized("虚线", "Dashed"))
     val bondColorLabels = listOf(localized("双色圆柱", "Bicolor cylinder"), localized("单色圆柱", "Unicolor cylinder"))
@@ -810,6 +784,14 @@ fun AppearanceDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.alpha(if (previewing) 0f else 1f),
     ) {
+        val dialogView = LocalView.current
+        val dialogWindow = (dialogView.parent as? DialogWindowProvider)?.window
+        DisposableEffect(dialogWindow, previewing) {
+            val window = dialogWindow ?: return@DisposableEffect onDispose {}
+            val originalDimAmount = window.attributes.dimAmount
+            if (previewing) window.setDimAmount(0f)
+            onDispose { runCatching { window.setDimAmount(originalDimAmount) } }
+        }
         Surface(shape = RoundedCornerShape(24.dp), tonalElevation = 6.dp) {
             Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp)) {
                 Text(localized("调整外观", "Appearance"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 12.dp))
@@ -980,7 +962,7 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
             val gray = Color(0xFF747479).copy(alpha = opacity)
             val azimuth = appearance.lightAzimuth / 180f * PI.toFloat()
             val elevation = appearance.lightElevation / 180f * PI.toFloat()
-            val lightOffset = radius * .38f * cos(elevation)
+            val lightOffset = radius * .95f * cos(elevation)
             val highlight = center - Offset(cos(azimuth) * lightOffset, sin(azimuth) * lightOffset)
             drawCircle(gray, radius, center)
             if (appearance.reflectionEnabled && opacity > 0.01f) {
@@ -996,13 +978,7 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
     }
 }
 
-/**
- * Per v0.5.4: depth-cueing preview — five atoms along a ~55° diagonal (near = +3 at top-right,
- * far = -3 at bottom-left), overlapping so the nearest occludes the farthest. Painted far→near
- * (far first, near last) so +3 covers everything behind it. Each atom's colour blends toward the
- * preview background by its fog amount (opacity unchanged), mirroring the renderer's depth cueing
- * (近=正: near +3 clear, far -3 faded). The nearest is labelled "+3", the farthest "-3".
- */
+/** Five horizontal depth samples with their background-mix curve plotted above them. */
 @Composable
 private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier = Modifier) {
     val bgCompose = MaterialTheme.colorScheme.surfaceVariant
@@ -1010,31 +986,42 @@ private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier 
         Canvas(Modifier.fillMaxSize().padding(8.dp)) {
             val near = appearance.dofNear.coerceIn(-5f, 5f)
             val far = appearance.dofFar.coerceIn(-5f, 5f)
-            // Per v0.5.4: r 增大让球直径 > 球心间距,产生重叠。
-            val r = size.minDimension * 0.16f
-            val pad = r * 0.55f
-            // Diagonal from bottom-left (-3, far, faded) to top-right (+3, near, clear). 顺时针偏转
-            // ~55°: nearPos 抬高、farPos 下沉,使斜线比 45° 更偏水平(东向)。
-            val nearPos = Offset(size.width - pad, pad)              // +3, top-right (near, clear)
-            val farPos = Offset(pad, size.height - pad)              // -3, bottom-left (far, faded)
-            val depths = listOf(-3f, -1.5f, 0f, 1.5f, 3f)          // far → near
-            val n = depths.size
-            // Paint far→near so near occludes far (painter's algorithm: nearest on top).
-            for (idx in 0 until n) {
-                val t = idx.toFloat() / (n - 1)
-                val pos = Offset(farPos.x + (nearPos.x - farPos.x) * t, farPos.y + (nearPos.y - farPos.y) * t)
-                val fog = depthCueFog(depths[idx], near, far)
-                drawPreviewSphere(pos, r, appearance, fog, bgCompose)
+            val depths = listOf(-5f, -2.5f, 0f, 2.5f, 5f)
+            val radius = size.minDimension * 0.105f
+            val xStart = radius * 1.25f
+            val xEnd = size.width - radius * 1.25f
+            val xPositions = depths.indices.map { index ->
+                xStart + (xEnd - xStart) * index / depths.lastIndex.toFloat()
             }
-            // Labels: "-3" at the far (bottom-left) atom, "+3" at the near (top-right) atom.
+            val chartTop = size.height * 0.10f
+            val chartBottom = size.height * 0.43f
+            val atomY = size.height * 0.73f
+            val guideColor = Color.White.copy(alpha = 0.48f)
+            val dash = PathEffect.dashPathEffect(floatArrayOf(5f, 4f))
+            drawLine(guideColor, Offset(xStart, chartTop), Offset(xEnd, chartTop), 1.2f, pathEffect = dash)
+            drawLine(guideColor, Offset(xStart, chartBottom), Offset(xEnd, chartBottom), 1.2f, pathEffect = dash)
+
+            val fogValues = depths.map { depthCueFog(it, near, far) }
+            val curve = Path().apply {
+                fogValues.forEachIndexed { index, fog ->
+                    val y = chartBottom - fog * (chartBottom - chartTop)
+                    if (index == 0) moveTo(xPositions[index], y) else lineTo(xPositions[index], y)
+                }
+            }
+            drawPath(curve, Color.White, style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
+            fogValues.forEachIndexed { index, fog ->
+                val y = chartBottom - fog * (chartBottom - chartTop)
+                drawCircle(Color.White, 2.4f, Offset(xPositions[index], y))
+                drawPreviewSphere(Offset(xPositions[index], atomY), radius, appearance, fog, bgCompose)
+            }
+
             val nc = drawContext.canvas.nativeCanvas
             val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                color = 0xE6FFFFFF.toInt()
-                textSize = r * 0.95f
-                setShadowLayer(3f, 1f, 1f, android.graphics.Color.BLACK)
+                color = 0xCCFFFFFF.toInt()
+                textSize = radius * 0.72f
             }
-            nc.drawText("-3", farPos.x - r * 1.4f, farPos.y + r * 0.45f, p)
-            nc.drawText("+3", nearPos.x + r * 0.4f, nearPos.y + r * 0.45f, p)
+            nc.drawText("1", xStart - radius, chartTop + p.textSize * 0.35f, p)
+            nc.drawText("0", xStart - radius, chartBottom + p.textSize * 0.35f, p)
         }
     }
 }
@@ -1049,7 +1036,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
     if (appearance.reflectionEnabled) {
         val azimuth = appearance.lightAzimuth / 180f * PI.toFloat()
         val elevation = appearance.lightElevation / 180f * PI.toFloat()
-        val lightOffset = r * .38f * cos(elevation)
+        val lightOffset = r * .95f * cos(elevation)
         val highlight = c - Offset(cos(azimuth) * lightOffset, sin(azimuth) * lightOffset)
         val highlightBrush = Brush.radialGradient(
             listOf(Color.White.copy(alpha = appearance.lightIntensity.coerceIn(.05f, 1f) * (1f - fog)), Color.Transparent),
@@ -1062,8 +1049,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
 }
 
 /**
- * Per v0.5.4: linear fog. [d] is the signed scene distance (近=正/远=负: nearest atom ≈ +3,
- * farthest ≈ -3, 0 = crystal centre). Convention near>=far (near=正, far=负). Returns fog in 0..1
+ * Linear fog on the normalized supercell depth scale (-5 far, +5 near). Returns fog in 0..1
  * (0 = near/no fade, 1 = far/fully faded). Mirrors [CrystalViewport.dofFog].
  */
 private fun depthCueFog(d: Float, near: Float, far: Float): Float {

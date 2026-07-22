@@ -23,12 +23,9 @@ import com.krystals.crystal.core.math.distance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.interaction.measure.DihedralTool
 import com.krystals.interaction.state.InteractionState
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sin
 import kotlin.math.sqrt
 
 @Deprecated("Use FilamentRenderer.renderToBitmap; retained as the Canvas fallback exporter")
@@ -330,26 +327,16 @@ object CrystalImageExporter {
             }
         }.sortedBy { it.depth }
 
-        // Per v0.5.4: depth cueing fades COLOUR toward the background (not alpha) — mirror
-        // CrystalViewport. Convention 近=正/远=负: nearest atom ≈ +3, farthest ≈ -3; near>=far.
-        val depthRange = run {
-            val ds = visiblePoints.map { it.z }   // 与 viewport 一致: 仅可见原子
-            if (ds.isEmpty()) null else (ds.min() to ds.max())
-        }
+        val depthRange = expandedCellDepthRange(
+            snapshot.structure.lattice,
+            snapshot.expansion,
+            center,
+            controller.rotation,
+        )
         val bgArgb = appearance.backgroundArgb.toInt()
         fun dofFog(depth: Double): Float {
-            if (!appearance.depthOfFieldEnabled || depthRange == null) return 0f
-            val (dMin, dMax) = depthRange
-            val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
-            val centre = (dMin + dMax) / 2.0
-            // d: 近(大z)=正、远(小z)=负;最近≈+3,最远≈-3。
-            val d = ((depth - centre) / dSpan * 6.0).toFloat()
-            val near = appearance.dofNear   // 正,近端不淡化阈值
-            val far = appearance.dofFar     // 负,远端全淡化阈值
-            if (near <= far) return if (d >= near) 0f else 1f
-            if (d >= near) return 0f        // 近端不淡化
-            if (d <= far) return 1f         // 远端全淡化
-            return ((near - d) / (near - far)).coerceIn(0f, 1f)
+            if (!appearance.depthOfFieldEnabled) return 0f
+            return legacyDepthCueFog(depth, depthRange, appearance.dofNear, appearance.dofFar)
         }
 
         // Per v0.5.4: contact shadows removed (user request).
@@ -375,7 +362,7 @@ object CrystalImageExporter {
 
     private fun drawDihedralPlanePrimitive(canvas: Canvas, plane: DihedralPlanePrimitive, appearance: ViewerAppearance, fog: Float, bgArgb: Int) {
         if (plane.screenVerts.size != 4) return
-        val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+        val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
         val normal = if (plane.normalCam.z >= 0.0) plane.normalCam else plane.normalCam * -1.0
         val strength = (0.58f + normal.normalized().dot(light).coerceIn(0.0, 1.0).toFloat() * appearance.lightIntensity * 0.42f).coerceIn(0f, 1f)
         val alpha = (0.44f * (1f - fog * 0.7f) * 255f).toInt().coerceIn(0, 255)
@@ -448,11 +435,13 @@ object CrystalImageExporter {
             paint.alpha = (opacity * 255).toInt()
         }
         if (appearance.reflectionEnabled) {
-            val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
-            // Per v0.5.4: highlight沿光在屏幕平面的方向偏移(light.xy 已含 cos(elevation)),量=r*0.38。
-            // 掠射→偏移最大;正射→居中。与 viewport 一致。
-            val offsetX = light.x.toFloat() * point.radius * .38f
-            val offsetY = light.y.toFloat() * point.radius * .38f
+            val offset = legacyHighlightOffset(
+                point.radius.toDouble(),
+                appearance.lightAzimuth,
+                appearance.lightElevation,
+            )
+            val offsetX = offset.x.toFloat()
+            val offsetY = offset.y.toFloat()
             // Per v0.5.4: highlight alpha 含 opacity + lightIntensity + (1-fog);paint.alpha 置 255 让
             // shader 自带 alpha 唯一生效,避免与 sphere 的 paint.alpha 叠乘成 opacity²(viewport 不叠乘)。
             val highlightAlpha = (appearance.lightIntensity.coerceIn(.05f, 1f) * opacity * (1f - fog) * 255).toInt().coerceIn(0, 255)
@@ -514,7 +503,7 @@ object CrystalImageExporter {
         val perpX = -dirY
         val perpY = dirX
 
-        val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+        val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
         val lightOnPerp = (light.x.toFloat() * perpX + light.y.toFloat() * perpY).toDouble()
 
         val start = Point(0L, a.element, a.siteId, a.siteLabel, startX, startY, a.z, a.radius, a.occupancy, a.fractional, a.cartesian, a.isShell, a.isBoundaryImage)
@@ -612,7 +601,7 @@ object CrystalImageExporter {
             // vector (light+view, view=(0,0,1) since +Z is toward the viewer). The whole face shares
             // one normal so the specular is uniform (flat reflective film / plastic). Shininess≈48.
             var fill = if (appearance.polyhedronReflectionEnabled) {
-                val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+                val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
                 val view = Vec3(0.0, 0.0, 1.0)
                 val half = (light + view).normalized()
                 val diff = cam.dot(light).coerceIn(0.0, 1.0)
@@ -654,17 +643,6 @@ object CrystalImageExporter {
         return Color.argb(Color.alpha(color), (Color.red(color) * factor).toInt(), (Color.green(color) * factor).toInt(), (Color.blue(color) * factor).toInt())
     }
 
-    /**
-     * Per v0.5.2: azimuth/elevation (degrees) → unit light direction in screen space. X right, Y down,
-     * +Z toward the viewer. elevation is clamped to 0..90 (light stays at/above the horizon). Mirrors
-     * CrystalViewport.lightDirection so both renderers shade consistently.
-     */
-    private fun lightDirection(azimuthDeg: Float, elevationDeg: Float): Vec3 {
-        val a = azimuthDeg / 180.0 * PI
-        val e = elevationDeg.coerceIn(0f, 90f) / 180.0 * PI
-        return Vec3(cos(a) * cos(e), sin(a) * cos(e), sin(e))
-    }
-
     private fun lighten(color: Int, factor: Float): Int {
         return Color.argb(
             Color.alpha(color),
@@ -701,7 +679,7 @@ object CrystalImageExporter {
         val arrowLen = 56f
         val halfWidth = 3f
         val headLen = 16f
-        val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+        val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
         val lightX = light.x.toFloat()
         val lightY = light.y.toFloat()
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -753,6 +731,41 @@ object CrystalImageExporter {
             paint.color = Color.WHITE
             canvas.drawText(labels[index], tipX + unitX * 8f - 6f, tipY + unitY * 8f + 10f, paint)
         }
+        val hubRadius = 7f
+        val hubBase = 0xFF77777D.toInt()
+        paint.style = Paint.Style.FILL
+        paint.shader = RadialGradient(
+            origin.x,
+            origin.y,
+            hubRadius,
+            intArrayOf(hubBase, darken(hubBase, 0.58f)),
+            null,
+            Shader.TileMode.CLAMP,
+        )
+        canvas.drawCircle(origin.x, origin.y, hubRadius, paint)
+        paint.shader = null
+        if (appearance.reflectionEnabled) {
+            val offset = legacyHighlightOffset(
+                hubRadius.toDouble(),
+                appearance.lightAzimuth,
+                appearance.lightElevation,
+            )
+            paint.shader = RadialGradient(
+                origin.x - offset.x.toFloat(),
+                origin.y - offset.y.toFloat(),
+                hubRadius * (0.35f + 0.75f * appearance.diffusion),
+                Color.argb((appearance.lightIntensity.coerceIn(0.05f, 1f) * 255f).toInt(), 255, 255, 255),
+                Color.TRANSPARENT,
+                Shader.TileMode.CLAMP,
+            )
+            canvas.drawCircle(origin.x, origin.y, hubRadius, paint)
+            paint.shader = null
+        }
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 0.9f
+        paint.color = Color.argb((0.28f * 255f).toInt(), 0, 0, 0)
+        canvas.drawCircle(origin.x, origin.y, hubRadius, paint)
+        paint.style = Paint.Style.FILL
     }
 
     private fun drawFrames(canvas: Canvas, snapshot: BondNetwork, appearance: ViewerAppearance, center: Vec3, controller: ViewerController, scale: Float, width: Int, height: Int) {

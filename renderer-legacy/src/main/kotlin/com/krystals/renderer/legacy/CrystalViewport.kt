@@ -50,13 +50,10 @@ import com.krystals.interaction.state.ViewerSessionState
 import com.krystals.interaction.measure.DihedralTool
 import com.krystals.interaction.selection.Picker
 import com.krystals.interaction.selection.PickResult
-import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sin
 import kotlin.math.sqrt
 
 internal data class ProjectedAtom(val atom: AtomImage, val point: Offset, val depth: Double, val radius: Float)
@@ -547,28 +544,18 @@ private fun LegacyCanvasViewport(
             }
         }.sortedBy { it.depth }
 
-        // Per v0.5.4: depth cueing fades COLOUR toward the background (not alpha). dofFog returns a
-        // fog amount in 0..1 (0 = near / no fade, 1 = far / fully faded). Near/Far are signed scene
-        // distances (1 unit = 1/6 of the depth span, so the NEAREST atom = +3, the FARTHEST = -3):
-        // near=正(toward camera)、far=负(away), 0 = crystal centre. Convention: near >= far.
-        val depthRange = run {
-            val ds = visibleProjected.map { it.depth }
-            if (ds.isEmpty()) null else (ds.min() to ds.max())
-        }
+        // Depth normalization comes from the displayed supercell bounds, so rotating a sparse or
+        // partially hidden structure cannot change the cueing scale.
+        val depthRange = expandedCellDepthRange(
+            snapshot.structure.lattice,
+            snapshot.expansion,
+            center,
+            controller.rotation,
+        )
         val bgColor = colorFromArgb(appearance.backgroundArgb)
         fun dofFog(depth: Double): Float {
-            if (!appearance.depthOfFieldEnabled || depthRange == null) return 0f
-            val (dMin, dMax) = depthRange
-            val dSpan = (dMax - dMin).coerceAtLeast(1e-6)
-            val centre = (dMin + dMax) / 2.0
-            // d: 近(大z)=正、远(小z)=负;最近≈+3,最远≈-3。
-            val d = ((depth - centre) / dSpan * 6.0).toFloat()
-            val near = appearance.dofNear   // 正,近端不淡化阈值
-            val far = appearance.dofFar     // 负,远端全淡化阈值
-            if (near <= far) return if (d >= near) 0f else 1f
-            if (d >= near) return 0f        // 近端不淡化
-            if (d <= far) return 1f         // 远端全淡化
-            return ((near - d) / (near - far)).coerceIn(0f, 1f)  // 中间线性(近→远,0→1)
+            if (!appearance.depthOfFieldEnabled) return 0f
+            return legacyDepthCueFog(depth, depthRange, appearance.dofNear, appearance.dofFar)
         }
 
         // Per v0.5.4: contact shadows removed (user request). The world light no longer casts a
@@ -661,10 +648,12 @@ private fun DrawScope.drawAtom(
         drawPath(wedgePath(-90f + occSweep, 360f - occSweep), faded)
     }
     if (appearance.reflectionEnabled) {
-        val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
-        // Per v0.5.4: highlight偏移沿光在屏幕平面的方向(light.xy 已含 cos(elevation) 因子),偏移量
-        // = r*0.38。掠射(e=0)→light.xy 模长最大→偏移最大;正射(e=90)→light.xy=0→居中。与预览球一致。
-        val highlightCenter = atom.point - Offset(light.x.toFloat(), light.y.toFloat()) * (atom.radius * 0.38f)
+        val highlightOffset = legacyHighlightOffset(
+            atom.radius.toDouble(),
+            appearance.lightAzimuth,
+            appearance.lightElevation,
+        )
+        val highlightCenter = atom.point - Offset(highlightOffset.x.toFloat(), highlightOffset.y.toFloat())
         // Per v0.5.3a: highlight alpha dims with fog so distant atoms lose their sheen naturally.
         val highlight = Brush.radialGradient(
             colors = listOf(
@@ -706,7 +695,7 @@ private fun DrawScope.drawDihedralPlane(
     background: Color,
 ) {
     if (plane.screenVerts.size != 4) return
-    val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+    val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
     val normal = if (plane.normalCam.z >= 0.0) plane.normalCam else plane.normalCam * -1.0
     val intensity = (0.58f + normal.normalized().dot(light).coerceIn(0.0, 1.0).toFloat() * appearance.lightIntensity * 0.42f)
         .coerceIn(0f, 1f)
@@ -763,7 +752,7 @@ private fun DrawScope.drawBond(
     if (clipped.getDistance() < 0.001f) return
     val perp = Offset(-dir.y, dir.x)
 
-    val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+    val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
     val lightOnPerp = (light.x.toFloat() * perp.x + light.y.toFloat() * perp.y).toDouble()
     val midpoint = Offset((start.x + end.x) / 2f, (start.y + end.y) / 2f)
 
@@ -846,18 +835,6 @@ private fun Color.blend(target: Color, t: Float) = Color(
     blue + (target.blue - blue) * t,
     alpha,
 )
-
-/**
- * Per v0.5.2: azimuth/elevation (degrees) → unit light direction in screen space. X right, Y down,
- * +Z toward the viewer. elevation is clamped to 0..90 so the light stays at/above the horizon —
- * below-horizon angles are meaningless for a reflection highlight (cos is even) and counter-intuitive.
- * Shared by atom / bond / polyhedron shading so the three light consistently.
- */
-private fun lightDirection(azimuthDeg: Float, elevationDeg: Float): Vec3 {
-    val a = azimuthDeg / 180.0 * PI
-    val e = (elevationDeg.coerceIn(0f, 90f)) / 180.0 * PI
-    return Vec3(cos(a) * cos(e), sin(a) * cos(e), sin(e))
-}
 
 /**
  * Build per-face renderables for a coordination polyhedron. Each face is a polygon (coplanar
@@ -954,7 +931,7 @@ private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appeara
             // via the half vector (light+view, view=(0,0,1) since +Z is toward the viewer). The whole
             // face shares one normal, so the specular term is uniform across the face — a flat
             // reflective film look (plastic) rather than a per-pixel sheen. Shininess≈48 (plastic).
-            val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+            val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
             val view = Vec3(0.0, 0.0, 1.0)
             val half = (light + view).normalized()
             val diff = face.normalCam.dot(light).coerceIn(0.0, 1.0)
@@ -1080,7 +1057,7 @@ private fun DrawScope.drawAxes(
     val arrowLen = 56f
     val halfWidth = 3f
     val headLen = 16f
-    val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+    val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
     val lightX = light.x.toFloat()
     val lightY = light.y.toFloat()
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1128,6 +1105,37 @@ private fun DrawScope.drawAxes(
         paint.color = android.graphics.Color.WHITE
         drawContext.canvas.nativeCanvas.drawText(labels[index], tip.x + unit.x * 8f - 6f, tip.y + unit.y * 8f + 10f, paint)
     }
+    val hubRadius = 7f
+    val hubBase = Color(0xFF77777D)
+    drawCircle(
+        Brush.radialGradient(
+            listOf(hubBase, hubBase.darken(0.58f)),
+            center = origin,
+            radius = hubRadius,
+        ),
+        hubRadius,
+        origin,
+    )
+    if (appearance.reflectionEnabled) {
+        val offset = legacyHighlightOffset(
+            hubRadius.toDouble(),
+            appearance.lightAzimuth,
+            appearance.lightElevation,
+        )
+        drawCircle(
+            Brush.radialGradient(
+                listOf(
+                    Color.White.copy(alpha = appearance.lightIntensity.coerceIn(0.05f, 1f)),
+                    Color.Transparent,
+                ),
+                center = origin - Offset(offset.x.toFloat(), offset.y.toFloat()),
+                radius = hubRadius * (0.35f + 0.75f * appearance.diffusion),
+            ),
+            hubRadius,
+            origin,
+        )
+    }
+    drawCircle(Color.Black.copy(alpha = 0.28f), hubRadius, origin, style = Stroke(0.9f))
 }
 
 private fun DrawScope.drawCellFrames(
