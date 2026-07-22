@@ -59,9 +59,17 @@ flowchart TB
         Repo["FileRepository<br/>CIF 读写 / PNG 导出"]
         Act["ActivationManager<br/>付费激活"]
     end
-    subgraph renderer["renderer · 渲染库"]
-        VP["CrystalViewport<br/>Canvas 视口"]
+    subgraph rendererCore["renderer-core · 后端无关场景"]
+        Builder["CrystalSceneBuilder"]
+        Scene["RenderScene / RenderObject"]
+        Primitive["AtomInstance / BondInstance / MeshInstance"]
+    end
+    subgraph rendererLegacy["renderer-legacy · Canvas-Legacy"]
+        VP["CrystalViewport<br/>旧 Canvas 视口"]
         Exp["CrystalImageExporter<br/>高清位图导出"]
+    end
+    subgraph rendererFilament["renderer-filament · Filament 边界"]
+        Filament["FilamentSceneRenderer"]
     end
     subgraph io["crystal-io · CIF 文件 IO"]
         Codec["CifCodec<br/>无损 CIF 解析/回写"]
@@ -90,8 +98,11 @@ flowchart TB
     Edit -->|"EditCommand"| Editor
     Editor --> Symmetry
     Symmetry --> Bonds
-    Bonds -->|"BondNetwork"| VP
-    Bonds -->|"BondNetwork"| Exp
+    Bonds -->|"BondNetwork"| Builder
+    Builder --> Scene
+    Scene --> Primitive
+    Scene --> VP
+    Scene --> Exp
     Bonds --> Coordination
     Coordination --> Hull
     Repo -->|"write 回写"| Codec
@@ -99,10 +110,12 @@ flowchart TB
     SG --> SpaceGroups
     Bonds --> Elements
 
-    app -.->|依赖| renderer
+    app -.->|依赖| rendererLegacy
     app -.->|依赖| analysis
     app -.->|依赖| io
-    renderer -.->|api 依赖| analysis
+    rendererCore -.->|api 依赖| analysis
+    rendererLegacy -.->|依赖| rendererCore
+    rendererFilament -.->|依赖| rendererCore
     io -.->|依赖| analysis
     analysis -.->|依赖| core
     analysis -.->|依赖| data
