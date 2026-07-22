@@ -12,8 +12,11 @@ import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
 import com.krystals.renderer.core.builder.CrystalSceneBuilder
+import com.krystals.renderer.core.builder.CrystalRenderSceneFactory
 import com.krystals.renderer.core.builder.SceneBuildOptions
 import com.krystals.renderer.core.primitive.MeshKind
+import com.krystals.renderer.core.style.RenderConfiguration
+import com.krystals.renderer.core.style.ViewerAppearance
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -58,6 +61,29 @@ class CrystalSceneBuilderTest {
         assertEquals(analysis.bonds.size, scene.bonds.size)
         assertTrue(scene.atoms.filter { it.atom.siteId == "Cl" }.all { !it.visible })
         assertFalse(scene.bonds.any { it.visible })
+    }
+
+    @Test
+    fun hiddenBondStrokesAndLegacyAppearanceFlagDoNotRemovePolyhedra() {
+        val structure = structure()
+        val rule = BondRule("Cs", "Cl", 0.1, 4.0, extendAcrossCell = true)
+        val analysis = BondDetector.buildNetwork(
+            structure,
+            BondConfiguration(listOf(rule)),
+            Expansion(),
+        )
+
+        val scene = CrystalRenderSceneFactory.build(
+            analysis = analysis,
+            appearance = ViewerAppearance(polyhedronEnabled = false),
+            renderConfiguration = RenderConfiguration(),
+            hiddenBondKeys = setOf(rule.key),
+            showBonds = false,
+            polyhedronSiteIds = setOf("Cs"),
+        )
+
+        assertFalse(scene.bonds.any { it.visible })
+        assertTrue(scene.meshes.isNotEmpty())
     }
 
     private fun structure() = CrystalStructure(

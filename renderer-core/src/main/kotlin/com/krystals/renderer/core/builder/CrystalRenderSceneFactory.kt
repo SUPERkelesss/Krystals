@@ -47,7 +47,8 @@ object CrystalRenderSceneFactory {
                 hiddenSiteIds = hiddenSiteIds,
                 hiddenBondKeys = hiddenBondKeys,
                 showBonds = showBonds,
-                polyhedronSiteIds = if (appearance.polyhedronEnabled) polyhedronSiteIds else emptySet(),
+                // Polyhedra are selected in the display panel; appearance only controls material.
+                polyhedronSiteIds = polyhedronSiteIds,
                 atomRadiusByElement = atoms.associate { it.species.symbol to RenderPalette.defaultRadius(it.species.symbol) },
                 atomMaterialBySite = atomMaterials,
                 bondMaterialBySite = bondMaterials,

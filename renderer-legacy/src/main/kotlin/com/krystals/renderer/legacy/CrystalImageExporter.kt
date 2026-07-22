@@ -37,10 +37,12 @@ object CrystalImageExporter {
 
     private sealed interface RenderPrimitive {
         val depth: Double
+        val depthLayer: Int get() = 0
     }
 
     private data class AtomPrimitive(val point: Point) : RenderPrimitive {
         override val depth = point.z
+        override val depthLayer = 2
     }
 
     private data class BondPrimitive(val a: Point, val b: Point, val width: Float) : RenderPrimitive {
@@ -48,6 +50,16 @@ object CrystalImageExporter {
         // viewer (larger z = closer). v0.5.2a's nearest-endpoint (maxOf) sorted mostly-far bonds
         // as fully near and let them occlude closer atoms.
         override val depth = (a.z + b.z) / 2.0
+        override val depthLayer = 1
+    }
+
+    private fun splitBondPrimitives(a: Point, b: Point, width: Float): List<BondPrimitive> {
+        val midpointX = (a.x + b.x) / 2f
+        val midpointY = (a.y + b.y) / 2f
+        val midpointDepth = (a.z + b.z) / 2.0
+        val midpointA = a.copy(x = midpointX, y = midpointY, z = midpointDepth, radius = 0f)
+        val midpointB = b.copy(x = midpointX, y = midpointY, z = midpointDepth, radius = 0f)
+        return listOf(BondPrimitive(a, midpointA, width), BondPrimitive(midpointB, b, width))
     }
 
     private data class PolyhedronFacePrimitive(
@@ -268,7 +280,8 @@ object CrystalImageExporter {
         val visiblePointIds = visible.map { it.id }.toSet()
         val visiblePoints = points.filter { it.atomId in visiblePointIds }
         val byId = points.associateBy { it.atomId }
-        val coordination = CoordinationAnalyzer.neighbors(snapshot, visibility.showBonds, visibility.hiddenBondPairs)
+        // Hidden bond strokes must not alter the actual coordination topology.
+        val coordination = CoordinationAnalyzer.neighbors(snapshot)
         val dihedralSelections = lockedMeasurements.filter { it.mode == MeasurementMode.DIHEDRAL } +
             if (measurementMode == MeasurementMode.DIHEDRAL && selectedAtomIds.size >= 4) {
                 listOf(LockedMeasurement(selectedAtomIds.takeLast(4), MeasurementMode.DIHEDRAL))
@@ -300,13 +313,10 @@ object CrystalImageExporter {
                     // extendAcrossCell. Boundary-image bonds are drawn by default.
                     if (externalBond && !bond.rule.extendAcrossCell) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(1.5f, 16f)
-                    add(BondPrimitive(a, b, width))
-                    if (externalBond && b.atomId in visibleExternalShellAtomIds) {
-                        add(AtomPrimitive(b))
-                    }
+                    addAll(splitBondPrimitives(a, b, width))
                 }
             }
-            if (appearance.polyhedronEnabled && visibility.polyhedronSites.isNotEmpty()) {
+            if (visibility.polyhedronSites.isNotEmpty()) {
                 points.filter {
                     (!it.isShell || it.isBoundaryImage) && it.siteId in visibility.polyhedronSites
                 }.forEach { center ->
@@ -325,7 +335,7 @@ object CrystalImageExporter {
                     }
                 }
             }
-        }.legacyBackToFront { it.depth }
+        }.legacyBackToFront(depthOf = { it.depth }, layerOf = { it.depthLayer })
 
         val depthRange = expandedCellDepthRange(
             snapshot.structure.lattice,

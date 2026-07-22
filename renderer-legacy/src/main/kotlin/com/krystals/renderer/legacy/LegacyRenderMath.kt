@@ -36,7 +36,10 @@ internal data class LegacyDepthRange(val min: Double, val max: Double) {
 }
 
 /** Canvas draws later items over earlier ones, so negative/far depth must precede positive/near depth. */
-internal fun <T> Iterable<T>.legacyBackToFront(depthOf: (T) -> Double): List<T> = sortedBy(depthOf)
+internal fun <T> Iterable<T>.legacyBackToFront(
+    depthOf: (T) -> Double,
+    layerOf: (T) -> Int = { 0 },
+): List<T> = sortedWith(compareBy<T> { depthOf(it) }.thenBy { layerOf(it) })
 
 /** Legacy camera space uses +Z toward the viewer and -Z away from the viewer. */
 internal fun legacyCameraDepth(cameraSpace: Vec3): Double = cameraSpace.z

@@ -16,8 +16,14 @@ class LegacyRenderMathTest {
         assertEquals(2.0, legacyCameraDepth(Vec3(0.0, 0.0, 2.0)))
         assertEquals(-2.0, legacyCameraDepth(Vec3(0.0, 0.0, -2.0)))
 
-        val drawOrder = listOf(2.0, -2.0, 0.0).legacyBackToFront { it }
+        val drawOrder = listOf(2.0, -2.0, 0.0).legacyBackToFront(depthOf = { it })
         assertEquals(listOf(-2.0, 0.0, 2.0), drawOrder)
+
+        val equalDepthLayers = listOf("atom", "face", "bond").legacyBackToFront(
+            depthOf = { 1.0 },
+            layerOf = { mapOf("face" to 0, "bond" to 1, "atom" to 2).getValue(it) },
+        )
+        assertEquals(listOf("face", "bond", "atom"), equalDepthLayers)
     }
 
     @Test fun highlightMovesFromRimToCenterWithElevation() {

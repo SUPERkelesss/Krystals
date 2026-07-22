@@ -116,6 +116,7 @@ import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 private enum class EditorTab { BASIC, ATOMS, BONDS, EXPANSION }
 
@@ -789,7 +790,7 @@ fun AppearanceDialog(
     tab: DocumentTab,
     onDismiss: () -> Unit,
     onApplied: (ViewerAppearance) -> Unit = {},
-    rendererBackend: RendererBackend = RendererBackend.FILAMENT,
+    rendererBackend: RendererBackend,
     onRendererBackendChanged: (RendererBackend) -> Unit = {},
     // Per v0.5.2a: press-and-hold Preview callbacks. onPreviewStart hands the in-dialog appearance
     // up so the viewer can render with it; onPreviewEnd restores the dialog.
@@ -870,7 +871,7 @@ fun AppearanceDialog(
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("化学键", "Bonds"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
             ToggleRow(localized("键反射", "Bond reflection"), appearance.bondReflectionEnabled) { appearance = appearance.copy(bondReflectionEnabled = it) }
-            LabeledSlider(localized("键半径", "Bond radius"), appearance.bondRadius, 0.02f..0.4f) { appearance = appearance.copy(bondRadius = it) }
+            LabeledSlider(localized("键半径", "Bond radius"), appearance.bondRadius, 0.02f..0.4f, decimals = 2) { appearance = appearance.copy(bondRadius = it) }
             LabeledSlider(localized("化学键不透明度", "Bond opacity"), appearance.bondOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(bondOpacity = it) }
             DropdownField(localized("键颜色", "Bond color"), bondColorLabels[appearance.bondColorMode.ordinal], bondColorLabels) { appearance = appearance.copy(bondColorMode = BondColorMode.entries[bondColorLabels.indexOf(it)]) }
             if (appearance.bondColorMode == BondColorMode.UNICOLOR) FlowRow {
@@ -883,11 +884,8 @@ fun AppearanceDialog(
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("多面体", "Polyhedra"), fontWeight = FontWeight.Bold)
-            ToggleRow(localized("显示多面体", "Show polyhedra"), appearance.polyhedronEnabled) { appearance = appearance.copy(polyhedronEnabled = it) }
-            if (appearance.polyhedronEnabled) {
-                ToggleRow(localized("多面体反射", "Polyhedron reflection"), appearance.polyhedronReflectionEnabled) { appearance = appearance.copy(polyhedronReflectionEnabled = it) }
-                LabeledSlider(localized("多面体不透明度", "Polyhedron opacity"), appearance.polyhedronOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(polyhedronOpacity = it) }
-            }
+            ToggleRow(localized("多面体反射", "Polyhedron reflection"), appearance.polyhedronReflectionEnabled) { appearance = appearance.copy(polyhedronReflectionEnabled = it) }
+            LabeledSlider(localized("多面体不透明度", "Polyhedron opacity"), appearance.polyhedronOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(polyhedronOpacity = it) }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("世界光源", "World light"), fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -905,9 +903,9 @@ fun AppearanceDialog(
             if (appearance.depthOfFieldEnabled) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        // Per v0.5.4: 景深标度近=正/远=负,约定 near>=far(起≥止)。连续滑块 -5..5。
-                        LabeledSlider(localized("起始值", "Near"), appearance.dofNear, -5f..5f) { v -> appearance = appearance.copy(dofNear = v.coerceAtLeast(appearance.dofFar)) }
-                        LabeledSlider(localized("终止值", "Far"), appearance.dofFar, -5f..5f) { v -> appearance = appearance.copy(dofFar = v.coerceAtMost(appearance.dofNear)) }
+                        // The depth-cue mix runs from 1 to 0 as depth increases: far/start -> near/end.
+                        LabeledSlider(localized("起始值", "Start"), appearance.dofFar, -5f..5f) { v -> appearance = appearance.copy(dofFar = v.coerceAtMost(appearance.dofNear)) }
+                        LabeledSlider(localized("终止值", "End"), appearance.dofNear, -5f..5f) { v -> appearance = appearance.copy(dofNear = v.coerceAtLeast(appearance.dofFar)) }
                     }
                     DepthCueingPreview(appearance, Modifier.padding(start = 10.dp).size(112.dp))
                 }
@@ -975,7 +973,14 @@ fun AppearanceDialog(
 @Composable
 private fun ToggleRow(label: String, checked: Boolean, onChecked: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().clickable { onChecked(!checked) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Text(label, modifier = Modifier.weight(1f)); androidx.compose.material3.Switch(checked, onChecked) } }
 @Composable
-private fun LabeledSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, percentage: Boolean = false, steps: Int = 0, onValue: (Float) -> Unit) { Text("$label  ${if (percentage) "%.0f%%".format(value * 100) else "%.1f".format(value)}"); Slider(value, onValue, valueRange = range, steps = steps) }
+private fun LabeledSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, percentage: Boolean = false, steps: Int = 0, decimals: Int = 1, onValue: (Float) -> Unit) {
+    Text("$label  ${formatSliderValue(value, percentage, decimals)}")
+    Slider(value, onValue, valueRange = range, steps = steps)
+}
+
+internal fun formatSliderValue(value: Float, percentage: Boolean = false, decimals: Int = 1): String =
+    if (percentage) String.format(Locale.ROOT, "%.0f%%", value * 100)
+    else String.format(Locale.ROOT, "%.${decimals}f", value)
 
 @Composable
 private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifier = Modifier) {

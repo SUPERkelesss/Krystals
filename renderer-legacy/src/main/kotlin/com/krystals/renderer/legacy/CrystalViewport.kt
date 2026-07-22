@@ -60,6 +60,7 @@ internal data class ProjectedAtom(val atom: AtomImage, val point: Offset, val de
 
 private sealed interface Renderable {
     val depth: Double
+    val depthLayer: Int get() = 0
 }
 
 private data class AtomRenderable(
@@ -68,6 +69,7 @@ private data class AtomRenderable(
     val lockedHighlight: Boolean = false,
 ) : Renderable {
     override val depth = atom.depth
+    override val depthLayer = 2
 }
 
 private data class BondRenderable(val a: ProjectedAtom, val b: ProjectedAtom, val width: Float) : Renderable {
@@ -76,6 +78,15 @@ private data class BondRenderable(val a: ProjectedAtom, val b: ProjectedAtom, va
     // sorted a mostly-far bond as if fully near and let it paint over closer atoms — the opposite
     // of correct occlusion. The centre is the stable painter's-algorithm key for a convex segment.
     override val depth = (a.depth + b.depth) / 2.0
+    override val depthLayer = 1
+}
+
+private fun splitBondRenderables(a: ProjectedAtom, b: ProjectedAtom, width: Float): List<BondRenderable> {
+    val midpoint = Offset((a.point.x + b.point.x) / 2f, (a.point.y + b.point.y) / 2f)
+    val midpointDepth = (a.depth + b.depth) / 2.0
+    val midpointA = ProjectedAtom(a.atom, midpoint, midpointDepth, 0f)
+    val midpointB = ProjectedAtom(b.atom, midpoint, midpointDepth, 0f)
+    return listOf(BondRenderable(a, midpointA, width), BondRenderable(midpointB, b, width))
 }
 
 /**
@@ -472,7 +483,8 @@ private fun LegacyCanvasViewport(
             controller.projectedAtoms = visibleProjected
         }
 
-        val coordination = CoordinationAnalyzer.neighbors(snapshot, visibility.showBonds, visibility.hiddenBondPairs)
+        // Hidden bond strokes must not alter the actual coordination topology.
+        val coordination = CoordinationAnalyzer.neighbors(snapshot)
         val lockedHighlightIds = lockedMeasurements.flatMap { it.atomIds }.toSet() + lockedInspectedAtomIds
         val highlightedIds = selectedAtomIds.toSet() + lockedHighlightIds + listOfNotNull(inspectedAtomId)
         val atomsById = snapshot.atoms.associateBy { it.id }
@@ -508,15 +520,10 @@ private fun LegacyCanvasViewport(
                     // extendAcrossCell. Boundary-image bonds are drawn by default.
                     if (externalBond && !bond.rule.extendAcrossCell) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(1.5f, 16f)
-                    add(BondRenderable(a, b, width))
-                    // An external-shell atom sits outside the primary cell, so its ball must be drawn
-                    // too (primary/boundary atoms are drawn above).
-                    if (externalBond && b.atom.id in visibleExternalShellAtomIds) {
-                        add(AtomRenderable(b, b.atom.id in highlightedIds, b.atom.id in lockedHighlightIds))
-                    }
+                    addAll(splitBondRenderables(a, b, width))
                 }
             }
-            if (appearance.polyhedronEnabled && visibility.polyhedronSites.isNotEmpty()) {
+            if (visibility.polyhedronSites.isNotEmpty()) {
                 // Polyhedra use the full (unfiltered) neighbor set so hiding a bond or a ligand atom
                 // does not dissolve the polyhedron — visibility is decoupled per the v0.3.0 fix.
                 // Per v0.3.42: boundary images are visible atoms too, so they also act as polyhedron
@@ -542,7 +549,7 @@ private fun LegacyCanvasViewport(
                     }
                 }
             }
-        }.legacyBackToFront { it.depth }
+        }.legacyBackToFront(depthOf = { it.depth }, layerOf = { it.depthLayer })
 
         // Depth normalization comes from the displayed supercell bounds, so rotating a sparse or
         // partially hidden structure cannot change the cueing scale.

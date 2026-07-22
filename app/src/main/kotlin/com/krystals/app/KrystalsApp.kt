@@ -945,6 +945,21 @@ private fun ViewerScreen(
             actions = {
                 IconButton(onClick = { tab.undo() }, enabled = tab.history.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, localized("撤回", "Undo")) }
                 IconButton(onClick = { tab.redo() }, enabled = tab.history.canRedo) { Icon(Icons.AutoMirrored.Filled.Redo, localized("前进", "Redo")) }
+                IconButton(
+                    modifier = Modifier.size(36.dp),
+                    onClick = {
+                        selectBackend(
+                            if (effectiveBackend == RendererBackend.FILAMENT) RendererBackend.CANVAS_LEGACY
+                            else RendererBackend.FILAMENT,
+                        )
+                    },
+                ) {
+                    Text(
+                        if (effectiveBackend == RendererBackend.FILAMENT) "3D" else "2D",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
                 IconButton(onClick = { appearanceOpen = true }) { Icon(Icons.Default.ColorLens, null) }
                 ThemeSelector(themeMode, onTheme = { mode -> viewModel.tabs.forEach { it.recordHistory() }; onTheme(mode) })
             },
