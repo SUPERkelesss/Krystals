@@ -67,7 +67,7 @@ private sealed interface Renderable {
     val depth: Double
 }
 
-private data class AtomRenderable(val atom: ProjectedAtom, val selected: Boolean) : Renderable {
+private data class AtomRenderable(val atom: ProjectedAtom, val selected: Boolean, val lockedHighlight: Boolean = false) : Renderable {
     override val depth = atom.depth
 }
 
@@ -100,6 +100,8 @@ private data class PolyhedronFaceRenderable(
 ) : Renderable {
     override val depth = faceDepth
 }
+
+private data class DihedralPlaneRenderable(val screenVerts: List<Offset>, val normalCam: Vec3, override val depth: Double) : Renderable
 
 @Stable
 class ViewerController {
@@ -188,6 +190,7 @@ fun CrystalViewport(
     onInspectionLockToggle: (atomId: Long, isLocked: Boolean) -> Unit = { _, _ -> },
     onAtomTap: (AtomImage) -> Unit = {},
     onViewMoved: () -> Unit = {},
+    onBlankTap: () -> Unit = {},
 ) {
     val background = colorFromArgb(appearance.backgroundArgb)
     var lastTap by remember { mutableStateOf<TapEvent?>(null) }
@@ -248,7 +251,7 @@ fun CrystalViewport(
                                         } else {
                                             onAtomTap(atom)
                                         }
-                                    }
+                                    } ?: onBlankTap()
                                 }
                             }
                             break
@@ -319,8 +322,23 @@ fun CrystalViewport(
         }
 
         val coordination = CoordinationAnalyzer.neighbors(snapshot, visibility.showBonds, visibility.hiddenBondPairs)
+        val measurementHighlightIds = lockedMeasurements.flatMap { it.atomIds }.toSet()
+        val lockedHighlightIds = measurementHighlightIds + lockedInspectedAtomIds
+        val highlightedIds = selectedAtomIds.toSet() + lockedHighlightIds + listOfNotNull(inspectedAtomId)
+        val atomsById = snapshot.atoms.associateBy { it.id }
+        val dihedralSelections = lockedMeasurements.filter { it.mode == MeasurementMode.DIHEDRAL } +
+            if (measurementMode == MeasurementMode.DIHEDRAL && selectedAtomIds.size >= 4) listOf(LockedMeasurement(selectedAtomIds.takeLast(4), MeasurementMode.DIHEDRAL)) else emptyList()
+        val dihedralPlanes = dihedralSelections.flatMap { measurement ->
+            val positions = measurement.atomIds.takeLast(4).mapNotNull { atomsById[it]?.cartesianCoordinate?.toVec3() }
+            if (positions.size != 4) return@flatMap emptyList()
+            DihedralPlaneGeometryBuilder.build(positions[0], positions[1], positions[2], positions[3]).map { plane ->
+                val rotatedVertices = plane.vertices.map { controller.rotation * (it - center) }
+                DihedralPlaneRenderable(rotatedVertices.map(::project), controller.rotation * plane.normal, rotatedVertices.map { it.z }.average())
+            }
+        }
         val renderables = buildList<Renderable> {
-            visibleProjected.forEach { add(AtomRenderable(it, it.atom.id in selectedAtomIds)) }
+            addAll(dihedralPlanes)
+            visibleProjected.forEach { add(AtomRenderable(it, it.atom.id in highlightedIds, it.atom.id in lockedHighlightIds)) }
             if (visibility.showBonds) {
                 snapshot.bonds.forEach { bond ->
                     val a = byId[bond.atomA] ?: return@forEach
@@ -338,7 +356,7 @@ fun CrystalViewport(
                     // An external-shell atom sits outside the primary cell, so its ball must be drawn
                     // too (primary/boundary atoms are drawn above).
                     if (externalBond && b.atom.id in visibleExternalShellAtomIds) {
-                        add(AtomRenderable(b, b.atom.id in selectedAtomIds))
+                        add(AtomRenderable(b, b.atom.id in highlightedIds, b.atom.id in lockedHighlightIds))
                     }
                 }
             }
@@ -402,9 +420,10 @@ fun CrystalViewport(
                 // Per v0.5.3a: depth cueing blends each object's colour toward the background by its
                 // fog amount; opacity is unchanged. Bonds split at the midpoint so each half fades by
                 // its endpoint atom's depth (continuous fade into the atoms).
-                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, appearance, renderConfiguration, dofFog(renderable.depth), bgColor)
+                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, renderable.lockedHighlight, appearance, renderConfiguration, dofFog(renderable.depth), bgColor)
                 is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, renderConfiguration, visibility.hiddenSites, ::dofFog, bgColor)
                 is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance, dofFog(renderable.depth), bgColor)
+                is DihedralPlaneRenderable -> drawDihedralPlane(renderable, appearance, dofFog(renderable.depth), bgColor)
             }
         }
         // Per v0.2.3: draw the locked (persistent) measurement/info windows first, then the active
@@ -428,9 +447,20 @@ fun CrystalViewport(
     }
 }
 
+private fun DrawScope.drawDihedralPlane(plane: DihedralPlaneRenderable, appearance: ViewerAppearance, fog: Float, background: Color) {
+    if (plane.screenVerts.size != 4) return
+    val light = lightDirection(appearance.lightAzimuth, appearance.lightElevation)
+    val normal = if (plane.normalCam.z >= 0.0) plane.normalCam else plane.normalCam * -1.0
+    val intensity = (0.58f + normal.normalized().dot(light).coerceIn(0.0, 1.0).toFloat() * appearance.lightIntensity * 0.42f).coerceIn(0f, 1f)
+    val shaded = Color(0xFF9966CC).copy(alpha = 0.44f).blend(background, fog).copy(red = 0.60f * intensity, green = 0.40f * intensity, blue = 0.80f * intensity, alpha = 0.44f)
+    val path = Path().apply { moveTo(plane.screenVerts[0].x, plane.screenVerts[0].y); plane.screenVerts.drop(1).forEach { lineTo(it.x, it.y) }; close() }
+    drawPath(path, Brush.linearGradient(listOf(shaded, shaded.copy(alpha = 0.25f), Color.Transparent), start = plane.screenVerts[0], end = plane.screenVerts[3]))
+}
+
 private fun DrawScope.drawAtom(
     atom: ProjectedAtom,
     selected: Boolean,
+    lockedHighlight: Boolean,
     appearance: ViewerAppearance,
     renderConfiguration: RenderConfiguration,
     fog: Float = 0f,
@@ -440,7 +470,7 @@ private fun DrawScope.drawAtom(
     // unchanged (atomOpacity only), so distant atoms dissolve into the bg rather than go transparent.
     val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
     if (opacity < 0.01f) {
-        if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))
+        if (selected) drawCircle(if (lockedHighlight) Color(0xFFCFA7F5) else Color(0xFF7542A5), atom.radius + 5f, atom.point, style = Stroke(if (lockedHighlight) 6f else 5f))
         return
     }
     val rawBase = colorFromArgb(
@@ -507,7 +537,7 @@ private fun DrawScope.drawAtom(
         }
     }
     drawCircle(Color.Black.copy(alpha = 0.28f * opacity), atom.radius, atom.point, style = Stroke(max(0.8f, atom.radius * 0.045f)))
-    if (selected) drawCircle(Color(0xFF9966CC), atom.radius + 4f, atom.point, style = Stroke(3f))
+    if (selected) drawCircle(if (lockedHighlight) Color(0xFFCFA7F5) else Color(0xFF7542A5), atom.radius + 4f, atom.point, style = Stroke(if (lockedHighlight) 6f else 5f))
 }
 
 private fun DrawScope.drawBond(

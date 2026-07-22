@@ -5,6 +5,7 @@ package com.krystals.app
 import android.Manifest
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.res.Configuration
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -13,7 +14,10 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
@@ -52,6 +56,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ColorLens
@@ -103,6 +109,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -122,6 +129,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -187,6 +195,17 @@ fun KrystalsRoot(
     }
     var language by remember {
         mutableStateOf(preferences.getString("language", if (java.util.Locale.getDefault().language == "zh") "zh" else "en") ?: "en")
+    }
+    val localizedConfiguration = remember(language) {
+        Configuration(activity.resources.configuration).apply {
+            setLocale(java.util.Locale.forLanguageTag(if (language == "zh") "zh-CN" else "en"))
+        }
+    }
+    val localizedContext = remember(language) { activity.createConfigurationContext(localizedConfiguration) }
+    fun applyLanguage(value: String) {
+        if (language == value) return
+        language = value
+        preferences.edit().putString("language", value).apply()
     }
     // Per v0.5.2a: load the persisted global appearance once at startup (falls back to defaults).
     LaunchedEffect(Unit) {
@@ -389,7 +408,7 @@ fun KrystalsRoot(
         }
     }
 
-    fun save(tab: DocumentTab) {
+    fun save(tab: DocumentTab, afterSave: () -> Unit = {}) {
         val uri = tab.uri
         if (uri == null || tab.isNew || tab.name != tab.savedName) {
             pendingSaveTabId = tab.id
@@ -407,7 +426,7 @@ fun KrystalsRoot(
                 withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, content) }
                 tab.parsed = CifCodec.parseStructure(content, tab.parsed.blockIndex)
                 tab.dirty = false
-            }.onSuccess { showMessage("Saved ${tab.name}") }.onFailure { showMessage(it.message ?: "Save failed") }
+            }.onSuccess { showMessage("Saved ${tab.name}"); afterSave() }.onFailure { showMessage(it.message ?: "Save failed") }
         }
     }
 
@@ -435,10 +454,29 @@ fun KrystalsRoot(
     fun requestExit() {
         if (viewModel.tabs.any { it.dirty }) exitRequest = true else activity.finishAndRemoveTask()
     }
-    BackHandler(enabled = viewModel.tabs.isNotEmpty()) {
-        if (viewModel.current?.editorOpen == true) viewModel.current?.editorOpen = false else requestExit()
+    BackHandler(enabled = true) {
+        when {
+            exitRequest -> exitRequest = false
+            closeRequest != null -> closeRequest = null
+            pendingOpen != null -> pendingOpen = null
+            pendingLargeOpen != null -> pendingLargeOpen = null
+            helpOpen -> helpOpen = false
+            sponsorOpen -> sponsorOpen = false
+            presetOpen -> presetOpen = false
+            onlineSourceOpen -> onlineSourceOpen = false
+            activationOpen -> activationOpen = false
+            mpKeyDialogOpen -> mpKeyDialogOpen = false
+            mpPremiumOpen -> mpPremiumOpen = false
+            mpCautionOpen -> mpCautionOpen = false
+            viewModel.current != null -> { val index = viewModel.selectedIndex; if (viewModel.current?.dirty == true) closeRequest = index else viewModel.close(index) }
+            else -> activity.finishAndRemoveTask()
+        }
     }
 
+    CompositionLocalProvider(
+        LocalContext provides localizedContext,
+        LocalConfiguration provides localizedConfiguration,
+    ) {
     KrystalsTheme(themeMode) {
         Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { outerPadding ->
             Box(Modifier.fillMaxSize().padding(outerPadding)) {
@@ -448,11 +486,15 @@ fun KrystalsRoot(
                         onOpenPreset = { presetOpen = true },
                         onNew = viewModel::createNew,
                         onOnlineSource = { onlineSourceOpen = true },
+                        themeMode = themeMode, onTheme = ::applyTheme, language = language,
+                        onLanguage = ::applyLanguage,
+                        onHelp = { helpOpen = true }, onAbout = { aboutOpen = true }, onSponsor = { sponsorOpen = true }, onExit = ::requestExit,
                     )
                 } else {
                     ViewerScreen(
                         viewModel = viewModel,
-                        onSave = ::save,
+                        preferences = preferences,
+                        onSave = { save(it) },
                         onOpen = { openLauncher.launch(arrayOf("chemical/x-cif", "text/plain", "application/octet-stream")) },
                         onOpenPreset = { presetOpen = true },
                         onSaveToPreset = {
@@ -474,10 +516,27 @@ fun KrystalsRoot(
                         onExport = ::requestExport,
                         onExit = ::requestExit,
                         onClose = { index -> if (viewModel.tabs[index].dirty) closeRequest = index else viewModel.close(index) },
+                        onBackCloseCurrent = {
+                            when {
+                                pendingOpen != null -> pendingOpen = null
+                                pendingLargeOpen != null -> pendingLargeOpen = null
+                                closeRequest != null -> closeRequest = null
+                                exitRequest -> exitRequest = false
+                                helpOpen -> helpOpen = false
+                                sponsorOpen -> sponsorOpen = false
+                                presetOpen -> presetOpen = false
+                                onlineSourceOpen -> onlineSourceOpen = false
+                                activationOpen -> activationOpen = false
+                                mpKeyDialogOpen -> mpKeyDialogOpen = false
+                                mpPremiumOpen -> mpPremiumOpen = false
+                                mpCautionOpen -> mpCautionOpen = false
+                                else -> { val index = viewModel.selectedIndex; if (viewModel.current?.dirty == true) closeRequest = index else viewModel.close(index) }
+                            }
+                        },
                         themeMode = themeMode,
                         onTheme = ::applyTheme,
                         language = language,
-                        onLanguage = { value -> language = value; preferences.edit().putString("language", value).apply(); activity.recreate() },
+                        onLanguage = ::applyLanguage,
                         onMessage = ::showMessage,
                         onHelp = { helpOpen = true },
                         onAbout = { aboutOpen = true },
@@ -536,7 +595,7 @@ fun KrystalsRoot(
             onDismissRequest = { closeRequest = null },
             title = { Text(localized("保存修改？", "Save changes?")) },
             text = { Text(tab.name) },
-            confirmButton = { TextButton(onClick = { save(tab); closeRequest = null }) { Text(stringResource(R.string.save)) } },
+            confirmButton = { TextButton(onClick = { save(tab) { viewModel.close(index); closeRequest = null } }) { Text(stringResource(R.string.save)) } },
             dismissButton = { Row { TextButton(onClick = { viewModel.close(index); closeRequest = null }) { Text(stringResource(R.string.discard)) }; TextButton(onClick = { closeRequest = null }) { Text(stringResource(R.string.cancel)) } } },
         ) else closeRequest = null
     }
@@ -545,7 +604,7 @@ fun KrystalsRoot(
         onDismissRequest = { exitRequest = false },
         title = { Text(localized("文件尚未保存", "Unsaved files")) },
         text = { Text(viewModel.tabs.filter { it.dirty }.joinToString("\n") { "• ${it.name}" }) },
-        confirmButton = { TextButton(onClick = { viewModel.current?.let(::save); exitRequest = false }) { Text(stringResource(R.string.save)) } },
+        confirmButton = { TextButton(onClick = { viewModel.current?.let { save(it) }; exitRequest = false }) { Text(stringResource(R.string.save)) } },
         dismissButton = { Row { TextButton(onClick = { activity.finishAndRemoveTask() }) { Text(stringResource(R.string.discard)) }; TextButton(onClick = { exitRequest = false }) { Text(stringResource(R.string.cancel)) } } },
     )
 
@@ -616,6 +675,7 @@ fun KrystalsRoot(
         onOpenParsed = { parsed, name -> codSearchOpen = false; openParsed(parsed, name, null) },
     )
     }
+    }
 }
 
 @Composable
@@ -624,8 +684,32 @@ private fun HomeScreen(
     onOpenPreset: () -> Unit,
     onNew: () -> Unit,
     onOnlineSource: () -> Unit,
+    themeMode: ThemeMode,
+    onTheme: (ThemeMode) -> Unit,
+    language: String,
+    onLanguage: (String) -> Unit,
+    onHelp: () -> Unit,
+    onAbout: () -> Unit,
+    onSponsor: () -> Unit,
+    onExit: () -> Unit,
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
+        Box(Modifier.align(Alignment.TopStart)) {
+            IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.Menu, null) }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(text = { Text(stringResource(R.string.import_local)) }, leadingIcon = { Icon(Icons.Default.FileOpen, null) }, onClick = { menuOpen = false; onOpen() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.open_preset_library)) }, leadingIcon = { Icon(Icons.Default.Inventory2, null) }, onClick = { menuOpen = false; onOpenPreset() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.Science, null) }, onClick = { menuOpen = false; onOnlineSource() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
+                LanguageMenuItem(language, onLanguage)
+                DropdownMenuItem(text = { Text(stringResource(R.string.help)) }, onClick = { menuOpen = false; onHelp() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.about)) }, onClick = { menuOpen = false; onAbout() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.sponsor)) }, onClick = { menuOpen = false; onSponsor() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.exit)) }, onClick = { menuOpen = false; onExit() })
+            }
+        }
+        Box(Modifier.align(Alignment.TopEnd)) { ThemeSelector(themeMode, onTheme) }
         // Per v0.4.3: in landscape the four import buttons span the full (very wide) screen and
         // look stretched; cap their width to half the screen there. Portrait keeps fillMaxWidth.
         BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -655,6 +739,7 @@ private fun HomeScreen(
 @Composable
 private fun ViewerScreen(
     viewModel: KrystalsViewModel,
+    preferences: SharedPreferences,
     onSave: (DocumentTab) -> Unit,
     onOpen: () -> Unit,
     onOpenPreset: () -> Unit,
@@ -664,6 +749,7 @@ private fun ViewerScreen(
     onExport: (Bitmap) -> Unit,
     onExit: () -> Unit,
     onClose: (Int) -> Unit,
+    onBackCloseCurrent: () -> Unit,
     themeMode: ThemeMode,
     onTheme: (ThemeMode) -> Unit,
     language: String,
@@ -676,6 +762,7 @@ private fun ViewerScreen(
     onApplyAppearance: (ViewerAppearance) -> Unit,
 ) {
     val tab = viewModel.current ?: return
+    @Suppress("UNUSED_VARIABLE") val historyVersion = tab.historyVersion
     var menuOpen by remember { mutableStateOf(false) }
     var toolOpen by remember(tab.id) { mutableStateOf(false) }
     var alignOpen by remember { mutableStateOf(false) }
@@ -683,19 +770,45 @@ private fun ViewerScreen(
     var displayOpen by remember { mutableStateOf(false) }
     var infoOpen by remember { mutableStateOf(false) }
     var appearanceOpen by remember { mutableStateOf(false) }
+    BackHandler(enabled = true) {
+        when {
+            appearanceOpen -> appearanceOpen = false
+            infoOpen -> infoOpen = false
+            displayOpen -> displayOpen = false
+            measureOpen -> measureOpen = false
+            alignOpen -> alignOpen = false
+            menuOpen -> menuOpen = false
+            toolOpen -> toolOpen = false
+            tab.editorOpen -> tab.editorOpen = false
+            else -> onBackCloseCurrent()
+        }
+    }
     // Per v0.5.2a: while non-null, the viewer renders with this edited appearance (press-and-hold
     // "Preview" in the Appearance dialog sets it and hides the dialog); null = use tab.appearance.
     var previewAppearance by remember { mutableStateOf<ViewerAppearance?>(null) }
     var floatingX by remember(tab.id) { mutableFloatStateOf(0f) }
     var floatingY by remember(tab.id) { mutableFloatStateOf(0f) }
+    var floatingDragging by remember(tab.id) { mutableStateOf(false) }
+    val floatingAnimation = if (floatingDragging) snap<Float>() else tween(durationMillis = 220, easing = FastOutSlowInEasing)
+    val renderedFloatingX by animateFloatAsState(floatingX, floatingAnimation, label = "floatingX")
+    val renderedFloatingY by animateFloatAsState(floatingY, floatingAnimation, label = "floatingY")
+    val floatingKey = remember(tab.id, tab.uri, tab.name) { "floating_${tab.uri ?: tab.name}" }
+    LaunchedEffect(tab.id) {
+        tab.floatingPosition = FloatingBallPosition(
+            preferences.getFloat("${floatingKey}_x", tab.floatingPosition.xFraction),
+            preferences.getFloat("${floatingKey}_y", tab.floatingPosition.yFraction),
+            runCatching { FloatingBallSnap.valueOf(preferences.getString("${floatingKey}_snap", tab.floatingPosition.snap.name)!!) }.getOrDefault(FloatingBallSnap.FREE),
+        )
+    }
     // Per v0.4.2: only the main ball (the 54dp center FAB) must stay on-screen — the radial tool
     // fan is allowed to overhang the edges when expanded, so the ball can roam across the whole
     // screen instead of being penned in by the 180dp container frame.
     var ballParentSize by remember(tab.id) { mutableStateOf(IntSize.Zero) }
     var ballOuterSize by remember(tab.id) { mutableStateOf(IntSize.Zero) }
     val mainBallPx = with(LocalDensity.current) { 54.dp.toPx() }
+    val snapThresholdPx = with(LocalDensity.current) { 24.dp.toPx() }
     // Re-clamp on rotation / tab swap / first layout so an out-of-range offset snaps back in bounds.
-    LaunchedEffect(ballParentSize, ballOuterSize, mainBallPx) {
+    LaunchedEffect(ballParentSize, ballOuterSize, mainBallPx, tab.floatingPosition) {
         if (ballParentSize != IntSize.Zero && ballOuterSize != IntSize.Zero) {
             // Container is align(BottomEnd); the main ball is centered in it. The allowed offset
             // range keeps only the main ball's edges inside the parent, letting the container itself
@@ -704,8 +817,12 @@ private fun ViewerScreen(
             val maxX = (ballOuterSize.width - mainBallPx) / 2f
             val minY = (ballOuterSize.height + mainBallPx) / 2f - ballParentSize.height
             val maxY = (ballOuterSize.height - mainBallPx) / 2f
-            floatingX = floatingX.coerceIn(minX, maxX)
-            floatingY = floatingY.coerceIn(minY, maxY)
+            val usableWidth = (ballParentSize.width - mainBallPx).coerceAtLeast(1f)
+            val usableHeight = (ballParentSize.height - mainBallPx).coerceAtLeast(1f)
+            val centerX = mainBallPx / 2f + tab.floatingPosition.xFraction * usableWidth
+            val centerY = mainBallPx / 2f + tab.floatingPosition.yFraction * usableHeight
+            floatingX = (centerX - (ballParentSize.width - ballOuterSize.width / 2f)).coerceIn(minX, maxX)
+            floatingY = (centerY - (ballParentSize.height - ballOuterSize.height / 2f)).coerceIn(minY, maxY)
         }
     }
     var legendExpanded by remember(tab.id) { mutableStateOf(false) }
@@ -752,20 +869,17 @@ private fun ViewerScreen(
                     } ?: onMessage("Unable to export current crystal")
                 })
                 HorizontalDivider()
-                DropdownMenuItem(text = { Text(stringResource(R.string.language)) }, leadingIcon = { Icon(Icons.Default.Settings, null) }, onClick = { }, trailingIcon = {
-                    Row {
-                        TextButton(onClick = { menuOpen = false; onLanguage("zh") }, enabled = language != "zh") { Text("中", fontWeight = FontWeight.Bold) }
-                        TextButton(onClick = { menuOpen = false; onLanguage("en") }, enabled = language != "en") { Text("EN", fontWeight = FontWeight.Bold) }
-                    }
-                })
+                LanguageMenuItem(language, onLanguage)
                 DropdownMenuItem(text = { Text(stringResource(R.string.help)) }, onClick = { menuOpen = false; onHelp() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.about)) }, onClick = { menuOpen = false; onAbout() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.sponsor)) }, onClick = { menuOpen = false; onSponsor() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.exit)) }, onClick = { menuOpen = false; onExit() })
             } } },
             actions = {
+                IconButton(onClick = { tab.undo() }, enabled = tab.history.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, localized("撤回", "Undo")) }
+                IconButton(onClick = { tab.redo() }, enabled = tab.history.canRedo) { Icon(Icons.AutoMirrored.Filled.Redo, localized("前进", "Redo")) }
                 IconButton(onClick = { appearanceOpen = true }) { Icon(Icons.Default.ColorLens, null) }
-                ThemeSelector(themeMode, onTheme)
+                ThemeSelector(themeMode, onTheme = { mode -> viewModel.tabs.forEach { it.recordHistory() }; onTheme(mode) })
             },
         )
         DocumentTabs(viewModel, onClose)
@@ -787,6 +901,7 @@ private fun ViewerScreen(
                         measurementMode = tab.measurementMode,
                         lockedMeasurements = tab.lockedMeasurements,
                         onMeasurementLockToggle = { measurement, isLocked ->
+                            tab.recordHistory()
                             // Tapping an unlocked (active) measurement box locks it into the list and
                             // clears the active selection; tapping a locked box removes just that one.
                             if (isLocked && measurement != null) {
@@ -804,9 +919,10 @@ private fun ViewerScreen(
                         onInspectAtom = { atom ->
                             // Per v0.2.4: double-tap opens an unlocked info window for the atom. Any
                             // already-locked windows are preserved; the active window is replaceable.
-                            tab.inspectedAtomId = atom.id
+                            tab.recordHistory(); tab.inspectedAtomId = atom.id
                         },
                         onInspectionLockToggle = { atomId, isLocked ->
+                            tab.recordHistory()
                             // Tapping an unlocked (active) info box locks it into the persistent list and
                             // clears the active window; tapping a locked box removes just that one.
                             if (isLocked) {
@@ -817,6 +933,7 @@ private fun ViewerScreen(
                             }
                         },
                         onViewMoved = {
+                            if (tab.selectedAtomIds.isNotEmpty() || tab.inspectedAtomId != null) tab.recordHistory()
                             if (tab.measurementMode != MeasurementMode.NONE) tab.selectedAtomIds = emptyList()
                             // Moving the view dismisses the unlocked info window; locked ones persist.
                             tab.inspectedAtomId = null
@@ -836,9 +953,15 @@ private fun ViewerScreen(
                                     tab.editingSiteId = atom.siteId; tab.atomEditMode = AtomEditMode.NONE; tab.editorOpen = true
                                 }
                                 AtomEditMode.NONE -> {
+                                    tab.recordHistory()
                                     val expected = when (tab.measurementMode) { MeasurementMode.LENGTH -> 2; MeasurementMode.ANGLE -> 3; MeasurementMode.DIHEDRAL -> 4; else -> 1 }
                                     tab.selectedAtomIds = if (tab.selectedAtomIds.size >= expected) listOf(atom.id) else tab.selectedAtomIds + atom.id
                                 }
+                            }
+                        },
+                        onBlankTap = {
+                            if (tab.selectedAtomIds.isNotEmpty() || tab.inspectedAtomId != null) {
+                                tab.recordHistory(); tab.selectedAtomIds = emptyList(); tab.inspectedAtomId = null
                             }
                         },
                     )
@@ -892,20 +1015,29 @@ private fun ViewerScreen(
                     }
                     .padding(18.dp)
                     .size(180.dp)
-                    .offset { IntOffset(floatingX.roundToInt(), floatingY.roundToInt()) }
+                    .offset { IntOffset(renderedFloatingX.roundToInt(), renderedFloatingY.roundToInt()) }
                     .alpha(floatingAlpha)
                     .pointerInput(tab.id) {
-                        detectDragGestures { change, amount ->
-                            change.consume()
-                            // Only the main ball (centered 54dp FAB) is kept on-screen; the
-                            // expanded radial tool fan may overhang the screen edges.
-                            val minX = (ballOuterSize.width + mainBallPx) / 2f - ballParentSize.width
-                            val maxX = (ballOuterSize.width - mainBallPx) / 2f
-                            val minY = (ballOuterSize.height + mainBallPx) / 2f - ballParentSize.height
-                            val maxY = (ballOuterSize.height - mainBallPx) / 2f
-                            floatingX = (floatingX + amount.x).coerceIn(minX, maxX)
-                            floatingY = (floatingY + amount.y).coerceIn(minY, maxY)
-                        }
+                        detectDragGestures(
+                            onDragStart = { floatingDragging = true },
+                            onDragEnd = {
+                                val center = FloatPoint(ballParentSize.width - ballOuterSize.width / 2f + floatingX, ballParentSize.height - ballOuterSize.height / 2f + floatingY)
+                                val snapped = FloatingBallLayout.snap(center, ballParentSize.width.toFloat(), ballParentSize.height.toFloat(), mainBallPx / 2f + snapThresholdPx)
+                                tab.floatingPosition = snapped
+                                preferences.edit().putFloat("${floatingKey}_x", snapped.xFraction).putFloat("${floatingKey}_y", snapped.yFraction).putString("${floatingKey}_snap", snapped.snap.name).apply()
+                                floatingDragging = false
+                            },
+                            onDragCancel = { floatingDragging = false },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                val minX = (ballOuterSize.width + mainBallPx) / 2f - ballParentSize.width
+                                val maxX = (ballOuterSize.width - mainBallPx) / 2f
+                                val minY = (ballOuterSize.height + mainBallPx) / 2f - ballParentSize.height
+                                val maxY = (ballOuterSize.height - mainBallPx) / 2f
+                                floatingX = (floatingX + amount.x).coerceIn(minX, maxX)
+                                floatingY = (floatingY + amount.y).coerceIn(minY, maxY)
+                            },
+                        )
                     },
                 contentAlignment = Alignment.Center,
             ) {
@@ -922,8 +1054,9 @@ private fun ViewerScreen(
                         Tool(Icons.Default.Edit, active = false) { tab.editorOpen = true },
                         Tool(if (controller.locked) Icons.Default.LockOpen else Icons.Default.Lock, active = controller.locked) { controller.locked = !controller.locked },
                     )
+                    val offsets = FloatingBallLayout.toolOffsets(tab.floatingPosition.snap)
                     tools.forEachIndexed { index, (icon, active, action) ->
-                        val angle = Math.PI / 180 * (index * 60 - 90)
+                        val toolOffset = offsets[index]
                         FloatingActionButton(
                             onClick = action,
                             shape = CircleShape,
@@ -932,8 +1065,8 @@ private fun ViewerScreen(
                             modifier = Modifier
                                 .size(40.dp)
                                 .offset(
-                                    x = (radius.value * cos(angle)).dp,
-                                    y = (radius.value * sin(angle)).dp,
+                                    x = toolOffset.x.dp,
+                                    y = toolOffset.y.dp,
                                 ),
                         ) { Icon(icon, null) }
                     }
@@ -968,6 +1101,7 @@ private fun ViewerScreen(
         onDismiss = { measureOpen = false },
         onChoice = { choice ->
             // Per v0.2.3: switching mode keeps any locked measurement; only the active selection resets.
+            tab.recordHistory()
             tab.measurementMode = when {
                 choice == lengthChoice -> MeasurementMode.LENGTH
                 choice == angleChoice -> MeasurementMode.ANGLE
@@ -984,7 +1118,7 @@ private fun ViewerScreen(
     if (appearanceOpen) AppearanceDialog(
         tab,
         onDismiss = { appearanceOpen = false },
-        onApplied = { onApplyAppearance(it) },
+        onApplied = { appearance -> viewModel.tabs.forEach { it.recordHistory() }; onApplyAppearance(appearance) },
         onPreviewStart = { previewAppearance = it },
         onPreviewEnd = { previewAppearance = null },
     )
@@ -996,7 +1130,7 @@ private fun DocumentTabs(viewModel: KrystalsViewModel, onClose: (Int) -> Unit) {
         itemsIndexed(viewModel.tabs, key = { _, tab -> tab.id }) { index, tab ->
             var drag by remember { mutableFloatStateOf(0f) }
             Surface(
-                color = if (index == viewModel.selectedIndex) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant,
+                color = if (index == viewModel.selectedIndex) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface,
                 modifier = Modifier.fillMaxHeight().pointerInput(tab.id, index) {
                     detectDragGesturesAfterLongPress(
                         onDragEnd = { drag = 0f },
@@ -1016,6 +1150,21 @@ private fun DocumentTabs(viewModel: KrystalsViewModel, onClose: (Int) -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun LanguageMenuItem(language: String, onLanguage: (String) -> Unit) {
+    DropdownMenuItem(
+        text = { Text(stringResource(R.string.language)) },
+        leadingIcon = { Icon(Icons.Default.Settings, null) },
+        onClick = {},
+        trailingIcon = {
+            Row {
+                TextButton(onClick = { onLanguage("zh") }) { Text("中", fontWeight = FontWeight.Bold, color = if (language == "zh") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+                TextButton(onClick = { onLanguage("en") }) { Text("EN", fontWeight = FontWeight.Bold, color = if (language == "en") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+        },
+    )
 }
 
 private data class LegendEntry(val label: String, val argb: Long)
@@ -1130,11 +1279,12 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                             DisplayTab.ATOMS -> {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(allSitesVisible, onCheckedChange = { checked ->
+                                        tab.recordHistory()
                                         tab.visibility = tab.visibility.copy(hiddenSites = if (checked) emptySet() else siteIds)
                                     })
                                     Text(stringResource(R.string.select_all))
                                     Spacer(Modifier.width(8.dp))
-                                    TextButton(onClick = { tab.visibility = tab.visibility.copy(hiddenSites = siteIds - tab.visibility.hiddenSites) }) { Text(localized("反选", "Invert")) }
+                                    TextButton(onClick = { tab.recordHistory(); tab.visibility = tab.visibility.copy(hiddenSites = siteIds - tab.visibility.hiddenSites) }) { Text(localized("反选", "Invert")) }
                                 }
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                                 // Per v0.3.44: group sites by element. Each group is a collapsible header
@@ -1150,6 +1300,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                         onToggle = { collapsedGroups["A:$element"] = expanded },
                                         checked = allGroupVisible,
                                         onCheckChange = { checked ->
+                                            tab.recordHistory()
                                             tab.visibility = tab.visibility.copy(
                                                 hiddenSites = if (checked) tab.visibility.hiddenSites - groupSites.map { it.id }.toSet()
                                                 else tab.visibility.hiddenSites + groupSites.map { it.id }.toSet(),
@@ -1170,6 +1321,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 28.dp, top = 2.dp, bottom = 2.dp)) {
                                                 val visible = site.id !in tab.visibility.hiddenSites
                                                 Checkbox(visible, onCheckedChange = { checked ->
+                                                    tab.recordHistory()
                                                     tab.visibility = tab.visibility.copy(hiddenSites = if (checked) tab.visibility.hiddenSites - site.id else tab.visibility.hiddenSites + site.id)
                                                 })
                                                 Text(site.label, modifier = Modifier.weight(1f))
@@ -1204,6 +1356,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                 // side by side.
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(allBondsVisible, onCheckedChange = { checked ->
+                                        tab.recordHistory()
                                         tab.visibility = tab.visibility.copy(
                                             showBonds = checked,
                                             hiddenBondPairs = if (checked) emptySet() else visibleRules.map { it.key }.toSet(),
@@ -1213,6 +1366,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                     Spacer(Modifier.width(4.dp))
                                     TextButton(onClick = {
                                         val allKeys = visibleRules.map { it.key }.toSet()
+                                        tab.recordHistory()
                                         tab.visibility = tab.visibility.copy(showBonds = true, hiddenBondPairs = allKeys - tab.visibility.hiddenBondPairs)
                                     }) { Text(localized("反选", "Invert")) }
                                     if (visibleRules.isNotEmpty()) {
@@ -1268,6 +1422,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                             onToggle = { collapsedGroups["B:$pairLabel"] = expanded },
                                             checked = allGroupVisible,
                                             onCheckChange = { checked ->
+                                                tab.recordHistory()
                                                 tab.visibility = tab.visibility.copy(
                                                     showBonds = true,
                                                     hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - groupRules.map { it.key }.toSet()
@@ -1283,6 +1438,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(start = 28.dp)) {
                                                     val visible = tab.visibility.showBonds && rule.key !in tab.visibility.hiddenBondPairs
                                                     Checkbox(visible, onCheckedChange = { checked ->
+                                                        tab.recordHistory()
                                                         tab.visibility = tab.visibility.copy(
                                                             showBonds = true,
                                                             hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - rule.key else tab.visibility.hiddenBondPairs + rule.key,
@@ -1311,11 +1467,12 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                             DisplayTab.POLYHEDRA -> {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(allPolyhedraEnabled, onCheckedChange = { checked ->
+                                        tab.recordHistory()
                                         tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) siteIds else emptySet())
                                     })
                                     Text(stringResource(R.string.select_all))
                                     Spacer(Modifier.width(8.dp))
-                                    TextButton(onClick = { tab.visibility = tab.visibility.copy(polyhedronSites = siteIds - tab.visibility.polyhedronSites) }) { Text(localized("反选", "Invert")) }
+                                    TextButton(onClick = { tab.recordHistory(); tab.visibility = tab.visibility.copy(polyhedronSites = siteIds - tab.visibility.polyhedronSites) }) { Text(localized("反选", "Invert")) }
                                 }
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                                 // Per v0.3.44: polyhedra sites grouped by element, same collapse/group-toggle
@@ -1330,6 +1487,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                         onToggle = { collapsedGroups["P:$element"] = expanded },
                                         checked = allGroupEnabled,
                                         onCheckChange = { checked ->
+                                            tab.recordHistory()
                                             tab.visibility = tab.visibility.copy(
                                                 polyhedronSites = if (checked) tab.visibility.polyhedronSites + groupSites.map { it.id }.toSet()
                                                 else tab.visibility.polyhedronSites - groupSites.map { it.id }.toSet(),
@@ -1340,7 +1498,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                         groupSites.forEach { site ->
                                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 28.dp)) {
                                                 val enabled = site.id in tab.visibility.polyhedronSites
-                                                Checkbox(enabled, onCheckedChange = { checked -> tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) tab.visibility.polyhedronSites + site.id else tab.visibility.polyhedronSites - site.id) })
+                                                Checkbox(enabled, onCheckedChange = { checked -> tab.recordHistory(); tab.visibility = tab.visibility.copy(polyhedronSites = if (checked) tab.visibility.polyhedronSites + site.id else tab.visibility.polyhedronSites - site.id) })
                                                 Text(site.label)
                                             }
                                         }
@@ -1385,6 +1543,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
             initialArgb = initial,
             onDismiss = { colorPickerOpen = false; colorPickerTarget = null; groupColorPickerElement = null },
             onColorSelected = { color ->
+                tab.recordHistory()
                 when {
                     target != null -> tab.renderConfiguration = tab.renderConfiguration.copy(
                         siteArgbOverrides = tab.renderConfiguration.siteArgbOverrides + (target to color),
