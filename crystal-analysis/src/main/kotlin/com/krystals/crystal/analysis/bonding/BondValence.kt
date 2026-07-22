@@ -2,7 +2,6 @@ package com.krystals.crystal.analysis.bonding
 
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.*
-import com.krystals.crystal.core.math.distance
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.core.model.Site
@@ -14,7 +13,7 @@ import kotlin.math.exp
  * Per v0.5.0: "smart ionic" (智能离子) bond-rule generation.
  *
  * For each atom site the routine estimates an oxidation state via a bond-valence sum (BVS), reads
- * the coordination number (CN) from a bonding-radius neighbour count, then looks up a Shannon
+ * the coordination number (CN) from periodic Voronoi-face neighbours, then looks up a Shannon
  * crystal radius for (element, valence, CN) and builds a bond rule from the per-site radii. Any
  * site that can't be resolved (no bvparm pair, no Shannon entry) falls back to the bonding radius,
  * and a structure that can't be analysed at all signals failure so the caller can fall back to the
@@ -53,7 +52,7 @@ object BondValence {
         bondConfiguration: BondConfiguration,
         epsilon: Double = 0.45,
     ): SmartIonicResult {
-        val analysis = analyze(structure, epsilon)
+        val analysis = analyze(structure)
         if (analysis == null || !analysis.anyResolved) return SmartIonicResult(emptyList(), success = false)
 
         val rules = structure.sites.flatMapIndexed { i, siteA ->
@@ -88,7 +87,7 @@ object BondValence {
         // remember() in the viewer) stall the UI. Skip it above the smart-ionic atom limit; the
         // atom-info window then simply omits "s = X.XX" for those structures.
         if (SymmetryExpander.expand(structure).size > SMART_IONIC_ATOM_LIMIT) return emptyMap()
-        val analysis = analyze(structure, epsilon) ?: return emptyMap()
+        val analysis = analyze(structure) ?: return emptyMap()
         val siteValence = analysis.siteValence
         val atomById = analysis.atoms.associateBy { it.id }
         // Per expanded-atom BVS.
@@ -122,7 +121,7 @@ object BondValence {
         return bySite.mapValues { (_, list) -> list.average() }
     }
 
-    /** Shared analysis: expand, build the (anion–anion-skipping) neighbour table, resolve each site. */
+    /** Shared analysis: expand, build the periodic Voronoi neighbour table, and resolve each site. */
     private data class Analysis(
         val atoms: List<AtomImage>,
         val neighbours: List<Triple<Long, Long, Double>>,
@@ -130,10 +129,16 @@ object BondValence {
         val anyResolved: Boolean,
     )
 
-    private fun analyze(structure: CrystalStructure, epsilon: Double): Analysis? {
+    private fun analyze(structure: CrystalStructure): Analysis? {
         val atoms = SymmetryExpander.expand(structure)
         if (atoms.size < 2) return null
-        val neighbours = bondingNeighbours(structure, atoms, epsilon)
+        val atomById = atoms.associateBy { it.id }
+        val neighbours = VoronoiNeighbours.find(structure, atoms).filterNot { (a, b, _) ->
+            val atomA = atomById[a] ?: return@filterNot false
+            val atomB = atomById[b] ?: return@filterNot false
+            PeriodicTable.anionValence(atomA.species.symbol) != null &&
+                PeriodicTable.anionValence(atomB.species.symbol) != null
+        }
         if (neighbours.isEmpty()) return null
 
         val cnByAtom = HashMap<Long, Int>()
@@ -150,25 +155,6 @@ object BondValence {
             if (sv.radius != null || sv.valence != null) anyResolved = true
         }
         return Analysis(atoms, neighbours, siteValence, anyResolved)
-    }
-
-    /** Bonding-radius neighbour pairs (atomA id, atomB id, real distance) using the minimum-image
-     *  convention, matching [BondDetector.detect]. Anion–anion pairs are skipped so anion CN
-     *  counts only cation neighbours. */
-    private fun bondingNeighbours(structure: CrystalStructure, atoms: List<AtomImage>, epsilon: Double): List<Triple<Long, Long, Double>> {
-        if (atoms.size < 2) return emptyList()
-        val tempRules = structure.sites.flatMapIndexed { i, a ->
-            structure.sites.drop(i + 1).mapNotNull { b ->
-                // Skip anion–anion temp rules so O–O etc. don't inflate anion coordination numbers.
-                if (PeriodicTable.anionValence(a.species.symbol) != null && PeriodicTable.anionValence(b.species.symbol) != null) return@mapNotNull null
-                BondRule(a.id, b.id, 0.1,
-                    PeriodicTable.radius(a.species.symbol, RadiusSource.BONDING) +
-                        PeriodicTable.radius(b.species.symbol, RadiusSource.BONDING) + epsilon,
-                    BondRuleSource.AUTO)
-            }
-        }
-        val bonds = BondDetector.detect(atoms, BondConfiguration(tempRules), structure.lattice)
-        return bonds.map { Triple(it.atomA, it.atomB, it.distance) }
     }
 
     /**

@@ -3,11 +3,14 @@ package com.krystals.crystal.analysis
 import com.krystals.crystal.analysis.bonding.BondConfiguration
 import com.krystals.crystal.analysis.bonding.BondDetector
 import com.krystals.crystal.analysis.bonding.BondRule
+import com.krystals.crystal.analysis.bonding.BondValence
+import com.krystals.crystal.analysis.bonding.VoronoiNeighbours
 import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
 import com.krystals.crystal.analysis.editing.CrystalEditor
 import com.krystals.crystal.analysis.editing.EditCommand
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.Expansion
+import com.krystals.crystal.analysis.model.PeriodicTable
 import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
 import com.krystals.crystal.analysis.structure.StructureAnalyzer
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
@@ -46,6 +49,59 @@ class AnalysisTest {
         assertEquals(Species("Cs"), atoms.first().species)
         assertEquals(FractionalCoordinate.ZERO, atoms.first().fractionalCoordinate)
         assertEquals(0.0, atoms.first().cartesianCoordinate.x, 1e-10)
+    }
+
+    @Test fun periodicVoronoiRetainsCoordinationMultiplicity() {
+        val structure = csCl().first
+        val atoms = SymmetryExpander.expand(structure)
+        val neighbours = VoronoiNeighbours.find(structure, atoms)
+
+        val csClNeighbours = neighbours.filter { (a, b, _) ->
+            setOf(a, b) == setOf(atoms.first { it.siteId == "Cs" }.id, atoms.first { it.siteId == "Cl" }.id)
+        }
+        assertEquals(8, csClNeighbours.size)
+        assertTrue(csClNeighbours.all { (_, _, distance) ->
+            kotlin.math.abs(distance - kotlin.math.sqrt(12.0)) < 1e-8
+        })
+
+        val parameter = requireNotNull(PeriodicTable.bondValenceParam("Cs", 1, "Cl", -1))
+        val expectedBvs = 8.0 * kotlin.math.exp((parameter.r0 - kotlin.math.sqrt(12.0)) / parameter.b)
+        val bvs = BondValence.bondValenceSums(structure, BondConfiguration())
+        assertEquals(expectedBvs, bvs.getValue("Cs"), 1e-8)
+        assertEquals(expectedBvs, bvs.getValue("Cl"), 1e-8)
+    }
+
+    @Test fun simpleCubicVoronoiHasSixPeriodicNeighbours() {
+        val structure = CrystalStructure(
+            blockName = "simple-cubic",
+            lattice = Lattice(3.0, 3.0, 3.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(Site("Na", "Na1", Species("Na"), FractionalCoordinate.ZERO)),
+        )
+        val neighbours = VoronoiNeighbours.find(structure, SymmetryExpander.expand(structure))
+
+        // Opposite images are represented by one undirected periodic edge, whose two endpoints
+        // contribute two neighbours to the coordination count.
+        assertEquals(3, neighbours.size)
+        assertTrue(neighbours.all { (a, b, distance) -> a == b && kotlin.math.abs(distance - 3.0) < 1e-8 })
+    }
+
+    @Test fun skewCellVoronoiFindsBeyondOneCellImage() {
+        val structure = CrystalStructure(
+            blockName = "skew-cell",
+            lattice = Lattice(1.0, 1.9, 10.0, 90.0, 90.0, 5.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(Site("Na", "Na1", Species("Na"), FractionalCoordinate.ZERO)),
+        )
+        val neighbours = VoronoiNeighbours.find(structure, SymmetryExpander.expand(structure))
+
+        val shortImage = kotlin.math.sqrt(
+            (2.0 - 1.9 * kotlin.math.cos(Math.toRadians(5.0))).let { it * it } +
+                (1.9 * kotlin.math.sin(Math.toRadians(5.0))).let { it * it },
+        )
+        assertTrue(neighbours.any { (_, _, distance) -> kotlin.math.abs(distance - shortImage) < 1e-8 })
     }
 
     @Test fun preservesBondAndBoundaryImageResults() {
