@@ -93,7 +93,7 @@ object BondValence {
             return emptyMap()
         } ?: return emptyMap()
         val siteValence = analysis.siteValence
-        val atomById = analysis.atoms.associateBy { it.id }
+        val atomById = analysis.atomById
         // Per expanded-atom BVS.
         val bvsByAtom = HashMap<Long, Double>()
         for ((a, b, d) in analysis.neighbours) {
@@ -117,18 +117,20 @@ object BondValence {
         // Collapse per-atom BVS to per-site: average over the site's expanded atoms (they are
         // symmetry-equivalent and share the same environment, so this just picks a representative
         // value while tolerating any edge-case variation).
-        val bySite = HashMap<String, MutableList<Double>>()
-        for (atom in analysis.atoms) {
-            val bvs = bvsByAtom[atom.id] ?: continue
-            bySite.getOrPut(atom.siteId) { mutableListOf() }.add(bvs)
+        val bySite = HashMap<String, Double>()
+        for ((siteId, siteAtoms) in analysis.atomsBySiteId) {
+            val values = siteAtoms.mapNotNull { bvsByAtom[it.id] }
+            if (values.isNotEmpty()) bySite[siteId] = values.average()
         }
-        return bySite.mapValues { (_, list) -> list.average() }
+        return bySite
     }
 
     /** Shared analysis: expand, build the periodic Voronoi neighbour table, and resolve each site. */
     private data class Analysis(
-        val atoms: List<AtomImage>,
+        val atomById: Map<Long, AtomImage>,
+        val atomsBySiteId: Map<String, List<AtomImage>>,
         val neighbours: List<Triple<Long, Long, Double>>,
+        val neighboursByAtomId: Map<Long, List<Pair<Long, Double>>>,
         val siteValence: Map<String, SiteValence>,
         val anyResolved: Boolean,
     )
@@ -137,6 +139,7 @@ object BondValence {
         val atoms = SymmetryExpander.expand(structure)
         if (atoms.size < 2) return null
         val atomById = atoms.associateBy { it.id }
+        val atomsBySiteId = atoms.groupBy { it.siteId }
         val neighbours = VoronoiNeighbours.find(structure, atoms).filterNot { (a, b, _) ->
             val atomA = atomById[a] ?: return@filterNot false
             val atomB = atomById[b] ?: return@filterNot false
@@ -144,6 +147,12 @@ object BondValence {
                 PeriodicTable.anionValence(atomB.species.symbol) != null
         }
         if (neighbours.isEmpty()) return null
+
+        val neighboursByAtomId = HashMap<Long, MutableList<Pair<Long, Double>>>()
+        for ((a, b, distance) in neighbours) {
+            neighboursByAtomId.getOrPut(a) { mutableListOf() }.add(b to distance)
+            neighboursByAtomId.getOrPut(b) { mutableListOf() }.add(a to distance)
+        }
 
         val cnByAtom = HashMap<Long, Int>()
         for ((a, b, _) in neighbours) {
@@ -154,11 +163,24 @@ object BondValence {
         val siteValence = HashMap<String, SiteValence>()
         var anyResolved = false
         for (site in structure.sites) {
-            val sv = resolveSite(site, atoms, neighbours, cnByAtom)
+            val sv = resolveSite(
+                site,
+                atomsBySiteId[site.id].orEmpty(),
+                atomById,
+                neighboursByAtomId,
+                cnByAtom,
+            )
             siteValence[site.id] = sv
             if (sv.radius != null || sv.valence != null) anyResolved = true
         }
-        return Analysis(atoms, neighbours, siteValence, anyResolved)
+        return Analysis(
+            atomById,
+            atomsBySiteId,
+            neighbours,
+            neighboursByAtomId,
+            siteValence,
+            anyResolved,
+        )
     }
 
     /**
@@ -169,11 +191,11 @@ object BondValence {
      */
     private fun resolveSite(
         site: Site,
-        atoms: List<AtomImage>,
-        neighbours: List<Triple<Long, Long, Double>>,
+        siteAtoms: List<AtomImage>,
+        atomById: Map<Long, AtomImage>,
+        neighboursByAtomId: Map<Long, List<Pair<Long, Double>>>,
         cnByAtom: Map<Long, Int>,
     ): SiteValence {
-        val siteAtoms = atoms.filter { it.siteId == site.id }
         if (siteAtoms.isEmpty()) return SiteValence(null, null, false)
         val cn = siteAtoms.mapNotNull { cnByAtom[it.id] }.ifEmpty { return SiteValence(null, null, false) }.average().toInt().coerceAtLeast(1)
 
@@ -188,14 +210,10 @@ object BondValence {
         // summing would multiply the BVS by the site multiplicity and overshoot the real valence.
         val representative = siteAtoms.first()
         val distByElement = HashMap<String, MutableList<Double>>()
-        val atomById = atoms.associateBy { it.id }
-        for ((a, b, d) in neighbours) {
-            val atomA = atomById[a] ?: continue
-            val atomB = atomById[b] ?: continue
-            if (atomA.id == representative.id && atomB.species != site.species) {
-                distByElement.getOrPut(atomB.species.symbol) { mutableListOf() }.add(d)
-            } else if (atomB.id == representative.id && atomA.species != site.species) {
-                distByElement.getOrPut(atomA.species.symbol) { mutableListOf() }.add(d)
+        for ((neighborId, distance) in neighboursByAtomId[representative.id].orEmpty()) {
+            val neighbor = atomById[neighborId] ?: continue
+            if (neighbor.species != site.species) {
+                distByElement.getOrPut(neighbor.species.symbol) { mutableListOf() }.add(distance)
             }
         }
         if (distByElement.isEmpty()) return SiteValence(null, null, false)

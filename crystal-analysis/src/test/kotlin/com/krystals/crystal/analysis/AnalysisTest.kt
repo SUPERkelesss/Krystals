@@ -73,6 +73,30 @@ class AnalysisTest {
         assertEquals(expectedBvs, bvs.getValue("Cl"), 1e-8)
     }
 
+    @Test fun bvsReusesSymmetryEquivalentSiteAtoms() {
+        val structure = CrystalStructure(
+            blockName = "inversion-equivalent-sites",
+            lattice = Lattice(4.0, 4.0, 4.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(
+                SymmetryOperation.parse("x,y,z"),
+                SymmetryOperation.parse("-x,-y,-z"),
+            ),
+            sites = listOf(
+                Site("Cs", "Cs1", Species("Cs"), FractionalCoordinate(0.1, 0.1, 0.1)),
+                Site("Cl", "Cl1", Species("Cl"), FractionalCoordinate(0.6, 0.6, 0.6)),
+            ),
+        )
+
+        val atoms = SymmetryExpander.expand(structure)
+        assertEquals(2, atoms.count { it.siteId == "Cs" })
+        assertEquals(2, atoms.count { it.siteId == "Cl" })
+
+        val bvs = BondValence.bondValenceSums(structure, BondConfiguration())
+        assertTrue(bvs.getValue("Cs").isFinite())
+        assertTrue(bvs.getValue("Cl").isFinite())
+    }
+
     @Test fun simpleCubicVoronoiHasSixPeriodicNeighbours() {
         val structure = CrystalStructure(
             blockName = "simple-cubic",
