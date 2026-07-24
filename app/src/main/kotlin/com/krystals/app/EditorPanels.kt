@@ -903,7 +903,7 @@ fun AppearanceDialog(
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("化学键", "Bonds"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
             ToggleRow(localized("键反射", "Bond reflection"), appearance.bondReflectionEnabled) { appearance = appearance.copy(bondReflectionEnabled = it) }
-            LabeledSlider(localized("键半径", "Bond radius"), appearance.bondRadius, 0.02f..0.1f, decimals = 2) { appearance = appearance.copy(bondRadius = it) }
+            LabeledSlider(localized("键半径", "Bond radius"), appearance.bondRadius, 0.02f..0.2f, decimals = 2) { appearance = appearance.copy(bondRadius = it) }
             LabeledSlider(localized("化学键不透明度", "Bond opacity"), appearance.bondOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(bondOpacity = it) }
             DropdownField(localized("键颜色", "Bond color"), bondColorLabels[appearance.bondColorMode.ordinal], bondColorLabels) { appearance = appearance.copy(bondColorMode = BondColorMode.entries[bondColorLabels.indexOf(it)]) }
             if (appearance.bondColorMode == BondColorMode.UNICOLOR) FlowRow {

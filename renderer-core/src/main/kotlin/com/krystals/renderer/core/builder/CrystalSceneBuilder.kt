@@ -35,7 +35,7 @@ data class SceneBuildOptions(
 ) {
     init {
         require(defaultAtomRadius > 0.0) { "default atom radius must be positive" }
-        require(bondRadius >= 0.0) { "bond radius must be non-negative" }
+        require(bondRadius > 0.0) { "bond radius must be positive" }
     }
 }
 

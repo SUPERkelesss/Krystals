@@ -288,12 +288,14 @@ private fun FilamentLegacyStyleOverlay(
 
         // P8: 2D selection rings (replaces 3D highlight spheres from GpuInstanceManager).
         // Draw rings around selected, locked, and inspected atoms — same projection as Legacy.
+        // The ring radius tracks Filament's visual sphere (world radius × screen scale) without
+        // Legacy's 4.5..42 px pixel clamp, so the ring hugs the rendered sphere at every zoom.
         val highlightedIds = state.document.selection.selectedAtomIds.toSet() + lockedIds +
             listOfNotNull(state.document.inspection.inspectedAtomId)
         highlightedIds.forEach { atomId ->
             val atom = atomsById[atomId] ?: return@forEach
             val center = point(atomId) ?: return@forEach
-            val r = (atom.radius * scale).toFloat().coerceIn(4.5f, 42f)
+            val r = (atom.radius * scale).toFloat()
             val isLocked = atomId in lockedIds
             val ringColor = if (isLocked) Color(SelectionColors.LOCKED_ARGB) else Color(SelectionColors.SELECTED_ARGB)
             drawCircle(ringColor, r + 4f, center, style = Stroke(if (isLocked) 6f else 5f))
@@ -365,7 +367,9 @@ private fun FilamentLegacyStyleOverlay(
             val maxWidth = lines.maxOf(infoPaint::measureText)
             val lineHeight = infoPaint.fontMetrics.run { descent - ascent }
             val pad = 16f
-            val atomRadius = (atomsById.getValue(id).radius * scale).toFloat().coerceIn(4.5f, 42f)
+            // Anchor at Filament's visual sphere radius (no Legacy pixel clamp) so the info
+            // panel clears the rendered sphere at any zoom level.
+            val atomRadius = (atomsById.getValue(id).radius * scale).toFloat()
             val left = anchor.x + atomRadius + 14f
             val top = anchor.y - atomRadius - 14f - lines.size * lineHeight - pad
             val rect = Rect(left, top, left + maxWidth + pad * 2f, anchor.y - atomRadius - 14f + pad)

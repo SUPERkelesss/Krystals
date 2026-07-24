@@ -1220,10 +1220,10 @@ private fun ViewerScreen(
                     LaunchedEffect(toolOpen) {
                         if (toolOpen) {
                             if (isTier2) {
-                                // Tier 2: start after tier 1 completes + 60ms delay, stagger 30ms within tier.
+                                // Tier 2: start immediately after tier 1 completes, stagger 30ms within tier.
                                 val tier1End = 60L + (tier1Count - 1) * 30L + 280L
                                 val tier2Index = index - tier1Count
-                                delay(tier1End + 60L + tier2Index * 30L)
+                                delay(tier1End + tier2Index * 30L)
                                 animProgress.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
                             } else {
                                 // Tier 1: start after ball pulse (60ms), stagger 30ms.

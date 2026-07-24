@@ -73,7 +73,7 @@ data class RenderEnvironment(
     init {
         require((backgroundArgb ushr 32) == 0L) { "background color must be a 32-bit ARGB value" }
         require(atoms.opacity in 0f..1f) { "atom opacity must be between 0 and 1" }
-        require(bonds.radius >= 0f) { "bond radius must be non-negative" }
+        require(bonds.radius > 0f) { "bond radius must be positive" }
         require(bonds.opacity in 0f..1f) { "bond opacity must be between 0 and 1" }
         require(polyhedra.opacity in 0f..1f) { "polyhedron opacity must be between 0 and 1" }
     }

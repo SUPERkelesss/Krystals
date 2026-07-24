@@ -444,7 +444,8 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                 canvas.drawText(line, left + pad, top + pad + (index + 1) * lineHeight - infoPaint.fontMetrics.descent, infoPaint)
             }
         }
-        // Selection rings (matching Legacy renderer's drawAtom selection highlight).
+        // Selection rings follow Filament's visual sphere radius (world radius × screen scale)
+        // without Legacy's pixel clamp, so exported rings hug the rendered sphere at any zoom.
         val lockedIds = state.lockedMeasurements.flatMap { it.atomIds }.toSet() + state.inspection.lockedInspectedAtomIds
         val highlightedIds = state.selection.selectedAtomIds.toSet() + lockedIds + listOfNotNull(state.inspection.inspectedAtomId)
         val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
@@ -454,7 +455,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             val isLocked = id in lockedIds
             ringPaint.color = if (isLocked) SelectionColors.LOCKED_ARGB.toInt() else SelectionColors.SELECTED_ARGB.toInt()
             ringPaint.strokeWidth = (if (isLocked) 6f else 5f) * scale
-            val r = projection.screenRadius(atomInstance.radius).toFloat().coerceAtLeast(4.5f)
+            val r = projection.screenRadius(atomInstance.radius).toFloat()
             canvas.drawCircle(anchor.first, anchor.second, r + 4f * scale, ringPaint)
         }
         if (scene.environment.axes.visible) drawAxesOverlay(canvas, scene, bitmap.width, bitmap.height, scale)
