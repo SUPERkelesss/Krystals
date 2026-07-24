@@ -15,6 +15,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -62,10 +63,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.BrightnessAuto
+import androidx.compose.material.icons.filled.Contrast
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
@@ -75,7 +78,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Palette
@@ -121,6 +123,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -156,14 +159,16 @@ import com.krystals.crystal.io.ParsedStructure
 import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.state.InteractionReducer
 import com.krystals.interaction.state.ViewerCommand
-import com.krystals.renderer.legacy.CrystalViewport
 import com.krystals.renderer.legacy.CrystalImageExporter
+import com.krystals.renderer.legacy.LegacySceneRenderer
 import com.krystals.renderer.core.builder.CrystalRenderSceneFactory
 import com.krystals.renderer.core.style.RenderPalette
 import com.krystals.renderer.core.style.ViewerAppearance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.filament.FilamentRenderer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -209,6 +214,7 @@ fun KrystalsRoot(
         if (language == value) return
         language = value
         preferences.edit().putString("language", value).apply()
+        activity.recreate()
     }
     // Per v0.5.2a: load the persisted global appearance once at startup (falls back to defaults).
     LaunchedEffect(Unit) {
@@ -217,10 +223,22 @@ fun KrystalsRoot(
         }
     }
     val systemDark = isSystemInDarkTheme()
+    var backgroundFollowTheme by remember {
+        mutableStateOf(preferences.getBoolean("bg_follow_theme", true))
+    }
     fun applyViewerBackground(dark: Boolean) {
+        if (!backgroundFollowTheme) return
         val background = if (dark) 0xFF101014 else 0xFFF8F8FB
         viewModel.defaultAppearance = viewModel.defaultAppearance.copy(backgroundArgb = background)
         viewModel.tabs.forEach { tab -> tab.appearance = tab.appearance.copy(backgroundArgb = background) }
+    }
+    fun applyBackgroundFollowTheme(value: Boolean) {
+        backgroundFollowTheme = value
+        preferences.edit().putBoolean("bg_follow_theme", value).apply()
+        if (value) {
+            val dark = themeMode == ThemeMode.DARK || themeMode == ThemeMode.SYSTEM && systemDark
+            applyViewerBackground(dark)
+        }
     }
     // Per v0.5.2a: persist + globally apply a new appearance (default + every open tab).
     fun applyViewerAppearance(ap: ViewerAppearance) {
@@ -240,6 +258,7 @@ fun KrystalsRoot(
     // Per v0.5.0: global "计算中..." overlay shown while bond rules are recomputed (open file, add/
     // delete atom, transform, hex/rhom conversion) off the UI thread.
     var computing by remember { mutableStateOf(false) }
+    var computationJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var voronoiWarningOpen by remember { mutableStateOf(false) }
     var pendingOpen by remember { mutableStateOf<PendingOpen?>(null) }
     var pendingSaveTabId by remember { mutableStateOf<String?>(null) }
@@ -295,15 +314,23 @@ fun KrystalsRoot(
     fun runWithBondComputation(block: suspend () -> EditResult?) {
         if (computing) return
         computing = true
-        scope.launch {
-            val result = runCatching { withContext(Dispatchers.Default) { block() } }
-            computing = false
+        computationJob = scope.launch {
+            val result = try {
+                Result.success(withContext(Dispatchers.Default) { block() })
+            } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
+                Result.failure(ce)
+            } catch (e: Throwable) {
+                Result.failure(e)
+            } finally {
+                computing = false
+                computationJob = null
+            }
             result.getOrNull()?.let { editResult ->
                 viewModel.current?.let { viewModel.updateAnalysis(it, editResult) }
             }
             result.onFailure { error ->
                 if (error is VoronoiSearchLimitExceededException) voronoiWarningOpen = true
-                else showMessage(error.message ?: "Operation failed")
+                else if (error !is kotlin.coroutines.cancellation.CancellationException) showMessage(error.message ?: "Operation failed")
             }
         }
     }
@@ -311,6 +338,8 @@ fun KrystalsRoot(
     /**
      * Per v0.5.2b: open-file bond computation with a 5 s smart-ionic timeout. Falls back to bonding
      * radii on timeout and surfaces the [smartIonicTimeoutMessage] snackbar.
+     * Per v0.6.1: cooperative cancellation, fast size-guarded fallback, and bonding-radius rules
+     * applied if the user cancels mid-computation so the Chemical Bonds panel is never empty.
      */
     fun openWithBondComputation(
         structure: CrystalStructure,
@@ -318,25 +347,45 @@ fun KrystalsRoot(
         epsilon: Double,
     ) {
         if (computing) return
+        val targetTab = viewModel.current ?: return
         computing = true
-        scope.launch {
-            val result = runCatching {
-                withContext(Dispatchers.Default) {
-                    // Per v0.5.2b: cap smart-ionic at 5 s; on timeout pass null so the editor falls
-                    // back to bonding radii and flags the timeout.
-                    val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
-                        BondValence.smartIonicRules(structure, bondConfiguration, epsilon)
+        computationJob = scope.launch {
+            val result = try {
+                Result.success(
+                    withContext(Dispatchers.Default) {
+                        val expandedSize = SymmetryExpander.expand(structure).size
+                        if (expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
+                            CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null)
+                        } else {
+                            val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                                BondValence.smartIonicRules(structure, bondConfiguration, epsilon)
+                            }
+                            CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
+                        }
                     }
-                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
-                }
+                )
+            } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
+                val fallback = if (targetTab in viewModel.tabs) {
+                    CrystalEditor.rebuildBondRules(
+                        targetTab.structure,
+                        targetTab.bondConfiguration,
+                        RadiusSource.BONDING,
+                        targetTab.bondEpsilon,
+                    )
+                } else null
+                fallback?.let { Result.success(it) } ?: Result.failure(ce)
+            } catch (e: Throwable) {
+                Result.failure(e)
+            } finally {
+                computing = false
+                computationJob = null
             }
-            computing = false
             result.onSuccess { editResult ->
                 if (CrystalEditor.SMART_IONIC_TIMEOUT in editResult.warnings) showMessage(smartIonicTimeoutMessage)
-                viewModel.current?.let { viewModel.updateAnalysis(it, editResult) }
+                if (targetTab in viewModel.tabs) viewModel.updateAnalysis(targetTab, editResult)
             }.onFailure { error ->
                 if (error is VoronoiSearchLimitExceededException) voronoiWarningOpen = true
-                else showMessage(error.message ?: "Operation failed")
+                else if (error !is kotlin.coroutines.cancellation.CancellationException) showMessage(error.message ?: "Operation failed")
             }
         }
     }
@@ -354,13 +403,24 @@ fun KrystalsRoot(
     /** Per v0.5.3b: the actual tab insertion + bond computation, split out of [openParsed] so the
      *  large-cell warning can re-enter here after the user confirms. Declared before [openParsed]
      *  because Kotlin local functions have no forward references. */
-    fun doOpenParsed(parsed: ParsedStructure, name: String, uri: Uri?) {
+    fun doOpenParsed(parsed: ParsedStructure, name: String, uri: Uri?, expandedEstimate: Int) {
         // Add the tab immediately (so the empty structure shows), then compute rules if needed.
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
         if (tab.bondConfiguration.rules.isEmpty()) {
-            // Per v0.5.2b: open-file path uses the 5 s smart-ionic timeout variant.
-            openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
+            if (expandedEstimate > BondValence.SMART_IONIC_ATOM_LIMIT) {
+                // Large cells skip smart-ionic entirely and use bonding radii off the UI thread
+                // without showing the computing overlay.
+                scope.launch {
+                    val fallback = withContext(Dispatchers.Default) {
+                        CrystalEditor.fromSmartIonicAttempt(tab.structure, tab.bondConfiguration, tab.bondEpsilon, null)
+                    }
+                    viewModel.updateAnalysis(tab, fallback)
+                }
+            } else {
+                // Per v0.5.2b: open-file path uses the 5 s smart-ionic timeout variant.
+                openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
+            }
         }
     }
 
@@ -374,7 +434,7 @@ fun KrystalsRoot(
             pendingLargeOpen = PendingLargeOpen(parsed, name, uri, expandedEstimate)
             return
         }
-        doOpenParsed(parsed, name, uri)
+        doOpenParsed(parsed, name, uri, expandedEstimate)
     }
 
     fun loadUri(uri: Uri) {
@@ -395,7 +455,7 @@ fun KrystalsRoot(
                     val parsed = CifCodec.parseStructure(result.text, result.candidates.first())
                     openParsed(parsed, result.name, result.uri)
                 } else pendingOpen = result
-            }.onFailure { showMessage(it.message ?: "Unable to open CIF") }
+            }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Unable to open CIF") }
         }
     }
 
@@ -417,7 +477,7 @@ fun KrystalsRoot(
                     tab.parsed = CifCodec.parseStructure(content, tab.parsed.blockIndex)
                 }.onSuccess {
                     showMessage("Saved ${tab.name}")
-                }.onFailure { showMessage(it.message ?: "Save failed") }
+                }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
             }
         }
     }
@@ -440,14 +500,14 @@ fun KrystalsRoot(
                 withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, content) }
                 tab.parsed = CifCodec.parseStructure(content, tab.parsed.blockIndex)
                 tab.dirty = false
-            }.onSuccess { showMessage("Saved ${tab.name}"); afterSave() }.onFailure { showMessage(it.message ?: "Save failed") }
+            }.onSuccess { showMessage("Saved ${tab.name}"); afterSave() }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
         }
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val bitmap = pendingExportBitmap
         pendingExportBitmap = null
-        if (granted && bitmap != null) scope.launch { runCatching { FileRepository.exportPng(activity.contentResolver, bitmap) }.onSuccess { showMessage("Exported to Pictures/Krystals") }.onFailure { showMessage(it.message ?: "Export failed") } }
+        if (granted && bitmap != null) scope.launch { runCatching { FileRepository.exportPng(activity.contentResolver, bitmap) }.onSuccess { showMessage("Exported to Pictures/Krystals") }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Export failed") } }
         else showMessage("Storage permission is required on Android 8–9")
     }
     fun requestExport(bitmap: Bitmap) {
@@ -457,7 +517,7 @@ fun KrystalsRoot(
         } else scope.launch {
             runCatching { FileRepository.exportPng(activity.contentResolver, bitmap) }
                 .onSuccess { showMessage("Exported to Pictures/Krystals") }
-                .onFailure { showMessage(it.message ?: "Export failed") }
+                .onFailure { if (it !is CancellationException) showMessage(it.message ?: "Export failed") }
         }
     }
 
@@ -470,6 +530,11 @@ fun KrystalsRoot(
     }
     BackHandler(enabled = true) {
         when {
+            computing -> {
+                computationJob?.cancel()
+                computing = false
+                computationJob = null
+            }
             voronoiWarningOpen -> voronoiWarningOpen = false
             exitRequest -> exitRequest = false
             closeRequest != null -> closeRequest = null
@@ -503,7 +568,7 @@ fun KrystalsRoot(
                         onOnlineSource = { onlineSourceOpen = true },
                         themeMode = themeMode, onTheme = ::applyTheme, language = language,
                         onLanguage = ::applyLanguage,
-                        onHelp = { helpOpen = true }, onAbout = { aboutOpen = true }, onSponsor = { sponsorOpen = true }, onExit = ::requestExit,
+                        onHelp = { helpOpen = true }, onAbout = { aboutOpen = true }, onSponsor = { sponsorOpen = true }, onFeedback = { openUrl("https://github.com/SUPERkelesss/Krystals/issues") }, onExit = ::requestExit,
                     )
                 } else {
                     ViewerScreen(
@@ -556,8 +621,11 @@ fun KrystalsRoot(
                         onHelp = { helpOpen = true },
                         onAbout = { aboutOpen = true },
                         onSponsor = { sponsorOpen = true },
+                        onFeedback = { openUrl("https://github.com/SUPERkelesss/Krystals/issues") },
                         onRunBondComputation = ::runWithBondComputation,
                         onApplyAppearance = ::applyViewerAppearance,
+                        backgroundFollowTheme = backgroundFollowTheme,
+                        onBackgroundFollowThemeChange = ::applyBackgroundFollowTheme,
                     )
                 }
             }
@@ -565,7 +633,11 @@ fun KrystalsRoot(
 
         // Dialogs live inside KrystalsTheme so they pick up the correct color scheme (dark/light).
         if (computing) {
-            androidx.compose.material3.BasicAlertDialog(onDismissRequest = {}) {
+            androidx.compose.material3.BasicAlertDialog(onDismissRequest = {
+                computationJob?.cancel()
+                computing = false
+                computationJob = null
+            }) {
                 androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
                     Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         androidx.compose.material3.CircularProgressIndicator()
@@ -610,7 +682,7 @@ fun KrystalsRoot(
                 "This cell has ~${pending.expandedEstimate} expanded atoms; it may lag or crash. Continue?")) },
             confirmButton = { TextButton(onClick = {
                 val p = pending; pendingLargeOpen = null
-                doOpenParsed(p.parsed, p.name, p.uri)
+                doOpenParsed(p.parsed, p.name, p.uri, p.expandedEstimate)
             }) { Text(localized("继续", "Continue")) } },
             dismissButton = { TextButton(onClick = { pendingLargeOpen = null }) { Text(stringResource(R.string.cancel)) } },
         )
@@ -718,6 +790,7 @@ private fun HomeScreen(
     onHelp: () -> Unit,
     onAbout: () -> Unit,
     onSponsor: () -> Unit,
+    onFeedback: () -> Unit,
     onExit: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -730,13 +803,20 @@ private fun HomeScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.Science, null) }, onClick = { menuOpen = false; onOnlineSource() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
                 LanguageMenuItem(language, onLanguage)
-                DropdownMenuItem(text = { Text(stringResource(R.string.help)) }, onClick = { menuOpen = false; onHelp() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.about)) }, onClick = { menuOpen = false; onAbout() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.sponsor)) }, onClick = { menuOpen = false; onSponsor() })
+                ThemeMenuItem(themeMode, onTheme)
+                HorizontalDivider()
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Text(stringResource(R.string.feedback), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    TextButton(onClick = { menuOpen = false; onAbout() }) { Text(stringResource(R.string.about), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Text(stringResource(R.string.sponsor), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+                HorizontalDivider()
                 DropdownMenuItem(text = { Text(stringResource(R.string.exit)) }, onClick = { menuOpen = false; onExit() })
             }
         }
-        Box(Modifier.align(Alignment.TopEnd)) { ThemeSelector(themeMode, onTheme) }
         // Per v0.4.3: in landscape the four import buttons span the full (very wide) screen and
         // look stretched; cap their width to half the screen there. Portrait keeps fillMaxWidth.
         BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -785,8 +865,11 @@ private fun ViewerScreen(
     onHelp: () -> Unit,
     onAbout: () -> Unit,
     onSponsor: () -> Unit,
+    onFeedback: () -> Unit,
     onRunBondComputation: ((suspend () -> EditResult?) -> Unit),
     onApplyAppearance: (ViewerAppearance) -> Unit,
+    backgroundFollowTheme: Boolean,
+    onBackgroundFollowThemeChange: (Boolean) -> Unit,
 ) {
     val tab = viewModel.current ?: return
     val scope = rememberCoroutineScope()
@@ -921,26 +1004,38 @@ private fun ViewerScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.save)) }, leadingIcon = { Icon(Icons.Default.Save, null) }, onClick = { menuOpen = false; onSave(tab) })
                 DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = { menuOpen = false; onSaveToPreset() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
                     menuOpen = false
                     sceneResult?.getOrNull()?.let { scene ->
                         scope.launch {
-                            val filamentBitmap = if (effectiveBackend == RendererBackend.FILAMENT) {
-                                runCatching { activeFilamentRenderer?.renderToBitmap(1080, 1080) }.getOrNull()
-                            } else null
-                            val bitmap = filamentBitmap ?: withContext(Dispatchers.Default) {
-                                CrystalImageExporter.render(scene, tab.appearance, tab.renderConfiguration, tab.interactionState, bondValenceBySite)
+                            runCatching {
+                                val filamentBitmap = if (effectiveBackend == RendererBackend.FILAMENT) {
+                                    runCatching { activeFilamentRenderer?.renderToBitmap(1080, 1080) }.getOrNull()
+                                } else null
+                                val bitmap = filamentBitmap ?: withContext(Dispatchers.Default) {
+                                    CrystalImageExporter.render(scene, tab.appearance, tab.renderConfiguration, tab.interactionState, bondValenceBySite)
+                                }
+                                onExport(bitmap)
+                            }.onFailure { error ->
+                                if (error !is CancellationException) onMessage(error.message ?: "Export failed")
                             }
-                            onExport(bitmap)
                         }
                     } ?: onMessage("Unable to export current crystal")
                 })
                 HorizontalDivider()
                 LanguageMenuItem(language, onLanguage)
-                DropdownMenuItem(text = { Text(stringResource(R.string.help)) }, onClick = { menuOpen = false; onHelp() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.about)) }, onClick = { menuOpen = false; onAbout() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.sponsor)) }, onClick = { menuOpen = false; onSponsor() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.exit)) }, onClick = { menuOpen = false; onExit() })
+                ThemeMenuItem(themeMode, onTheme = { mode -> viewModel.tabs.forEach { it.recordHistory() }; onTheme(mode) })
+                HorizontalDivider()
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
+                    TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Text(stringResource(R.string.feedback), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
+                    TextButton(onClick = { menuOpen = false; onAbout() }) { Text(stringResource(R.string.about), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Text(stringResource(R.string.sponsor), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+                HorizontalDivider()
+                DropdownMenuItem(text = { Text(localized("退出 Krystals", "Exit Krystals")) }, onClick = { menuOpen = false; onExit() })
             } } },
             actions = {
                 IconButton(onClick = { tab.undo() }, enabled = tab.history.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, localized("撤回", "Undo")) }
@@ -961,7 +1056,6 @@ private fun ViewerScreen(
                     )
                 }
                 IconButton(onClick = { appearanceOpen = true }) { Icon(Icons.Default.ColorLens, null) }
-                ThemeSelector(themeMode, onTheme = { mode -> viewModel.tabs.forEach { it.recordHistory() }; onTheme(mode) })
             },
         )
         DocumentTabs(viewModel, onClose)
@@ -992,30 +1086,37 @@ private fun ViewerScreen(
                                 AtomEditMode.NONE -> false
                             }
                     }
-                    if (effectiveBackend == RendererBackend.FILAMENT) {
-                        FilamentViewport(
-                            scene = scene,
-                            interactionState = tab.interactionState,
-                            onCommand = ::dispatchViewerCommand,
-                            onAtomTap = handleAtomTap,
-                            onFailure = {
-                                if (!filamentSessionFailed) onMessage(filamentFallbackMessage)
-                                filamentSessionFailed = true
-                            },
-                            onRendererChanged = { activeFilamentRenderer = it },
-                            bondValenceBySite = bondValenceBySite,
-                        )
-                    } else {
-                        CrystalViewport(
-                            scene = scene,
-                            interactionState = tab.interactionState,
-                            onCommand = ::dispatchViewerCommand,
-                            appearance = previewAppearance ?: tab.appearance,
-                            renderConfiguration = tab.renderConfiguration,
-                            bondValenceBySite = bondValenceBySite,
-                            onAtomTap = handleAtomTap,
-                        )
+                    val context = LocalContext.current
+                    val onFilamentFailure: (Throwable) -> Unit = {
+                        if (!filamentSessionFailed) onMessage(filamentFallbackMessage)
+                        filamentSessionFailed = true
                     }
+                    val filamentResult = remember(effectiveBackend) {
+                        runCatching {
+                            if (effectiveBackend == RendererBackend.FILAMENT) FilamentRenderer(context) else null
+                        }
+                    }
+                    LaunchedEffect(filamentResult) {
+                        filamentResult.exceptionOrNull()?.let(onFilamentFailure)
+                    }
+                    val renderer = remember(effectiveBackend, filamentResult) {
+                        when (effectiveBackend) {
+                            RendererBackend.FILAMENT -> filamentResult.getOrNull() ?: LegacySceneRenderer()
+                            else -> LegacySceneRenderer()
+                        }
+                    }
+                    RendererHost(
+                        renderer = renderer,
+                        scene = scene,
+                        state = tab.interactionState,
+                        appearance = renderedAppearance,
+                        renderConfiguration = tab.renderConfiguration,
+                        onCommand = ::dispatchViewerCommand,
+                        onAtomTap = handleAtomTap,
+                        bondValenceBySite = bondValenceBySite,
+                        onFilamentRendererChanged = { activeFilamentRenderer = it },
+                        onFilamentFailure = onFilamentFailure,
+                    )
                 }
                 else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(current.exceptionOrNull()?.message ?: "Unable to build scene", color = MaterialTheme.colorScheme.error)
@@ -1067,8 +1168,56 @@ private fun ViewerScreen(
                     .padding(18.dp)
                     .size(180.dp)
                     .offset { IntOffset(renderedFloatingX.roundToInt(), renderedFloatingY.roundToInt()) }
-                    .alpha(floatingAlpha)
-                    .pointerInput(tab.id) {
+                    .graphicsLayer { this.alpha = floatingAlpha; this.clip = false },
+                contentAlignment = Alignment.Center,
+            ) {
+                // Per v0.2: the Measure button shows an active (light bg / dark icon) state while a
+                // measurement mode is active; the Lock button does the same while the view is locked.
+                data class Tool(val icon: androidx.compose.ui.graphics.vector.ImageVector, val active: Boolean, val action: () -> Unit)
+                val tools = listOf(
+                    Tool(Icons.Default.FitScreen, active = false) { alignOpen = true },
+                    Tool(Icons.Default.Straighten, active = tab.measurementMode != MeasurementMode.NONE) { measureOpen = true },
+                    Tool(Icons.Default.Visibility, active = false) { displayOpen = true },
+                    Tool(Icons.Default.Info, active = false) { infoOpen = true },
+                    Tool(Icons.Default.Edit, active = false) { tab.editorOpen = true },
+                    Tool(if (tab.interactionState.session.locked) Icons.Default.LockOpen else Icons.Default.Lock, active = tab.interactionState.session.locked) {
+                        dispatchViewerCommand(ViewerCommand.ToggleLock)
+                    },
+                )
+                val offsets = FloatingBallLayout.toolOffsets(tab.floatingPosition.snap)
+                tools.forEachIndexed { index, (icon, active, action) ->
+                    val toolOffset = offsets[index]
+                    val animProgress = remember(tab.id, index) { Animatable(0f) }
+                    LaunchedEffect(toolOpen) {
+                        if (toolOpen) {
+                            delay(index * 8L)
+                            animProgress.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
+                        } else {
+                            delay((tools.lastIndex - index) * 8L)
+                            animProgress.animateTo(0f, tween(180, easing = FastOutSlowInEasing))
+                        }
+                    }
+                    val progress = animProgress.value
+                    FloatingActionButton(
+                        onClick = { if (progress > 0.5f) action() },
+                        shape = CircleShape,
+                        containerColor = if (active) baseContent else baseContainer,
+                        contentColor = if (active) baseContainer else baseContent,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .alpha(progress)
+                            .offset(
+                                x = (toolOffset.x * progress).dp,
+                                y = (toolOffset.y * progress).dp,
+                            ),
+                    ) { Icon(icon, null) }
+                }
+                FloatingActionButton(
+                    onClick = { toolOpen = !toolOpen },
+                    shape = CircleShape,
+                    containerColor = baseContainer,
+                    contentColor = baseContent,
+                    modifier = Modifier.size(54.dp).pointerInput(tab.id) {
                         detectDragGestures(
                             onDragStart = { floatingDragging = true },
                             onDragEnd = {
@@ -1090,46 +1239,6 @@ private fun ViewerScreen(
                             },
                         )
                     },
-                contentAlignment = Alignment.Center,
-            ) {
-                if (toolOpen) {
-                    val radius = 62.dp
-                    // Per v0.2: the Measure button shows an active (light bg / dark icon) state while a
-                    // measurement mode is active; the Lock button does the same while the view is locked.
-                    data class Tool(val icon: androidx.compose.ui.graphics.vector.ImageVector, val active: Boolean, val action: () -> Unit)
-                    val tools = listOf(
-                        Tool(Icons.Default.FitScreen, active = false) { alignOpen = true },
-                        Tool(Icons.Default.Straighten, active = tab.measurementMode != MeasurementMode.NONE) { measureOpen = true },
-                        Tool(Icons.Default.Visibility, active = false) { displayOpen = true },
-                        Tool(Icons.Default.Info, active = false) { infoOpen = true },
-                        Tool(Icons.Default.Edit, active = false) { tab.editorOpen = true },
-                        Tool(if (tab.interactionState.session.locked) Icons.Default.LockOpen else Icons.Default.Lock, active = tab.interactionState.session.locked) {
-                            dispatchViewerCommand(ViewerCommand.ToggleLock)
-                        },
-                    )
-                    val offsets = FloatingBallLayout.toolOffsets(tab.floatingPosition.snap)
-                    tools.forEachIndexed { index, (icon, active, action) ->
-                        val toolOffset = offsets[index]
-                        FloatingActionButton(
-                            onClick = action,
-                            shape = CircleShape,
-                            containerColor = if (active) baseContent else baseContainer,
-                            contentColor = if (active) baseContainer else baseContent,
-                            modifier = Modifier
-                                .size(40.dp)
-                                .offset(
-                                    x = toolOffset.x.dp,
-                                    y = toolOffset.y.dp,
-                                ),
-                        ) { Icon(icon, null) }
-                    }
-                }
-                FloatingActionButton(
-                    onClick = { toolOpen = !toolOpen },
-                    shape = CircleShape,
-                    containerColor = baseContainer,
-                    contentColor = baseContent,
-                    modifier = Modifier.size(54.dp),
                 ) { AssetImage("icon_trans.png", Modifier.size(43.dp), ContentScale.Fit) }
             }
             if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateAnalysis(tab, it) }, onMessage = onMessage, onRunBondComputation = onRunBondComputation)
@@ -1216,6 +1325,24 @@ private fun LanguageMenuItem(language: String, onLanguage: (String) -> Unit) {
             Row {
                 TextButton(onClick = { onLanguage("zh") }) { Text("中", fontWeight = FontWeight.Bold, color = if (language == "zh") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                 TextButton(onClick = { onLanguage("en") }) { Text("EN", fontWeight = FontWeight.Bold, color = if (language == "en") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+        },
+    )
+}
+
+@Composable
+private fun ThemeMenuItem(mode: ThemeMode, onTheme: (ThemeMode) -> Unit) {
+    DropdownMenuItem(
+        text = { Text(localized("主题", "Theme")) },
+        leadingIcon = { Icon(Icons.Default.Contrast, null) },
+        onClick = {},
+        trailingIcon = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                ThemeMode.entries.forEach { item ->
+                    val icon = when (item) { ThemeMode.SYSTEM -> Icons.Default.BrightnessAuto; ThemeMode.LIGHT -> Icons.Default.LightMode; ThemeMode.DARK -> Icons.Default.DarkMode }
+                    val tint = if (item == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    IconButton(onClick = { onTheme(item) }, modifier = Modifier.size(36.dp)) { Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp)) }
+                }
             }
         },
     )
@@ -1843,14 +1970,17 @@ private fun PresetRow(
     onDelete: () -> Unit,
     onOpenParsed: (ParsedStructure, String) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     Row(
         Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable {
-            runCatching { PresetRepository.openPreset(context, entry) }
-                .onSuccess { parsed ->
-                    onDismiss()
-                    onOpenParsed(parsed, entry.name)
-                }
-                .onFailure { onMessage(it.message ?: "Unable to open preset") }
+            scope.launch {
+                runCatching { withContext(Dispatchers.IO) { PresetRepository.openPreset(context, entry) } }
+                    .onSuccess { parsed ->
+                        onDismiss()
+                        onOpenParsed(parsed, entry.name)
+                    }
+                    .onFailure { onMessage(it.message ?: "Unable to open preset") }
+            }
         },
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2371,22 +2501,6 @@ private fun AboutScreen(onBack: () -> Unit) {
             Text(localized("© 2026 made with ♥ by kelesss", "© 2026 made with ♥ by kelesss"), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
             Text(localized("软件使用 ChatGPT Codex 和 Kimi Code 辅助构建。", "Built with assistance from ChatGPT Codex and Kimi Code."), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun ThemeSelector(mode: ThemeMode, onTheme: (ThemeMode) -> Unit, modifier: Modifier = Modifier) {
-    var expanded by remember { mutableStateOf(false) }
-    Box(modifier) {
-        IconButton(onClick = { expanded = true }) {
-            Icon(when (mode) { ThemeMode.SYSTEM -> Icons.Default.BrightnessAuto; ThemeMode.LIGHT -> Icons.Default.LightMode; ThemeMode.DARK -> Icons.Default.DarkMode }, "Theme")
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            ThemeMode.entries.forEach { item ->
-                val label = when (item) { ThemeMode.SYSTEM -> localized("跟随系统", "System"); ThemeMode.LIGHT -> localized("浅色", "Light"); ThemeMode.DARK -> localized("深色", "Dark") }
-                DropdownMenuItem(text = { Text((if (item == mode) "✓ " else "") + label) }, onClick = { expanded = false; onTheme(item) })
-            }
         }
     }
 }

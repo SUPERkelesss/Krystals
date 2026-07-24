@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.LinearGradient
 import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Shader
@@ -13,7 +14,6 @@ import android.os.Looper
 import android.view.Choreographer
 import android.view.Surface
 import com.google.android.filament.Camera
-import com.google.android.filament.Colors
 import com.google.android.filament.Engine
 import com.google.android.filament.EntityManager
 import com.google.android.filament.Filament
@@ -22,6 +22,7 @@ import com.google.android.filament.RenderTarget
 import com.google.android.filament.Renderer
 import com.google.android.filament.Scene
 import com.google.android.filament.SwapChain
+import com.google.android.filament.SwapChainFlags
 import com.google.android.filament.Texture
 import com.google.android.filament.View
 import com.google.android.filament.Viewport
@@ -33,8 +34,11 @@ import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.state.InteractionState
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.scene.SceneBounds
+import com.krystals.renderer.core.scene.allBounds
+import com.krystals.renderer.core.scene.toCameraDepthRange
 import com.krystals.renderer.core.scene.visibleBounds
 import com.krystals.renderer.core.style.AxisMode
+import com.krystals.renderer.core.style.backgroundColor
 import com.krystals.crystal.core.math.Vec3
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -77,6 +81,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private var sceneRadius = 10.0
     private var sceneCenter = Vec3.ZERO
     private var sceneBounds: SceneBounds? = null
+    private var allSceneBounds: SceneBounds? = null
     private var bondValenceBySite: Map<String, Double> = emptyMap()
     private var sceneSubmissions = 0L
     private var interactionUpdates = 0L
@@ -113,7 +118,10 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         checkOpen()
         detachInternal()
         require(surface.isValid) { "Filament surface is not valid" }
-        swapChain = engine.createSwapChain(surface)
+        // Request an sRGB swap chain so that linear clear colors and material outputs are
+        // correctly encoded to the display color space, matching the Legacy backend.
+        val flags = if (SwapChain.isSRGBSwapChainSupported(engine)) SwapChainFlags.CONFIG_SRGB_COLORSPACE else 0L
+        swapChain = engine.createSwapChain(surface, flags)
         requestFrames(3)
     }
 
@@ -128,7 +136,8 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         gpuInstances.updateInteraction(scene, interaction)
         pickingRenderer.submit(scene)
         sceneBounds = scene.visibleBounds()
-        sceneCenter = sceneBounds?.center ?: Vec3.ZERO
+        allSceneBounds = scene.allBounds()
+        sceneCenter = allSceneBounds?.center ?: sceneBounds?.center ?: Vec3.ZERO
         sceneRadius = sceneBounds?.radius ?: 10.0
         updateClearColor(scene)
         updateLightingAndDepth()
@@ -149,7 +158,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             previous.session.viewportHeight != state.session.viewportHeight
         if (documentChanged) submittedScene?.let { gpuInstances.updateInteraction(it, state) }
         if (cameraChanged || viewportChanged) updateCamera()
-        if (cameraChanged) updateLightingAndDepth()
+        if (cameraChanged || documentChanged) updateLightingAndDepth()
         if (documentChanged || cameraChanged || viewportChanged) requestFrames(if (documentChanged) 2 else 1)
     }
 
@@ -229,6 +238,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     override fun clear() {
         submittedScene = null
         sceneBounds = null
+        allSceneBounds = null
         sceneCenter = Vec3.ZERO
         sceneRadius = 10.0
         gpuInstances.clear()
@@ -277,9 +287,21 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         val state = interaction.session
         view.viewport = Viewport(0, 0, width, height)
         val aspect = width.toDouble() / height
-        val span = sceneRadius / state.camera.zoom
+        // Match legacy scale: compute span from rotated 2D extents of all-atom bounds.
+        val rotation = state.camera.rotation
+        val center = sceneCenter + state.camera.target
+        val corners = allSceneBounds?.corners.orEmpty()
+        val span = if (corners.isNotEmpty()) {
+            val rotated = corners.map { rotation * (it - center) }
+            val extentX = (rotated.maxOf { it.x } - rotated.minOf { it.x }).coerceAtLeast(1.0)
+            val extentY = (rotated.maxOf { it.y } - rotated.minOf { it.y }).coerceAtLeast(1.0)
+            val baseScale = minOf(width / extentX, height / extentY) * 0.72
+            height / (2.0 * baseScale * state.camera.zoom)
+        } else {
+            sceneRadius / state.camera.zoom
+        }
         camera.setProjection(Camera.Projection.ORTHO, -span * aspect, span * aspect, -span, span, -1000.0, 1000.0)
-        camera.setShift(-2.0 * state.camera.panX / width, 2.0 * state.camera.panY / height)
+        camera.setShift(2.0 * state.camera.panX / width, -2.0 * state.camera.panY / height)
         val worldFromCamera = state.camera.rotation.transposed()
         val target = sceneCenter + state.camera.target
         val eye = target + worldFromCamera * Vec3(0.0, 0.0, max(50.0, sceneRadius * 4.0))
@@ -298,19 +320,24 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         engine.lightManager.setDirection(lightInstance, worldDirection.x.toFloat(), worldDirection.y.toFloat(), worldDirection.z.toFloat())
         engine.lightManager.setIntensity(lightInstance, (light.intensity * 100_000f).coerceAtLeast(1f))
 
-        var near = Float.NEGATIVE_INFINITY
-        var far = Float.POSITIVE_INFINITY
-        val rotation = interaction.session.camera.rotation
-        val target = sceneCenter + interaction.session.camera.target
-        val cameraDistance = max(50.0, sceneRadius * 4.0)
-        val corners = sceneBounds?.corners.orEmpty()
-        depthPointsEvaluated = corners.size
-        corners.forEach { coordinate ->
-            val depth = ((rotation * (coordinate - target)).z - cameraDistance).toFloat()
-            if (depth > near) near = depth
-            if (depth < far) far = depth
+        // Depth-cueing range is derived from the visible-atoms AABB, not the preloaded
+        // neighbor-cell shell. +3 maps to the nearest visible corner, -3 to the farthest.
+        val visibleBounds = scene.visibleBounds()
+        val depthRange = visibleBounds.toCameraDepthRange(interaction.session.camera)
+        val visibleCorners = visibleBounds?.corners.orEmpty()
+        depthPointsEvaluated = visibleCorners.size
+        if (depthRange != null && visibleBounds != null) {
+            // toCameraDepthRange operates in the camera-aligned frame anchored at the visible
+            // bounds center. Filament's view-space Z additionally contains the camera distance
+            // offset used in updateCamera(), so shift the range by the same amount to keep the
+            // normalized depth scale aligned with the actual rendered view depths.
+            val cameraDistance = max(50.0, sceneRadius * 4.0)
+            val target = sceneCenter + interaction.session.camera.target
+            val centerShift = (interaction.session.camera.rotation * (visibleBounds.center - target)).z
+            val near = (depthRange.near - cameraDistance + centerShift).toFloat()
+            val far = (depthRange.far - cameraDistance + centerShift).toFloat()
+            materialFactory.updateDepthCueing(scene.environment, near, far)
         }
-        if (near.isFinite() && far.isFinite()) materialFactory.updateDepthCueing(scene.environment, near, far)
     }
 
     private fun composeOverlay(bitmap: Bitmap) {
@@ -322,7 +349,18 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         val width = bitmap.width.toDouble()
         val height = bitmap.height.toDouble()
         val aspect = width / height
-        val span = sceneRadius / cameraState.zoom
+        // Match legacy scale: compute span from rotated 2D extents of all-atom bounds.
+        val center = sceneCenter + cameraState.target
+        val corners = allSceneBounds?.corners.orEmpty()
+        val span = if (corners.isNotEmpty()) {
+            val rotated = corners.map { cameraState.rotation * (it - center) }
+            val extentX = (rotated.maxOf { it.x } - rotated.minOf { it.x }).coerceAtLeast(1.0)
+            val extentY = (rotated.maxOf { it.y } - rotated.minOf { it.y }).coerceAtLeast(1.0)
+            val baseScale = minOf(width / extentX, height / extentY) * 0.72
+            height / (2.0 * baseScale * cameraState.zoom)
+        } else {
+            sceneRadius / cameraState.zoom
+        }
         fun project(id: Long): Pair<Float, Float>? {
             val atom = atoms[id]?.atom ?: return null
             val position = cameraState.rotation * (atom.cartesianCoordinate.toVec3() - sceneCenter - cameraState.target)
@@ -354,6 +392,23 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             val coordinates = selectedIds.mapNotNull { atoms[it]?.atom?.cartesianCoordinate?.toVec3() }
             val projected = selectedIds.mapNotNull(::project)
             if (coordinates.size != expected || projected.size != expected) return@forEach
+            // Per v0.6: dihedral plane gradient overlay (matches Legacy renderer's LinearGradient).
+            if (selection.mode == MeasurementMode.DIHEDRAL) {
+                DihedralTool.planes(coordinates[0], coordinates[1], coordinates[2], coordinates[3]).forEach { plane ->
+                    val sv = plane.vertices.map { v ->
+                        val pos = cameraState.rotation * (v - sceneCenter - cameraState.target)
+                        ((width * 0.5 + cameraState.panX + pos.x / (span * aspect) * width * 0.5).toFloat() to
+                            (height * 0.5 + cameraState.panY - pos.y / span * height * 0.5).toFloat())
+                    }
+                    if (sv.size == 4) {
+                        val path = Path().apply { moveTo(sv[0].first, sv[0].second); sv.drop(1).forEach { lineTo(it.first, it.second) }; close() }
+                        val shader = LinearGradient(sv[0].first, sv[0].second, sv[3].first, sv[3].second,
+                            intArrayOf(Color.argb(112, 150, 95, 205), Color.argb(56, 128, 72, 180), Color.TRANSPARENT),
+                            null, Shader.TileMode.CLAMP)
+                        canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.shader = shader })
+                    }
+                }
+            }
             val label = when (selection.mode) {
                 MeasurementMode.LENGTH -> "%.4f \u00C5".format(DistanceTool.calculate(coordinates[0], coordinates[1]))
                 MeasurementMode.ANGLE -> "%.3f\u00B0".format(AngleTool.calculate(coordinates[0], coordinates[1], coordinates[2]))
@@ -468,7 +523,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private fun updateClearColor(scene: RenderScene) {
         renderer.clearOptions = Renderer.ClearOptions().apply {
             clear = true
-            clearColor = filamentClearColor(scene.environment.backgroundArgb)
+            clearColor = backgroundColor(scene.environment.backgroundArgb).toFilamentClearColor()
         }
     }
 
@@ -500,17 +555,12 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     }
 }
 
-internal fun filamentClearColor(argb: Long): DoubleArray {
-    val linear = Colors.toLinear(
-        Colors.RgbType.SRGB,
-        (argb ushr 16 and 0xFF).toFloat() / 255f,
-        (argb ushr 8 and 0xFF).toFloat() / 255f,
-        (argb and 0xFF).toFloat() / 255f,
-    )
+private fun com.krystals.renderer.core.style.BackgroundColor.toFilamentClearColor(): DoubleArray {
+    val alpha = (srgbArgb ushr 24 and 0xFFL).toDouble() / 255.0
     return doubleArrayOf(
-        linear[0].toDouble(),
-        linear[1].toDouble(),
-        linear[2].toDouble(),
-        (argb ushr 24 and 0xFF).toDouble() / 255.0,
+        linearRgb[0].toDouble(),
+        linearRgb[1].toDouble(),
+        linearRgb[2].toDouble(),
+        alpha,
     )
 }

@@ -2,11 +2,25 @@ material {
     name : KrystalsHighlight,
     shadingModel : unlit,
     blending : transparent,
+    doubleSided : true,
+    variables : [ worldNormal ],
     parameters : [ { type : float4, name : baseColor } ]
 }
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        material.baseColor = materialParams.baseColor;
+        vec3 viewNormal = normalize(mat3(getViewFromWorldMatrix()) * variable_worldNormal.xyz);
+        // Draw a wide camera-facing rim ring around the sphere silhouette.
+        float rim = 1.0 - abs(viewNormal.z);
+        float inner = smoothstep(0.20, 0.40, rim);
+        float outer = 1.0 - smoothstep(0.80, 0.95, rim);
+        float ring = inner * outer;
+        vec4 color = materialParams.baseColor;
+        material.baseColor = vec4(color.rgb, color.a * ring);
+    }
+}
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.worldNormal = vec4(normalize(getWorldFromModelNormalMatrix() * getPosition().xyz), 0.0);
     }
 }

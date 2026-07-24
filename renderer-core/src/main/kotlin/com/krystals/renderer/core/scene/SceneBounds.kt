@@ -39,3 +39,25 @@ fun RenderScene.visibleBounds(): SceneBounds? {
     }
     return if (found) SceneBounds(Vec3(minX, minY, minZ), Vec3(maxX, maxY, maxZ)) else null
 }
+
+/** Bounds of every atom in the scene, regardless of visibility. */
+fun RenderScene.allBounds(): SceneBounds? {
+    var minX = Double.POSITIVE_INFINITY
+    var minY = Double.POSITIVE_INFINITY
+    var minZ = Double.POSITIVE_INFINITY
+    var maxX = Double.NEGATIVE_INFINITY
+    var maxY = Double.NEGATIVE_INFINITY
+    var maxZ = Double.NEGATIVE_INFINITY
+    var found = false
+    atoms.forEach { atom ->
+        val point = atom.atom.cartesianCoordinate
+        found = true
+        if (point.x < minX) minX = point.x
+        if (point.y < minY) minY = point.y
+        if (point.z < minZ) minZ = point.z
+        if (point.x > maxX) maxX = point.x
+        if (point.y > maxY) maxY = point.y
+        if (point.z > maxZ) maxZ = point.z
+    }
+    return if (found) SceneBounds(Vec3(minX, minY, minZ), Vec3(maxX, maxY, maxZ)) else null
+}

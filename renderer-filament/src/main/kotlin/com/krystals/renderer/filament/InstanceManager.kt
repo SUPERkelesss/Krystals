@@ -5,6 +5,7 @@ import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
 import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.crystal.core.math.Vec3
 
 enum class GeometryKind { SPHERE_HIGH, SPHERE_MEDIUM, SPHERE_LOW, CYLINDER, POLYHEDRON, HIGHLIGHT, FRAME, AXIS, MEASUREMENT }
 
@@ -53,6 +54,7 @@ class InstanceManager {
     fun sync(scene: RenderScene): SceneDiff {
         val next = linkedMapOf<String, InstanceRecord>()
         val sphereGeometry = sphereGeometryForVisibleAtoms(scene.atoms.count(AtomInstance::visible))
+        val atomsByImageId = scene.atoms.associateBy { it.atom.id }
         scene.atoms.asSequence().filter(AtomInstance::visible).forEach { atom ->
             next[atom.id] = InstanceRecord(
                 atom.id, pickId(atom.id), BatchKey(sphereGeometry, MaterialKey(atom.material, atom.atom.occupancy)),
@@ -60,11 +62,19 @@ class InstanceManager {
             )
         }
         scene.bonds.asSequence().filter(BondInstance::visible).forEach { bond ->
-            val middle = (bond.start + bond.end) * 0.5
-            listOf(
-                "${bond.id}:a" to Triple(bond.start, middle, bond.startMaterial),
-                "${bond.id}:b" to Triple(middle, bond.end, bond.endMaterial),
-            ).forEach { (id, half) ->
+            val startAtom = atomsByImageId[bond.bond.atomA]
+            val endAtom = atomsByImageId[bond.bond.atomB]
+            val (clippedStart, clippedEnd) = clipBondEndpoints(
+                bond.start, bond.end,
+                startAtom?.takeIf { it.visible }?.radius,
+                endAtom?.takeIf { it.visible }?.radius,
+            )
+            val middle = (clippedStart + clippedEnd) * 0.5
+            val halves: List<Pair<String, Triple<Vec3, Vec3, Material>>> = listOf(
+                "${bond.id}:a" to Triple(clippedStart, middle, bond.startMaterial),
+                "${bond.id}:b" to Triple(middle, clippedEnd, bond.endMaterial),
+            )
+            halves.forEach { (id, half) ->
                 next[id] = InstanceRecord(
                     id, pickId(bond.id), BatchKey(GeometryKind.CYLINDER, MaterialKey(half.third)),
                     cylinderTransform(half.first, half.second, bond.radius),
@@ -93,6 +103,23 @@ class InstanceManager {
     private fun pickId(objectId: String): Int = stablePickIds.getOrPut(objectId) {
         check(nextPickId <= 0xFFFFFF) { "24-bit picking id space exhausted" }
         nextPickId++
+    }
+
+    private fun clipBondEndpoints(
+        start: Vec3,
+        end: Vec3,
+        startRadius: Double?,
+        endRadius: Double?,
+    ): Pair<Vec3, Vec3> {
+        val delta = end - start
+        val length = delta.length()
+        if (length < 1e-12) return start to end
+        val dir = delta / length
+        // Extend the cylinder 2% into the atom sphere so the joint is tight instead of
+        // leaving a visible gap at the surface.
+        val startOffset = startRadius?.let { minOf(it * 0.98, length * 0.5) } ?: 0.0
+        val endOffset = endRadius?.let { minOf(it * 0.98, length * 0.5) } ?: 0.0
+        return (start + dir * startOffset) to (end - dir * endOffset)
     }
 
     private fun InstanceRecord.sameContent(other: InstanceRecord): Boolean =

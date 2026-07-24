@@ -7,7 +7,9 @@ import com.google.android.filament.RenderableManager
 import com.google.android.filament.Scene
 import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.primitive.AtomInstance
+import com.krystals.renderer.core.scene.CellFrameGeometry
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.renderer.core.scene.allBounds
 import com.krystals.interaction.measure.DihedralTool
 import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.state.InteractionState
@@ -15,6 +17,13 @@ import com.krystals.crystal.core.math.Vec3
 import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.style.FrameMode
 import com.krystals.renderer.core.style.LineStyle
+import com.krystals.renderer.core.style.SelectionColors
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
+
+private const val FRAME_RADIUS_FACTOR = 0.002
+private const val FRAME_CLIP_MIN_LENGTH = 1e-6
 
 /** Materializes InstanceManager's stable diff as automatically-instanced Filament entities. */
 class GpuInstanceManager(
@@ -108,12 +117,12 @@ class GpuInstanceManager(
             listOfNotNull(state.document.inspection.inspectedAtomId)
         highlighted.forEach { atomId ->
             val atom = atomsById[atomId] ?: return@forEach
-            val color = if (atomId in lockedIds) 0xFFCFA7F5 else 0xFF7542A5
+            val color = if (atomId in lockedIds) SelectionColors.LOCKED_ARGB else SelectionColors.SELECTED_ARGB
             addAuxiliary(
                 InstanceRecord(
                     "aux:highlight:$atomId", 0,
-                    BatchKey(GeometryKind.HIGHLIGHT, MaterialKey(Material(color, 0.55, reflective = false))),
-                    sphereTransform(atom.atom.cartesianCoordinate.toVec3(), atom.radius * 1.18),
+                    BatchKey(GeometryKind.HIGHLIGHT, MaterialKey(Material(color, 0.65, reflective = false))),
+                    sphereTransform(atom.atom.cartesianCoordinate.toVec3(), atom.radius * 1.05),
                 ), snapshot,
             )
         }
@@ -142,19 +151,8 @@ class GpuInstanceManager(
                     ), snapshot,
                 )
             }
-            if (measurement.mode == MeasurementMode.DIHEDRAL && points.size >= 4) {
-                DihedralTool.planes(points[0], points[1], points[2], points[3]).forEachIndexed { planeIndex, plane ->
-                    val id = "aux:dihedral:$measurementIndex:$planeIndex"
-                    auxiliaryMeshes[id] = planeMesh(plane.vertices, plane.normal)
-                    addAuxiliary(
-                        InstanceRecord(
-                            id, 0,
-                            BatchKey(GeometryKind.POLYHEDRON, MaterialKey(Material(0xFFB89AE8, 0.24, reflective = false, doubleSided = true))),
-                            identity(),
-                        ), snapshot,
-                    )
-                }
-            }
+            // Per v0.6: dihedral planes are now drawn as gradient canvas overlays in
+            // FilamentRenderer.composeOverlay (matching the Legacy renderer) instead of solid 3D meshes.
         }
     }
 
@@ -209,33 +207,29 @@ class GpuInstanceManager(
             .receiveShadows(false)
             .build(engine, entity)
         val transform = engine.transformManager.create(entity)
-        engine.transformManager.setTransform(transform, filamentTransform(record))
+        engine.transformManager.setTransform(transform, record.transform)
         scene.addEntity(entity)
         if (record.batch.geometry == GeometryKind.POLYHEDRON) ownedMeshByEntity[entity] = uploaded
         return entity
     }
 
     private fun addFrameAndAxes(snapshot: RenderScene) {
-        val matrix = snapshot.structure.lattice.matrix
-        val expansion = snapshot.expansion
-        val limitX = if (snapshot.environment.frame.mode == FrameMode.ALL_CELLS) expansion.x else 1
-        val limitY = if (snapshot.environment.frame.mode == FrameMode.ALL_CELLS) expansion.y else 1
-        val limitZ = if (snapshot.environment.frame.mode == FrameMode.ALL_CELLS) expansion.z else 1
-        if (snapshot.environment.frame.mode != FrameMode.NONE) {
-            val segments = linkedSetOf<Pair<Vec3, Vec3>>()
-            for (x in 0..limitX) for (y in 0..limitY) segments += matrix.a * x.toDouble() + matrix.b * y.toDouble() to matrix.a * x.toDouble() + matrix.b * y.toDouble() + matrix.c * limitZ.toDouble()
-            for (x in 0..limitX) for (z in 0..limitZ) segments += matrix.a * x.toDouble() + matrix.c * z.toDouble() to matrix.a * x.toDouble() + matrix.c * z.toDouble() + matrix.b * limitY.toDouble()
-            for (y in 0..limitY) for (z in 0..limitZ) segments += matrix.b * y.toDouble() + matrix.c * z.toDouble() to matrix.b * y.toDouble() + matrix.c * z.toDouble() + matrix.a * limitX.toDouble()
-            val renderedSegments = if (snapshot.environment.frame.lineStyle == LineStyle.DASHED) segments.flatMap(::dash) else segments.toList()
-            renderedSegments.forEachIndexed { index, (start, end) ->
-                addSceneAuxiliary(
-                    InstanceRecord(
-                        "aux:frame:$index", 0,
-                        BatchKey(GeometryKind.FRAME, MaterialKey(Material(0xFFA0A0AA, reflective = false))),
-                        cylinderTransform(start, end, 0.015),
-                    ), snapshot,
-                )
-            }
+        val edges = CellFrameGeometry.edges(snapshot.structure.lattice, snapshot.expansion, snapshot.environment.frame.mode)
+        if (edges.isEmpty()) return
+        // Scale the frame radius with the scene so its on-screen thickness stays comparable
+        // to the legacy renderer's ~1.4 px stroke across different structures.
+        val radius = (snapshot.allBounds()?.radius ?: snapshot.structure.lattice.a) * FRAME_RADIUS_FACTOR
+        val visibleAtoms = snapshot.atoms.filter { it.visible }
+        val clippedSegments = edges.flatMap { clipSegmentBySpheres(it, visibleAtoms) }
+        val renderedSegments = if (snapshot.environment.frame.lineStyle == LineStyle.DASHED) clippedSegments.flatMap(::dash) else clippedSegments
+        renderedSegments.forEachIndexed { index, (start, end) ->
+            addSceneAuxiliary(
+                InstanceRecord(
+                    "aux:frame:$index", 0,
+                    BatchKey(GeometryKind.FRAME, MaterialKey(Material(0xFFA0A0AA, reflective = false))),
+                    cylinderTransform(start, end, radius),
+                ), snapshot,
+            )
         }
     }
 
@@ -280,6 +274,46 @@ class GpuInstanceManager(
                 val delta = segment.second - segment.first
                 add(segment.first + delta * (index / 8.0) to segment.first + delta * ((index + 1.0) / 8.0))
             }
+        }
+    }
+
+    private fun clipSegmentBySpheres(
+        segment: Pair<Vec3, Vec3>,
+        atoms: List<AtomInstance>,
+    ): List<Pair<Vec3, Vec3>> {
+        var segments = listOf(segment)
+        atoms.forEach { atom ->
+            val center = atom.atom.cartesianCoordinate.toVec3()
+            segments = segments.flatMap { clipSegmentBySphere(it, center, atom.radius) }
+        }
+        return segments.filter { (a, b) -> (b - a).length() > FRAME_CLIP_MIN_LENGTH }
+    }
+
+    private fun clipSegmentBySphere(
+        segment: Pair<Vec3, Vec3>,
+        center: Vec3,
+        radius: Double,
+    ): List<Pair<Vec3, Vec3>> {
+        val (a, b) = segment
+        val ab = b - a
+        val length = ab.length()
+        if (length < FRAME_CLIP_MIN_LENGTH) return listOf(segment)
+        val dir = ab / length
+        val ac = a - center
+        val bCoef = 2.0 * dir.dot(ac)
+        val cCoef = ac.dot(ac) - radius * radius
+        val discriminant = bCoef * bCoef - 4.0 * cCoef
+        if (discriminant <= 0.0) return listOf(segment)
+        val sqrtDisc = sqrt(discriminant)
+        val tEnter = (-bCoef - sqrtDisc) / 2.0
+        val tExit = (-bCoef + sqrtDisc) / 2.0
+        // The sphere is entirely before or after the segment.
+        if (tExit < 0.0 || tEnter > length) return listOf(segment)
+        val enterRatio = (tEnter / length).coerceIn(0.0, 1.0)
+        val exitRatio = (tExit / length).coerceIn(0.0, 1.0)
+        return buildList {
+            if (enterRatio > 0.0) add(a to (a + ab * enterRatio))
+            if (exitRatio < 1.0) add((a + ab * exitRatio) to b)
         }
     }
 
@@ -329,13 +363,6 @@ class GpuInstanceManager(
             normals[index * 3] = normal.x.toFloat(); normals[index * 3 + 1] = normal.y.toFloat(); normals[index * 3 + 2] = normal.z.toFloat()
         }
         return MeshData(positions, normals, triangleIndices.toIntArray())
-    }
-}
-
-internal fun filamentTransform(record: InstanceRecord): FloatArray {
-    if (record.batch.geometry != GeometryKind.CYLINDER || !record.objectId.startsWith("bond:")) return record.transform
-    return record.transform.copyOf().also { transform ->
-        for (index in intArrayOf(0, 1, 2, 8, 9, 10)) transform[index] *= 0.5f
     }
 }
 

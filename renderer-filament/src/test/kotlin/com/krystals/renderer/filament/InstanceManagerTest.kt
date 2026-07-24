@@ -11,10 +11,14 @@ import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.periodic.Int3
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
+import com.krystals.crystal.analysis.bonding.Bond
+import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.camera.Camera
 import com.krystals.renderer.core.primitive.AtomInstance
+import com.krystals.renderer.core.primitive.BondInstance
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.renderer.core.style.backgroundColor
 import com.krystals.interaction.state.InteractionState
 import com.krystals.interaction.state.ViewerSessionState
 import kotlin.test.Test
@@ -80,29 +84,47 @@ class InstanceManagerTest {
     }
 
     @Test
-    fun filamentHalvesOnlyBondCylinderRadius() {
-        val source = FloatArray(16) { (it + 1).toFloat() }
-        val material = MaterialKey(Material(0xFFFFFFFF))
-        val bond = InstanceRecord("bond:1:2:a", 1, BatchKey(GeometryKind.CYLINDER, material), source)
-        val measurement = InstanceRecord("aux:measurement:0:0", 0, BatchKey(GeometryKind.MEASUREMENT, material), source)
+    fun clearColorConvertsAppearanceSrgbToLinearSpace() {
+        val color = backgroundColor(0x80808080L)
 
-        val transformed = filamentTransform(bond)
-        val expected = source.copyOf().also { values ->
-            for (index in intArrayOf(0, 1, 2, 8, 9, 10)) values[index] *= 0.5f
-        }
-        assertContentEquals(expected, transformed)
-        assertContentEquals(FloatArray(16) { (it + 1).toFloat() }, source)
-        assertSame(source, filamentTransform(measurement))
+        assertEquals(0.21586f, color.linearRgb[0], 0.00001f)
+        assertEquals(color.linearRgb[0], color.linearRgb[1], 0.0f)
+        assertEquals(color.linearRgb[1], color.linearRgb[2], 0.0f)
+        assertEquals(128L, color.srgbArgb ushr 24 and 0xFFL)
     }
 
     @Test
-    fun clearColorConvertsAppearanceSrgbToFilamentLinearSpace() {
-        val color = filamentClearColor(0x80808080)
+    fun bondCylinderIsClippedToVisibleAtomRadii() {
+        val manager = InstanceManager()
+        val scene = sceneWithBond(atomRadius = 0.3, bothVisible = true)
+        val diff = manager.sync(scene)
 
-        assertEquals(0.21586, color[0], 0.00001)
-        assertEquals(color[0], color[1], 0.0)
-        assertEquals(color[1], color[2], 0.0)
-        assertEquals(128.0 / 255.0, color[3], 0.00001)
+        val halfA = diff.batches.values.flatten().first { it.objectId == "bond:test:a" }
+        val halfB = diff.batches.values.flatten().first { it.objectId == "bond:test:b" }
+        // Both halves should have moved inward by 0.3 along the bond axis.
+        assertEquals(0.0f, halfA.transform[12], 1e-4f) // start x stays at atom 0
+        assertEquals(0.0f, halfA.transform[13], 1e-4f) // start y stays at 0
+        assertEquals(0.7f, halfA.transform[5], 1e-4f)  // length shortened to 1.0 - 2*0.3
+        assertEquals(0.0f, halfB.transform[12], 1e-4f) // start x
+        assertEquals(0.3f, halfB.transform[13], 1e-4f) // start y shifted by atom0 radius
+        assertEquals(0.7f, halfB.transform[5], 1e-4f)  // remaining length
+    }
+
+    @Test
+    fun bondCylinderIsNotClippedWhenEndpointHidden() {
+        val manager = InstanceManager()
+        val scene = sceneWithBond(atomRadius = 0.3, bothVisible = false)
+        val diff = manager.sync(scene)
+
+        val halfA = diff.batches.values.flatten().first { it.objectId == "bond:test:a" }
+        val halfB = diff.batches.values.flatten().first { it.objectId == "bond:test:b" }
+        // Hidden atom => no clipping; cylinder spans the full 0..1 range.
+        assertEquals(0.0f, halfA.transform[12], 1e-4f)
+        assertEquals(0.0f, halfA.transform[13], 1e-4f)
+        assertEquals(0.5f, halfA.transform[5], 1e-4f)
+        assertEquals(0.0f, halfB.transform[12], 1e-4f)
+        assertEquals(0.5f, halfB.transform[13], 1e-4f)
+        assertEquals(0.5f, halfB.transform[5], 1e-4f)
     }
 
     @Test
@@ -181,6 +203,46 @@ class InstanceManagerTest {
         budget.request(1)
         budget.reset()
         assertEquals(0, budget.pending)
+    }
+
+    private fun sceneWithBond(atomRadius: Double, bothVisible: Boolean): RenderScene {
+        val species = Species("C")
+        val material = Material(0xFF505050)
+        val atom0 = AtomInstance(
+            id = "atom:0",
+            atom = AtomImage(
+                id = 0L, siteId = "C", siteLabel = "C1", species = species,
+                fractionalCoordinate = FractionalCoordinate.ZERO,
+                cartesianCoordinate = CartesianCoordinate(0.0, 0.0, 0.0),
+                occupancy = 1.0, cellOffset = Int3(0, 0, 0),
+            ),
+            radius = atomRadius,
+            material = material,
+            visible = true,
+        )
+        val atom1 = AtomInstance(
+            id = "atom:1",
+            atom = AtomImage(
+                id = 1L, siteId = "C", siteLabel = "C1", species = species,
+                fractionalCoordinate = FractionalCoordinate.ZERO,
+                cartesianCoordinate = CartesianCoordinate(0.0, 1.0, 0.0),
+                occupancy = 1.0, cellOffset = Int3(0, 0, 0),
+            ),
+            radius = atomRadius,
+            material = material,
+            visible = bothVisible,
+        )
+        val bond = BondInstance(
+            id = "bond:test",
+            bond = Bond(atomA = 0L, atomB = 1L, distance = 1.0, rule = BondRule("C", "C", 0.0, 2.0)),
+            start = com.krystals.crystal.core.math.Vec3(0.0, 0.0, 0.0),
+            end = com.krystals.crystal.core.math.Vec3(0.0, 1.0, 0.0),
+            radius = 0.1,
+            startMaterial = material,
+            endMaterial = material,
+            visible = true,
+        )
+        return RenderScene(structure(), Expansion(), listOf(atom0, atom1, bond))
     }
 
     private fun scene(count: Int): RenderScene {

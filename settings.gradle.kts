@@ -27,7 +27,6 @@ include(
     ":crystal-core",
     ":crystal-data",
     ":crystal-io",
-    ":renderer",
     ":renderer-core",
     ":renderer-filament",
     ":renderer-legacy",

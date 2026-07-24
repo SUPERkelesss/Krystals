@@ -9,9 +9,12 @@ to `src/main/assets/materials`; once generated and committed, ordinary offline b
 `matc`. If a payload is absent or corrupt, backend initialization fails fast and the app uses the
 Canvas-Legacy session fallback instead of displaying a blank surface.
 
-Regenerate and verify payloads with the exact compiler version:
+Regenerate and verify payloads with the exact compiler version (merged into `bootstrap-build.ps1`):
 
 ```powershell
-.\scripts\build-filament-materials.ps1 -Install
-.\scripts\build-filament-materials.ps1 -VerifyOnly
+# Download matc and compile materials, then build the APK
+.\scripts\bootstrap-build.ps1 -Install
+
+# Verify existing materials only (no matc required)
+.\scripts\bootstrap-build.ps1 -VerifyOnly
 ```

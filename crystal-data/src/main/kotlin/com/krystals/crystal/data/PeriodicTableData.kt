@@ -26,9 +26,8 @@ object PeriodicTableData {
         "Pt" to 195.08, "Au" to 196.97, "Hg" to 200.59, "Tl" to 204.38, "Pb" to 207.2,
         "Bi" to 208.98, "Th" to 232.04, "Pa" to 231.04, "U" to 238.03,
     )
-    // Covalent radii in Å, sourced from the v0.2.1 specification (single-bond covalent radii,
-    // original table in pm, divided by 100). Elements absent from the source table
-    // (Fr, Bk…Og) fall back to [covalentRadius]'s default.
+    // Covalent radii in Å, sourced from Wikipedia "Atomic radii of the elements" data page
+    // Elements absent from the source table (Fr, Bk…Og) fall back to the calculated result.
     private val radii = mapOf(
         "H" to 0.32, "He" to 0.46, "Li" to 1.33, "Be" to 1.02, "B" to 0.85, "C" to 0.75,
         "N" to 0.71, "O" to 0.63, "F" to 0.64, "Ne" to 0.67, "Na" to 1.55, "Mg" to 1.39,
@@ -55,13 +54,9 @@ object PeriodicTableData {
         return match.value.takeIf { it in symbols } ?: "X"
     }
 
-    // Per v0.4.1: two radius sources. The auto-apply-radii button cycles between them; the default
-    // bond-rule generator uses BONDING (键合半径). BONDING falls back to the covalent single-bond
-    // table below for elements it lacks, then to [covalentRadius]'s default for elements neither
-    // table covers (D, the XX placeholder, Fr, and 97+ actinides) so bond generation never silently
-    // drops a pair.
-    //
-    // BONDING radii (键合半径) in Å. License: CC BY-SA 4.0; arXiv:2601.02017v1 [cond-mat.mtrl-sci] 05 Jan 2026.
+    // Bonding radii in Å. Reference: License: CC BY-SA 4.0; arXiv:2601.02017v1 [cond-mat.mtrl-sci] 05 Jan 2026.
+    // For scene contains 100+ atoms, bonding radii are used as default.
+    // Elements absent from the original table fall back to the covalant radii.
     private val bondingRadii = mapOf(
         "Li" to 1.28, "Be" to 1.02, "B" to 0.88, "C" to 0.76, "N" to 0.68, "O" to 0.69,
         "F" to 0.59, "Na" to 1.70, "Mg" to 1.42, "Al" to 1.27, "Si" to 1.09, "P" to 1.02,
@@ -78,9 +73,8 @@ object PeriodicTableData {
         "Pt" to 1.30, "Au" to 1.31, "Hg" to 1.37, "Tl" to 1.52, "Pb" to 1.76, "Bi" to 1.60,
         "Th" to 1.77, "U" to 1.08, "Np" to 1.15, "Pu" to 1.04,
     )
-    // vdW radii in Å, sourced from .todos/atomic_radii.md (Wikipedia "Atomic radii of the elements"
-    // data page, vdW column). Elements with no tabulated vdW value (most transition metals and
-    // lanthanides; see the source table) fall back to [covalentRadius] at lookup time.
+    // vdW radii in Å, sourced from Wikipedia "Atomic radii of the elements" data page, vdW column.
+    // Elements with no tabulated vdW value fall back to [covalentRadius] at lookup time.
     private val vdwRadii = mapOf(
         "H" to 1.20, "He" to 1.40, "Li" to 1.82, "Be" to 1.53, "B" to 1.92, "C" to 1.70,
         "N" to 1.55, "O" to 1.52, "F" to 1.47, "Ne" to 1.54, "Na" to 2.27, "Mg" to 1.73,
@@ -93,43 +87,21 @@ object PeriodicTableData {
         "Bi" to 2.07, "Po" to 1.97, "At" to 2.02, "Rn" to 2.20, "Fr" to 3.48, "Ra" to 2.83,
         "U" to 1.86,
     )
-    // Covalent (single-bond) radii in Å, sourced from .todos/atomic_radii.md (Wikipedia "Atomic
-    // radii of the elements" data page, Covalant(single bond) column). Serves as the BONDING
-    // fallback for elements the bonding-radius table lacks (H, He, Ne, Ar, Pm, Po–Ac, Pa, Am, Cm).
-    // Elements with no tabulated single-bond value (Fr, Bk…Og) fall back to [covalentRadius].
-    private val iniCovalentRadii = mapOf(
-        "H" to 0.32, "He" to 0.46, "Li" to 1.33, "Be" to 1.02, "B" to 0.85, "C" to 0.75,
-        "N" to 0.71, "O" to 0.63, "F" to 0.64, "Ne" to 0.67, "Na" to 1.55, "Mg" to 1.39,
-        "Al" to 1.26, "Si" to 1.16, "P" to 1.11, "S" to 1.03, "Cl" to 0.99, "Ar" to 0.96,
-        "K" to 1.96, "Ca" to 1.71, "Sc" to 1.48, "Ti" to 1.36, "V" to 1.34, "Cr" to 1.22,
-        "Mn" to 1.19, "Fe" to 1.16, "Co" to 1.11, "Ni" to 1.10, "Cu" to 1.12, "Zn" to 1.18,
-        "Ga" to 1.24, "Ge" to 1.21, "As" to 1.21, "Se" to 1.16, "Br" to 1.14, "Kr" to 1.17,
-        "Rb" to 2.10, "Sr" to 1.85, "Y" to 1.63, "Zr" to 1.54, "Nb" to 1.47, "Mo" to 1.38,
-        "Tc" to 1.28, "Ru" to 1.25, "Rh" to 1.25, "Pd" to 1.20, "Ag" to 1.28, "Cd" to 1.36,
-        "In" to 1.42, "Sn" to 1.40, "Sb" to 1.40, "Te" to 1.36, "I" to 1.33, "Xe" to 1.31,
-        "Cs" to 2.32, "Ba" to 1.96, "La" to 1.80, "Ce" to 1.63, "Pr" to 1.76, "Nd" to 1.74,
-        "Pm" to 1.73, "Sm" to 1.72, "Eu" to 1.68, "Gd" to 1.69, "Tb" to 1.68, "Dy" to 1.67,
-        "Ho" to 1.66, "Er" to 1.65, "Tm" to 1.64, "Yb" to 1.70, "Lu" to 1.62, "Hf" to 1.52,
-        "Ta" to 1.46, "W" to 1.37, "Re" to 1.31, "Os" to 1.29, "Ir" to 1.22, "Pt" to 1.23,
-        "Au" to 1.24, "Hg" to 1.33, "Tl" to 1.44, "Pb" to 1.44, "Bi" to 1.51, "Po" to 1.45,
-        "At" to 1.47, "Rn" to 1.42, "Ra" to 2.01, "Ac" to 1.86, "Th" to 1.75, "Pa" to 1.69,
-        "U" to 1.70, "Np" to 1.71, "Pu" to 1.72, "Am" to 1.66, "Cm" to 1.66,
-    )
 
-    /** Radius for bond-rule generation under [source]. BONDING uses the bonding-radius table, then
-     *  the covalent single-bond table, then [covalentRadius]; VDW uses the vdW table then
-     *  [covalentRadius]. SMART_IONIC is handled per-site by crystal-analysis (it
-     *  cannot return a single element-level radius) and should not be passed here. Elements covered
-     *  by none (D, the XX placeholder, Fr, 97+ actinides) always reach the [covalentRadius] fallback
-     *  so bond generation never silently drops a pair. */
+    /** Radius for bond-rule generation under [source]. BONDING and SMART_IONIC use the
+     *  bonding-radius table then [covalentRadius]; VDW uses the vdW table then [covalentRadius].
+     *  SMART_IONIC is handled per-site by crystal-analysis (it cannot return a single
+     *  element-level radius) and should not be passed here. Elements covered by none (D, the
+     *  XX placeholder, Fr, 97+ actinides) always reach the [covalentRadius] fallback so bond
+     *  generation never silently drops a pair. */
+
     fun radius(symbol: String, source: RadiusSource): Double = when (source) {
-        RadiusSource.BONDING -> bondingRadii[symbol] ?: iniCovalentRadii[symbol] ?: covalentRadius(symbol)
+        RadiusSource.BONDING -> bondingRadii[symbol] ?: covalentRadius(symbol)
         RadiusSource.VDW -> vdwRadii[symbol] ?: covalentRadius(symbol)
-        RadiusSource.SMART_IONIC -> bondingRadii[symbol] ?: iniCovalentRadii[symbol] ?: covalentRadius(symbol)
+        RadiusSource.SMART_IONIC -> bondingRadii[symbol] ?: covalentRadius(symbol)
     }
 
-    // Per v0.4.1: default element color from elements.ini's last three columns (RGB). Elements not
-    // covered there (D, XX, and 96+ actinides) fall back to the VESTA palette below.
+    // Elements spheres are colored in VESTA pattern.
     private val elementColors = mapOf(
         "H" to 0xFFFFCCCCL, "He" to 0xFFFCE9CFL, "Li" to 0xFF86E074L, "Be" to 0xFF5FD87BL,
         "B" to 0xFF20A20FL, "C" to 0xFF814929L, "N" to 0xFFB0BAE6L, "O" to 0xFFFF0300L,
@@ -158,12 +130,12 @@ object PeriodicTableData {
     )
     fun elementArgbValue(symbol: String): Long? = elementColors[symbol]
 
-    // ------------------------------------------------------------------
-    // Per v0.5.0: bond-valence parameters (R0, B) for s = exp((R0 − R)/B), from the IUCr
-    // BVPARM2020 table (.todos/bondvalence/bvparm2020.cif). Keyed "cation/charge/anion/charge";
+    // bond-valence parameters (R0, B) for s = exp((R0 − R)/B)
+    // Original data come from bvparm2020.cif in "Bond valence parameters" page at www.iucr.org
+    // Keyed "cation/charge/anion/charge";
     // where the original table lists several records for a pair, the highest-reliability ref
     // (a > b > bs > p > … > e unchecked) is kept.
-    // ------------------------------------------------------------------
+
     private val bvparmR0B: Map<String, BondValenceParam> = mapOf(
     "Ac/3/Br/-1" to BondValenceParam(2.75, 0.4f),
     "Ac/3/Cl/-1" to BondValenceParam(2.63, 0.37f),
@@ -1550,7 +1522,7 @@ object PeriodicTableData {
 
     // ------------------------------------------------------------------
     // Per v0.5.0: Shannon crystal radii (Å) from "Radii for All Species" (R. D. Shannon 1976,
-    // .todos/bondvalence/Radii for All Species.html). Keyed "ion/charge" -> list of
+    // .todos/bondvalence/Radii for All Species.html). Keyed "ion/charge" -> list of www.winter.group.shef.ac.uk
     // (coordination, isHighSpin, crystalRadius). High-spin entries are preferred at lookup.
     // ------------------------------------------------------------------
     private val shannonCrystalRadii: Map<String, List<Triple<Int, Boolean, Float>>> = mapOf(

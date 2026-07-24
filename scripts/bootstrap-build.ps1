@@ -1,8 +1,83 @@
+param(
+    [string]$Matc,
+    [switch]$Install,
+    [switch]$VerifyOnly
+)
+
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $Tooling = Join-Path $Root '.tooling'
 New-Item -ItemType Directory -Force -Path $Tooling | Out-Null
 
+# ── Filament material compilation ──────────────────────────────
+$FilamentVersion   = '1.71.5'
+$MaterialAbiVersion = '71'
+$FilamentTooling   = Join-Path $Tooling "filament-$FilamentVersion"
+$MatSource         = Join-Path $Root 'renderer-filament\src\main\materials'
+$MatOutput         = Join-Path $Root 'renderer-filament\src\main\assets\materials'
+$MatManifest       = Join-Path $MatOutput 'sha256.json'
+
+$MatNames = @(
+    'atom_opaque', 'atom_transparent',
+    'opaque', 'transparent', 'polyhedron',
+    'unlit_opaque', 'unlit_transparent', 'unlit_polyhedron',
+    'highlight', 'depth_cueing', 'picking'
+)
+
+# Compile materials when -Install or -Matc is provided (and not -VerifyOnly)
+if ($Install -or $Matc) {
+    if (-not $Matc) { $Matc = Join-Path $FilamentTooling 'bin\matc.exe' }
+    if ($Install -and -not (Test-Path -LiteralPath $Matc)) {
+        New-Item -ItemType Directory -Force -Path $FilamentTooling | Out-Null
+        $Archive = Join-Path $FilamentTooling 'filament-windows.tgz'
+        $Url = "https://github.com/google/filament/releases/download/v$FilamentVersion/filament-v$FilamentVersion-windows.tgz"
+        Invoke-WebRequest -Uri $Url -OutFile $Archive
+        tar -xf $Archive -C $FilamentTooling
+        $Discovered = Get-ChildItem -LiteralPath $FilamentTooling -Filter matc.exe -Recurse | Select-Object -First 1
+        if (-not $Discovered) { throw "matc.exe was not found in $Archive" }
+        $Matc = $Discovered.FullName
+    }
+
+    if (-not (Test-Path -LiteralPath $Matc)) {
+        throw "matc $FilamentVersion is required. Pass -Matc <path>, or use -Install."
+    }
+    $VersionText = (& $Matc --version 2>&1 | Out-String).Trim()
+    # Filament's release archive is pinned above to v1.71.5, while matc --version reports the
+    # material ABI (71) rather than the full release version.
+    if ($VersionText -ne $MaterialAbiVersion) {
+        throw "matc ABI mismatch: Filament $FilamentVersion requires ABI $MaterialAbiVersion, got $VersionText"
+    }
+
+    if (-not $VerifyOnly) {
+        New-Item -ItemType Directory -Force -Path $MatOutput | Out-Null
+        foreach ($Name in $MatNames) {
+            & $Matc -a all -p mobile -o (Join-Path $MatOutput "$Name.filamat") (Join-Path $MatSource "$Name.mat")
+            if ($LASTEXITCODE -ne 0) { throw "matc failed for $Name.mat" }
+        }
+        $Hashes = [ordered]@{}
+        foreach ($Name in $MatNames) {
+            $Hashes["$Name.filamat"] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $MatOutput "$Name.filamat")).Hash.ToLowerInvariant()
+        }
+        $Hashes | ConvertTo-Json | Set-Content -LiteralPath $MatManifest -Encoding ASCII
+    }
+}
+
+# Verify materials (always, even without matc)
+if (-not (Test-Path -LiteralPath $MatManifest)) { throw "Missing material hash manifest: $MatManifest. Run: .\scripts\bootstrap-build.ps1 -Install" }
+$Expected = Get-Content -LiteralPath $MatManifest -Raw | ConvertFrom-Json
+foreach ($Name in $MatNames) {
+    $FileName = "$Name.filamat"
+    $Path = Join-Path $MatOutput $FileName
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Missing precompiled material: $Path" }
+    $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    if ($Actual -ne $Expected.$FileName) { throw "Hash mismatch for $FileName" }
+}
+Write-Host "Filament $FilamentVersion materials verified." -ForegroundColor Green
+
+# If VerifyOnly, stop here — no JDK/SDK/Gradle needed
+if ($VerifyOnly) { return }
+
+# ── JDK 17 setup ──────────────────────────────────────────────
 function Find-Jdk17 {
     $candidates = @(
         $env:JAVA_HOME,
@@ -33,6 +108,7 @@ if (-not $Jdk) {
 $env:JAVA_HOME = $Jdk
 $env:PATH = (Join-Path $Jdk 'bin') + ';' + $env:PATH
 
+# ── Android SDK setup ─────────────────────────────────────────
 $Sdk = @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT, "$env:LOCALAPPDATA\Android\Sdk") |
     Where-Object { $_ -and (Test-Path (Join-Path $_ 'platforms\android-36')) } |
     Select-Object -First 1
@@ -56,12 +132,14 @@ $env:ANDROID_HOME = $Sdk
 $escapedSdk = $Sdk.Replace('\', '\\')
 Set-Content -LiteralPath (Join-Path $Root 'local.properties') -Value "sdk.dir=$escapedSdk" -Encoding ASCII
 
+# ── Gradle wrapper ───────────────────────────────────────────
 $WrapperJar = Join-Path $Root 'gradle\wrapper\gradle-wrapper.jar'
 if (-not (Test-Path $WrapperJar)) {
     Write-Host 'Downloading Gradle Wrapper 8.11.1...'
     Invoke-WebRequest 'https://raw.githubusercontent.com/gradle/gradle/v8.11.1/gradle/wrapper/gradle-wrapper.jar' -OutFile $WrapperJar
 }
 
+# ── Gradle build ──────────────────────────────────────────────
 Push-Location $Root
 try {
     & .\gradlew.bat --no-daemon :crystal-core:test :app:assembleDebug

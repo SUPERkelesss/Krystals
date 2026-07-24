@@ -22,6 +22,7 @@
     <string name="help_message">将在浏览器中打开视频教程。</string>
     <string name="about">关于</string>
     <string name="sponsor">赞助</string>
+    <string name="feedback">反馈</string>
     <string name="sponsor_title">赞助 Krystals</string>
     <string name="open_preset_library">从预设晶体库打开…</string>
     <string name="save_to_presets">保存到预设</string>

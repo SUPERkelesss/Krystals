@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import com.krystals.crystal.analysis.bonding.BondNetwork
@@ -42,7 +43,13 @@ import com.krystals.crystal.core.math.eulerYX
 import com.krystals.crystal.core.math.rotX
 import com.krystals.crystal.core.math.rotY
 import com.krystals.crystal.core.model.AtomImage
+import com.krystals.renderer.core.camera.Camera
+import com.krystals.renderer.core.scene.CellFrameGeometry
 import com.krystals.renderer.core.scene.RenderScene
+import com.krystals.renderer.core.scene.toCameraDepthRange
+import com.krystals.renderer.core.scene.visibleBounds
+import com.krystals.renderer.core.style.SelectionColors
+import com.krystals.renderer.core.style.backgroundColor
 import com.krystals.interaction.state.InteractionReducer
 import com.krystals.interaction.state.InteractionState
 import com.krystals.interaction.state.ViewerCommand
@@ -50,10 +57,13 @@ import com.krystals.interaction.state.ViewerSessionState
 import com.krystals.interaction.measure.DihedralTool
 import com.krystals.interaction.selection.Picker
 import com.krystals.interaction.selection.PickResult
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 internal data class ProjectedAtom(val atom: AtomImage, val point: Offset, val depth: Double, val radius: Float)
@@ -155,9 +165,8 @@ class ViewerController : Picker {
     /**
      * Apply a single-finger drag as a camera-local rotation increment. [dxPx]/[dyPx] are pixel
      * deltas. Both axes follow the finger: dragging right/down moves the object right/down.
-     * The negations compensate for the projection (`project` uses `-v.y*scale`, and the camera
-     * looks down -Z), so the object tracks the finger on both axes. Left-multiplying the
-     * increment keeps it in the camera frame, which is what makes a tilted view still follow.
+     * Left-multiplying the increment keeps it in the camera frame, which is what makes a
+     * tilted view still follow.
      */
     fun rotateByDrag(dxPx: Float, dyPx: Float, sensitivity: Float = 0.32f) {
         dispatch(ViewerCommand.Orbit(dxPx * sensitivity / 0.32f, dyPx * sensitivity / 0.32f))
@@ -311,6 +320,7 @@ fun CrystalViewport(
     val snapshot = remember(scene) { LegacyRenderSceneAdapter.toBondNetwork(scene) }
     LegacyCanvasViewport(
         snapshot = snapshot,
+        scene = scene,
         appearance = appearance,
         renderConfiguration = renderConfiguration,
         modifier = modifier,
@@ -334,6 +344,7 @@ fun CrystalViewport(
 @Composable
 private fun LegacyCanvasViewport(
     snapshot: BondNetwork,
+    scene: RenderScene? = null,
     appearance: ViewerAppearance,
     renderConfiguration: RenderConfiguration,
     modifier: Modifier = Modifier,
@@ -352,7 +363,7 @@ private fun LegacyCanvasViewport(
     onViewMoved: () -> Unit = {},
     onBlankTap: () -> Unit = {},
 ) {
-    val background = colorFromArgb(appearance.backgroundArgb)
+    val background = colorFromArgb(backgroundColor(appearance.backgroundArgb).srgbArgb)
     var lastTap by remember { mutableStateOf<TapEvent?>(null) }
     var measurementBoundsList by remember { mutableStateOf<List<Triple<Rect, Boolean, Int>>>(emptyList()) }
     var atomInfoBoundsList by remember { mutableStateOf<List<Triple<Rect, Boolean, Long>>>(emptyList()) }
@@ -551,14 +562,15 @@ private fun LegacyCanvasViewport(
             }
         }.legacyBackToFront(depthOf = { it.depth }, layerOf = { it.depthLayer })
 
-        // Depth normalization comes from the displayed supercell bounds, so rotating a sparse or
-        // partially hidden structure cannot change the cueing scale.
-        val depthRange = expandedCellDepthRange(
-            snapshot.structure.lattice,
-            snapshot.expansion,
-            center,
-            controller.rotation,
-        )
+        // Depth normalization comes from the visible atom bounding box, so the cueing scale
+        // adapts to the actual content extent. When a RenderScene is available, use the shared
+        // bounding-box helper; fall back to per-atom depths for the deprecated BondNetwork path.
+        val depthRange = scene?.visibleBounds()
+            ?.toCameraDepthRange(Camera(rotation = controller.rotation))
+            ?.let { LegacyDepthRange(it.far, it.near) }
+            ?: rotated.filter { it.key.siteId !in visibility.hiddenSites }
+                .values.map { legacyCameraDepth(it) }
+                .let { if (it.size >= 2) LegacyDepthRange(it.min(), it.max()) else null }
         val bgColor = colorFromArgb(appearance.backgroundArgb)
         fun dofFog(depth: Double): Float {
             if (!appearance.depthOfFieldEnabled) return 0f
@@ -609,12 +621,11 @@ private fun DrawScope.drawAtom(
     fog: Float = 0f,
     bgColor: Color = Color.Black,
 ) {
-    // Per v0.5.3a: depth cueing fades COLOUR toward the background by [fog] (0..1); opacity is
-    // unchanged (atomOpacity only), so distant atoms dissolve into the bg rather than go transparent.
+    // Per v0.6: depth cueing modulates OPACITY by (1 - fog); distant atoms become transparent.
     val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
     if (opacity < 0.01f) {
         if (selected) drawCircle(
-            if (lockedHighlight) Color(0xFFCFA7F5) else Color(0xFF7542A5),
+            if (lockedHighlight) Color(SelectionColors.LOCKED_ARGB) else Color(SelectionColors.SELECTED_ARGB),
             atom.radius + 5f,
             atom.point,
             style = Stroke(if (lockedHighlight) 6f else 5f),
@@ -624,8 +635,9 @@ private fun DrawScope.drawAtom(
     val rawBase = colorFromArgb(
         RenderPalette.resolveSiteArgb(atom.atom.siteId, atom.atom.species.symbol, renderConfiguration),
     )
-    val base = rawBase.blend(bgColor, fog).copy(alpha = opacity)
-    val dark = rawBase.darken(0.65f).blend(bgColor, fog).copy(alpha = opacity)
+    val depthAlpha = (1f - fog).coerceIn(0f, 1f)
+    val base = rawBase.copy(alpha = opacity * depthAlpha)
+    val dark = rawBase.darken(0.65f).copy(alpha = opacity * depthAlpha)
     val sphere = Brush.radialGradient(
         listOf(base, dark),
         center = atom.point,
@@ -690,7 +702,7 @@ private fun DrawScope.drawAtom(
     }
     drawCircle(Color.Black.copy(alpha = 0.28f * opacity), atom.radius, atom.point, style = Stroke(max(0.8f, atom.radius * 0.045f)))
     if (selected) drawCircle(
-        if (lockedHighlight) Color(0xFFCFA7F5) else Color(0xFF7542A5),
+        if (lockedHighlight) Color(SelectionColors.LOCKED_ARGB) else Color(SelectionColors.SELECTED_ARGB),
         atom.radius + 4f,
         atom.point,
         style = Stroke(if (lockedHighlight) 6f else 5f),
@@ -708,11 +720,12 @@ private fun DrawScope.drawDihedralPlane(
     val normal = if (plane.normalCam.z >= 0.0) plane.normalCam else plane.normalCam * -1.0
     val intensity = (0.58f + normal.normalized().dot(light).coerceIn(0.0, 1.0).toFloat() * appearance.lightIntensity * 0.42f)
         .coerceIn(0f, 1f)
-    val shaded = Color(0xFF9966CC).copy(alpha = 0.44f).blend(background, fog).copy(
+    val depthAlpha = (1f - fog).coerceIn(0f, 1f)
+    val shaded = Color(0xFF9966CC).copy(
         red = 0.60f * intensity,
         green = 0.40f * intensity,
         blue = 0.80f * intensity,
-        alpha = 0.44f,
+        alpha = 0.58f * depthAlpha,
     )
     val path = Path().apply {
         moveTo(plane.screenVerts[0].x, plane.screenVerts[0].y)
@@ -722,7 +735,7 @@ private fun DrawScope.drawDihedralPlane(
     drawPath(
         path,
         Brush.linearGradient(
-            listOf(shaded, shaded.copy(alpha = 0.25f), Color.Transparent),
+            listOf(shaded, shaded.copy(alpha = 0.35f), Color.Transparent),
             start = plane.screenVerts[0],
             end = plane.screenVerts[3],
         ),
@@ -739,9 +752,8 @@ private fun DrawScope.drawBond(
     dofFog: (Double) -> Float,
     bgColor: Color = Color.Black,
 ) {
-    // Per v0.5.3a: depth cueing fades each half's COLOUR toward the background by its endpoint's
-    // fog; opacity is unchanged (bondOpacity only). Splitting at the midpoint keeps the fade
-    // continuous into the atoms instead of a single mid-depth step.
+    // Per v0.6: depth cueing modulates each half's OPACITY by (1 - fog); splitting at the
+    // midpoint keeps the fade continuous into the atoms instead of a single mid-depth step.
     val opacity = appearance.bondOpacity.coerceIn(0f, 1f)
     if (opacity < 0.01f) return
     val fogA = dofFog(a.depth).coerceIn(0f, 1f)
@@ -766,18 +778,18 @@ private fun DrawScope.drawBond(
     val midpoint = Offset((start.x + end.x) / 2f, (start.y + end.y) / 2f)
 
     if (appearance.bondColorMode == BondColorMode.UNICOLOR) {
-        // Unicolor: same colour, each half faded by its endpoint's fog.
-        val baseA = colorFromArgb(appearance.uniformBondArgb).blend(bgColor, fogA).copy(alpha = opacity)
-        val baseB = colorFromArgb(appearance.uniformBondArgb).blend(bgColor, fogB).copy(alpha = opacity)
+        // Unicolor: same colour, each half's opacity modulated by its endpoint's fog.
+        val baseA = colorFromArgb(appearance.uniformBondArgb).copy(alpha = opacity * (1f - fogA))
+        val baseB = colorFromArgb(appearance.uniformBondArgb).copy(alpha = opacity * (1f - fogB))
         drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
     } else {
         val baseA = colorFromArgb(
             RenderPalette.resolveSiteArgb(a.atom.siteId, a.atom.species.symbol, renderConfiguration),
-        ).blend(bgColor, fogA).copy(alpha = opacity)
+        ).copy(alpha = opacity * (1f - fogA))
         val baseB = colorFromArgb(
             RenderPalette.resolveSiteArgb(b.atom.siteId, b.atom.species.symbol, renderConfiguration),
-        ).blend(bgColor, fogB).copy(alpha = opacity)
+        ).copy(alpha = opacity * (1f - fogB))
         drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
         drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
     }
@@ -932,9 +944,8 @@ private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appeara
     // Per v0.3.44: back faces are emitted outline-only — skip the fill and just draw the edges at
     // a lower alpha so the polyhedron's back silhouette is faintly visible.
     if (!face.outlineOnly) {
-        // Per v0.5.3a: depth cueing fades COLOUR toward the background by [fog]; alpha (polyhedron
-        // opacity) is unchanged.
-        val fadedBase = face.baseColor.blend(bgColor, fog)
+        // Per v0.6: depth cueing modulates alpha by (1 - fog).
+        val fadedBase = face.baseColor.copy(alpha = face.baseColor.alpha * (1f - fog))
         val fill = if (appearance.polyhedronReflectionEnabled) {
             // Per v0.5.4: Blinn-Phong plastic shading. Lambert diffuse + a white specular highlight
             // via the half vector (light+view, view=(0,0,1) since +Z is toward the viewer). The whole
@@ -1065,13 +1076,12 @@ private fun DrawScope.drawAxes(
     val colors = listOf(Color(0xFFE57373), Color(0xFF81C784), Color(0xFF64B5F6))
     val origin = Offset(size.width * 0.08f + 28f, size.height * 0.08f + 40f)
     val arrowLen = 56f
-    val halfWidth = 3f
     val headLen = 16f
-    val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
-    val lightX = light.x.toFloat()
-    val lightY = light.y.toFloat()
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        strokeWidth = 4f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
+        strokeWidth = 5f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
+    }
+    val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.argb(122, 0, 0, 0); strokeWidth = 7f; strokeCap = Paint.Cap.ROUND
     }
     directions.forEachIndexed { index, dir ->
         val rotated = controller.rotation * dir
@@ -1082,73 +1092,39 @@ private fun DrawScope.drawAxes(
         val tip = origin + unit * arrowLen
         val color = colors[index]
         val perp = Offset(-unit.y, unit.x)
-        val lightOnPerp = (lightX * perp.x + lightY * perp.y).toDouble()
-        // 3D cylinder shaft (lit the same way bonds are) instead of a flat line.
-        drawBondCylinder(origin, tip - unit * headLen, halfWidth, perp, lightOnPerp, color, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
-        // Conical arrowhead, filled with the same lit gradient as the shaft.
         val headBase = tip - unit * headLen
         val headHalf = headLen * 0.6f
+        // Simple 2D shaft with shadow (matching filament overlay).
+        drawContext.canvas.nativeCanvas.drawLine(origin.x, origin.y, headBase.x, headBase.y, shadowPaint)
+        paint.color = color.toArgb()
+        drawContext.canvas.nativeCanvas.drawLine(origin.x, origin.y, headBase.x, headBase.y, paint)
+        // Filled arrowhead.
         val arrowPath = Path().apply {
             moveTo(tip.x, tip.y)
             lineTo(headBase.x + perp.x * headHalf, headBase.y + perp.y * headHalf)
             lineTo(headBase.x - perp.x * headHalf, headBase.y - perp.y * headHalf)
             close()
         }
-        val center = headBase
-        val highlightPos = (0.5 - lightOnPerp * 0.35).toFloat().coerceIn(0.1f, 0.9f)
-        val shadowA = color.darken(1f - 0.45f * appearance.lightIntensity)
-        val shadowB = color.darken(1f - 0.35f * appearance.lightIntensity)
-        val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
-        val highlight = if (appearance.bondReflectionEnabled) color.lighten(reflection.bondHighlightFactor) else color
-        val band = reflection.bondHighlightBand
-        val brush = Brush.linearGradient(
-            colorStops = arrayOf(
-                0.0f to shadowA,
-                (highlightPos - band).coerceIn(0.02f, 0.98f) to color,
-                highlightPos to highlight,
-                (highlightPos + band).coerceIn(0.02f, 0.98f) to color,
-                1.0f to shadowB,
-            ),
-            start = center - perp * headHalf,
-            end = center + perp * headHalf,
-        )
-        drawPath(arrowPath, brush)
-        paint.color = android.graphics.Color.WHITE
-        drawContext.canvas.nativeCanvas.drawText(labels[index], tip.x + unit.x * 8f - 6f, tip.y + unit.y * 8f + 10f, paint)
+        drawPath(arrowPath, color)
+        paint.color = color.toArgb()
+        drawContext.canvas.nativeCanvas.drawText(labels[index], tip.x + 4f, tip.y - 4f, paint)
     }
-    val hubRadius = 7f
-    val hubBase = Color(0xFF77777D)
+    // Center hub with radial gradient (matching filament overlay).
+    val hubRadius = 8f
+    val azimuth = appearance.lightAzimuth / 180f * PI.toFloat()
+    val elevation = appearance.lightElevation / 180f * PI.toFloat()
+    val highlightX = origin.x - cos(azimuth) * cos(elevation) * 3f
+    val highlightY = origin.y - sin(azimuth) * cos(elevation) * 3f
+    drawCircle(Color.Black.copy(alpha = 0.5f), hubRadius + 1f, origin + Offset(1f, 1f))
     drawCircle(
         Brush.radialGradient(
-            listOf(hubBase, hubBase.darken(0.58f)),
-            center = origin,
+            listOf(Color(0xFFE0E0E0), Color(0xFF68686F)),
+            center = Offset(highlightX, highlightY),
             radius = hubRadius,
         ),
         hubRadius,
         origin,
     )
-    if (appearance.reflectionEnabled) {
-        val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
-        val offset = legacyHighlightOffset(
-            hubRadius.toDouble(),
-            appearance.lightAzimuth,
-            appearance.lightElevation,
-        )
-        drawCircle(
-            Brush.radialGradient(
-                colorStops = arrayOf(
-                    0f to Color.White.copy(alpha = reflection.highlightAlpha),
-                    0.45f to Color.White.copy(alpha = reflection.highlightMiddleAlpha),
-                    1f to Color.Transparent,
-                ),
-                center = origin - Offset(offset.x.toFloat(), offset.y.toFloat()),
-                radius = hubRadius * reflection.radialRadiusMultiplier,
-            ),
-            hubRadius,
-            origin,
-        )
-    }
-    drawCircle(Color.Black.copy(alpha = 0.28f), hubRadius, origin, style = Stroke(0.9f))
 }
 
 private fun DrawScope.drawCellFrames(
@@ -1160,24 +1136,12 @@ private fun DrawScope.drawCellFrames(
     project: (Vec3) -> Offset,
 ) {
     if (appearance.frameMode == FrameMode.NONE) return
-    val ex = if (appearance.frameMode == FrameMode.ALL_CELLS) snapshot.expansion.x else 1
-    val ey = if (appearance.frameMode == FrameMode.ALL_CELLS) snapshot.expansion.y else 1
-    val ez = if (appearance.frameMode == FrameMode.ALL_CELLS) snapshot.expansion.z else 1
     val effect = if (appearance.lineStyle == LineStyle.DASHED) PathEffect.dashPathEffect(floatArrayOf(10f, 8f)) else null
-    val edges = listOf(
-        0 to 1, 0 to 2, 0 to 4, 1 to 3, 1 to 5, 2 to 3, 2 to 6, 3 to 7,
-        4 to 5, 4 to 6, 5 to 7, 6 to 7,
-    )
-    for (ix in 0 until ex) for (iy in 0 until ey) for (iz in 0 until ez) {
-        val vertices = listOf(
-            Vec3(ix.toDouble(), iy.toDouble(), iz.toDouble()), Vec3(ix + 1.0, iy.toDouble(), iz.toDouble()),
-            Vec3(ix.toDouble(), iy + 1.0, iz.toDouble()), Vec3(ix + 1.0, iy + 1.0, iz.toDouble()),
-            Vec3(ix.toDouble(), iy.toDouble(), iz + 1.0), Vec3(ix + 1.0, iy.toDouble(), iz + 1.0),
-            Vec3(ix.toDouble(), iy + 1.0, iz + 1.0), Vec3(ix + 1.0, iy + 1.0, iz + 1.0),
-        ).map { snapshot.structure.lattice.toCartesian(FractionalCoordinate.fromVec3(it)).toVec3() - center }
-            .map { controller.rotation * it }
-            .map(project)
-        edges.forEach { (a, b) -> drawLine(Color.Gray.copy(alpha = 0.72f), vertices[a], vertices[b], 1.4f, pathEffect = effect) }
+    val edges = CellFrameGeometry.edges(snapshot.structure.lattice, snapshot.expansion, appearance.frameMode)
+    edges.forEach { (start, end) ->
+        val a = project(controller.rotation * (start - center))
+        val b = project(controller.rotation * (end - center))
+        drawLine(Color.Gray.copy(alpha = 0.72f), a, b, 1.4f, pathEffect = effect)
     }
 }
 

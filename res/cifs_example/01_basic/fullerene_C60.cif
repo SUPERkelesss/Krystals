@@ -1,83 +1,59 @@
-#------------------------------------------------------------------------------
-#$Date: 2018-09-27 07:13:35 +0300 (Thu, 27 Sep 2018) $
-#$Revision: 211196 $
-#$URL: file:///home/coder/svn-repositories/_RELOADED_COD/cod-reloaded/cif/1/53/13/1531302.cif $
-#------------------------------------------------------------------------------
-#
-# This file is available in the Crystallography Open Database (COD),
-# http://www.crystallography.net/
-#
-# All data on this site have been placed in the public domain by the
-# contributors.
-#
-data_1531302
+# generated using pymatgen
+data_C
+_symmetry_space_group_name_H-M   Pa-3
+_cell_length_a   14.29570032
+_cell_length_b   14.29570032
+_cell_length_c   14.29570032
+_cell_angle_alpha   90.00000000
+_cell_angle_beta   90.00000000
+_cell_angle_gamma   90.00000000
+_symmetry_Int_Tables_number   205
+_chemical_formula_structural   C
+_chemical_formula_sum   C240
+_cell_volume   2921.57006833
+_cell_formula_units_Z   240
 loop_
-_publ_author_name
-'Dilanyan, R.A.'
-'Khasanov, S.S.'
-'Gurov, A.F.'
-'Osip'yan, Yu.A.'
-'Bredikhin, S.I.'
-'Kveder, V.V.'
-'Shalynin, A.I.'
-_publ_section_title
-;
- Phase transitions and the structure of the C60 crystal doped with lithium
- by electrodiffusion
-;
-_journal_name_full
-'Zhurnal Eksperimental'noi i Teoreticheskoi Fiziki'
-_journal_page_first              1430
-_journal_page_last               1437
-_journal_volume                  93
-_journal_year                    2001
-_chemical_formula_sum            C60
-_space_group_IT_number           58
-_symmetry_space_group_name_Hall  '-P 2 2n'
-_symmetry_space_group_name_H-M   'P n n m'
-_cell_angle_alpha                90
-_cell_angle_beta                 90
-_cell_angle_gamma                90
-_cell_formula_units_Z            2
-_cell_length_a                   14.745
-_cell_length_b                   9.843
-_cell_length_c                   9.092
-_cell_volume                     1319.568
-_citation_journal_id_ASTM        ZETFA7
-_cod_data_source_file            Dilanyan_ZETFA7_2001_80.cif
-_cod_data_source_block           C60
-_cod_database_code               1531302
+ _symmetry_equiv_pos_site_id
+ _symmetry_equiv_pos_as_xyz
+  1  'x, y, z'
+  2  '-x, -y, -z'
+  3  '-x+1/2, -y, z+1/2'
+  4  'x+1/2, y, -z+1/2'
+  5  'x+1/2, -y+1/2, -z'
+  6  '-x+1/2, y+1/2, z'
+  7  '-x, y+1/2, -z+1/2'
+  8  'x, -y+1/2, z+1/2'
+  9  'z, x, y'
+  10  '-z, -x, -y'
+  11  'z+1/2, -x+1/2, -y'
+  12  '-z+1/2, x+1/2, y'
+  13  '-z, x+1/2, -y+1/2'
+  14  'z, -x+1/2, y+1/2'
+  15  '-z+1/2, -x, y+1/2'
+  16  'z+1/2, x, -y+1/2'
+  17  'y, z, x'
+  18  '-y, -z, -x'
+  19  '-y, z+1/2, -x+1/2'
+  20  'y, -z+1/2, x+1/2'
+  21  '-y+1/2, -z, x+1/2'
+  22  'y+1/2, z, -x+1/2'
+  23  'y+1/2, -z+1/2, -x'
+  24  '-y+1/2, z+1/2, x'
 loop_
-_symmetry_equiv_pos_as_xyz
-x,y,z
--x,-y,z
-x+1/2,-y+1/2,-z+1/2
--x+1/2,y+1/2,-z+1/2
--x,-y,-z
-x,y,-z
--x-1/2,y-1/2,z-1/2
-x-1/2,-y-1/2,z-1/2
-loop_
-_atom_site_label
-_atom_site_type_symbol
-_atom_site_fract_x
-_atom_site_fract_y
-_atom_site_fract_z
-_atom_site_occupancy
-_atom_site_U_iso_or_equiv
-C10 C 0.8195 0.2376 0 1 0.0
-C4 C 0.2234 0.1103 0.078 1 0.0
-C3 C 0.0408 -0.0353 0.409 1 0.0
-C13 C 0.8725 0.195 0.265 1 0.0
-C8 C 0.1713 0.2073 0.157 1 0.0
-C15 C 0.0342 0.3258 0.164 1 0.0
-C11 C -0.0479 0.3449 0.081 1 0.0
-C14 C 0.8701 0.2785 0.133 1 0.0
-C9 C 0.1228 0.0307 0.329 1 0.0
-C12 C 0.0358 0.2399 0.283 1 0.0
-C16 C -0.0436 0.1746 0.336 1 0.0
-C1 C 0.2276 0.8847 0 1 0.0
-C5 C 0.1208 0.1664 0.288 1 0.0
-C2 C 0.1178 0.3056 0.085 1 0.0
-C6 C 0.1765 0.3218 0.254 1 0.0
-C7 C 0.226 -0.0293 0.132 1 0.0
+ _atom_site_type_symbol
+ _atom_site_label
+ _atom_site_symmetry_multiplicity
+ _atom_site_fract_x
+ _atom_site_fract_y
+ _atom_site_fract_z
+ _atom_site_occupancy
+  C  C0  24  0.00639031  0.24223304  0.94605175  1
+  C  C1  24  0.01925439  0.56382849  0.73969520  1
+  C  C2  24  0.01977354  0.14818427  0.80162321  1
+  C  C3  24  0.03246599  0.60037050  0.27500714  1
+  C  C4  24  0.03481247  0.70311737  0.63839090  1
+  C  C5  24  0.03744364  0.71952136  0.38853891  1
+  C  C6  24  0.06008712  0.20131068  0.13382494  1
+  C  C7  24  0.06313741  0.12783582  0.20406165  1
+  C  C8  24  0.09467651  0.65702592  0.33207136  1
+  C  C9  24  0.11730358  0.13023913  0.82396626  1

@@ -41,9 +41,15 @@ import com.krystals.interaction.measure.MeasurementSelection
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.scene.SceneBounds
-import com.krystals.renderer.core.scene.visibleBounds
+import com.krystals.renderer.core.scene.allBounds
 import com.krystals.renderer.core.style.AxisMode
+import com.krystals.renderer.core.SceneRenderer
+import com.krystals.renderer.core.style.RenderConfiguration
+import com.krystals.renderer.core.style.ViewerAppearance
 import com.krystals.renderer.filament.FilamentRenderer
+import com.krystals.renderer.filament.FilamentSceneRenderer
+import com.krystals.renderer.legacy.LegacySceneRenderer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
@@ -87,7 +93,7 @@ internal fun Modifier.filamentViewerGestures(
                     val zoom = event.calculateZoom()
                     val pan = event.calculatePan()
                     if (abs(zoom - 1f) > 0.001f) onCommand(ViewerCommand.Zoom(zoom))
-                    if (pan.getDistance() > 0.5f) onCommand(ViewerCommand.Pan(-pan.x, -pan.y))
+                    if (pan.getDistance() > 0.5f) onCommand(ViewerCommand.Pan(pan.x, pan.y))
                 }
             }
             event.changes.forEach { it.consume() }
@@ -101,18 +107,15 @@ internal fun Modifier.filamentViewerGestures(
 
 @Composable
 fun FilamentViewport(
+    renderer: FilamentRenderer,
     scene: RenderScene,
     interactionState: InteractionState,
     onCommand: (ViewerCommand) -> Unit,
     onAtomTap: (AtomImage) -> Boolean,
     onFailure: (Throwable) -> Unit,
-    onRendererChanged: (FilamentRenderer?) -> Unit,
     bondValenceBySite: Map<String, Double> = emptyMap(),
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
-    val rendererResult = remember(context) { runCatching { FilamentRenderer(context) } }
-    val renderer = rendererResult.getOrNull()
     val scope = rememberCoroutineScope()
     val hitRegions = remember { OverlayHitRegions() }
     val lastTap = remember { LastTap() }
@@ -121,19 +124,6 @@ fun FilamentViewport(
     val currentOnCommand = rememberUpdatedState(onCommand)
     val currentOnAtomTap = rememberUpdatedState(onAtomTap)
 
-    LaunchedEffect(rendererResult) { rendererResult.exceptionOrNull()?.let(onFailure) }
-    if (renderer == null) {
-        Box(modifier.fillMaxSize())
-        return
-    }
-
-    DisposableEffect(renderer) {
-        onRendererChanged(renderer)
-        onDispose {
-            onRendererChanged(null)
-            renderer.close()
-        }
-    }
     LaunchedEffect(renderer, scene) { renderer.submit(scene) }
     LaunchedEffect(renderer, interactionState) { renderer.updateInteraction(interactionState) }
     LaunchedEffect(renderer, bondValenceBySite) { renderer.updateOverlayData(bondValenceBySite) }
@@ -157,24 +147,28 @@ fun FilamentViewport(
                             ViewerCommand.ToggleInspectionLock(inspectionHit.second, inspectionHit.third),
                         )
                         else -> scope.launch {
-                            val hit = renderer.pick(down.x, down.y)
-                            val atom = hit?.atomId?.let { id ->
-                                currentScene.value.atoms.firstOrNull { it.atom.id == id }?.atom
-                            }
-                            if (atom == null) {
-                                currentOnCommand.value(ViewerCommand.ClearTransientViewerState)
-                            } else {
-                                val now = SystemClock.uptimeMillis()
-                                val isDoubleTap = now - lastTap.timeMillis < 300L &&
-                                    lastTap.position != Offset.Unspecified &&
-                                    (down - lastTap.position).getDistance() < 24f
-                                lastTap.timeMillis = now
-                                lastTap.position = down
-                                if (isDoubleTap) {
-                                    currentOnCommand.value(ViewerCommand.InspectAtom(atom.id))
-                                } else if (!currentOnAtomTap.value(atom)) {
-                                    currentOnCommand.value(ViewerCommand.SelectAtom(atom.id, atom.siteId))
+                            runCatching {
+                                val hit = renderer.pick(down.x, down.y)
+                                val atom = hit?.atomId?.let { id ->
+                                    currentScene.value.atoms.firstOrNull { it.atom.id == id }?.atom
                                 }
+                                if (atom == null) {
+                                    currentOnCommand.value(ViewerCommand.ClearTransientViewerState)
+                                } else {
+                                    val now = SystemClock.uptimeMillis()
+                                    val isDoubleTap = now - lastTap.timeMillis < 300L &&
+                                        lastTap.position != Offset.Unspecified &&
+                                        (down - lastTap.position).getDistance() < 24f
+                                    lastTap.timeMillis = now
+                                    lastTap.position = down
+                                    if (isDoubleTap) {
+                                        currentOnCommand.value(ViewerCommand.InspectAtom(atom.id))
+                                    } else if (!currentOnAtomTap.value(atom)) {
+                                        currentOnCommand.value(ViewerCommand.SelectAtom(atom.id, atom.siteId))
+                                    }
+                                }
+                            }.onFailure { error ->
+                                if (error !is CancellationException) onFailure(error)
                             }
                         }
                     }
@@ -201,12 +195,12 @@ fun FilamentViewport(
             },
             modifier = Modifier.fillMaxSize(),
         )
-        FilamentOverlay(scene, interactionState, bondValenceBySite, hitRegions)
+        FilamentLegacyStyleOverlay(scene, interactionState, bondValenceBySite, hitRegions)
     }
 }
 
 @Composable
-private fun FilamentOverlay(
+private fun FilamentLegacyStyleOverlay(
     scene: RenderScene,
     state: InteractionState,
     bondValenceBySite: Map<String, Double>,
@@ -214,7 +208,7 @@ private fun FilamentOverlay(
 ) {
     val cache = remember(scene) {
         OverlaySceneCache(
-            bounds = scene.visibleBounds(),
+            bounds = scene.allBounds(),
             atomsById = scene.atoms.asSequence().filter { it.visible }.associateBy { it.atom.id },
         )
     }
@@ -222,8 +216,19 @@ private fun FilamentOverlay(
         val bounds = cache.bounds ?: return@Canvas
         val atomsById = cache.atomsById
         val camera = state.session.camera
-        val span = bounds.radius / camera.zoom
         val aspect = size.width.toDouble() / size.height.coerceAtLeast(1f)
+        // Match legacy scale: compute span from rotated 2D extents of all-atom bounds.
+        val center = bounds.center + camera.target
+        val corners = bounds.corners
+        val span = if (corners.isNotEmpty()) {
+            val rotated = corners.map { camera.rotation * (it - center) }
+            val extentX = (rotated.maxOf { it.x } - rotated.minOf { it.x }).coerceAtLeast(1.0)
+            val extentY = (rotated.maxOf { it.y } - rotated.minOf { it.y }).coerceAtLeast(1.0)
+            val baseScale = minOf(size.width / extentX, size.height / extentY) * 0.72
+            size.height / (2.0 * baseScale * camera.zoom)
+        } else {
+            bounds.radius / camera.zoom
+        }
         val scale = (size.height / (span * 2.0)).toFloat()
         fun point(id: Long): Offset? = atomsById[id]?.let { atom ->
             val rotated = camera.rotation * (atom.atom.cartesianCoordinate.toVec3() - bounds.center - camera.target)
@@ -233,13 +238,6 @@ private fun FilamentOverlay(
             )
         }
         val lockedIds = state.document.lockedMeasurements.flatMap { it.atomIds }.toSet() + state.document.inspection.lockedInspectedAtomIds
-        val highlighted = state.document.selection.selectedAtomIds.toSet() + lockedIds + listOfNotNull(state.document.inspection.inspectedAtomId)
-        highlighted.forEach { id ->
-            val atom = atomsById[id] ?: return@forEach
-            val centerPoint = point(id) ?: return@forEach
-            val radius = (atom.radius * scale).toFloat().coerceIn(4.5f, 42f) + 4f
-            drawCircle(if (id in lockedIds) Color(0xFFCFA7F5) else Color(0xFF7542A5), radius, centerPoint, style = Stroke(3f))
-        }
 
         if (scene.environment.axes.visible) {
             val matrix = scene.structure.lattice.matrix
@@ -386,3 +384,54 @@ private fun FilamentOverlay(
 }
 
 private fun Double.formatFract() = "%.4f".format(this)
+
+/**
+ * Hosts either the Filament or Canvas-Legacy backend behind the shared [SceneRenderer] SPI.
+ *
+ * The small UI-specific branch here is unavoidable: Filament needs an [AndroidView] with a
+ * [Surface], while Canvas-Legacy is a Compose [Canvas]. All scene state and commands flow
+ * through [SceneRenderer].
+ */
+@Composable
+internal fun RendererHost(
+    renderer: SceneRenderer,
+    scene: RenderScene,
+    state: InteractionState,
+    appearance: ViewerAppearance,
+    renderConfiguration: RenderConfiguration,
+    onCommand: (ViewerCommand) -> Unit,
+    onAtomTap: (AtomImage) -> Boolean,
+    bondValenceBySite: Map<String, Double>,
+    onFilamentRendererChanged: (FilamentRenderer?) -> Unit,
+    onFilamentFailure: (Throwable) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    DisposableEffect(renderer) {
+        if (renderer is FilamentRenderer) onFilamentRendererChanged(renderer)
+        onDispose {
+            if (renderer is FilamentRenderer) onFilamentRendererChanged(null)
+            renderer.close()
+        }
+    }
+    DisposableEffect(renderer, appearance, renderConfiguration, bondValenceBySite, onCommand, onAtomTap) {
+        if (renderer is LegacySceneRenderer) {
+            renderer.configure(appearance, renderConfiguration, bondValenceBySite, onCommand, onAtomTap)
+        }
+        onDispose { }
+    }
+    LaunchedEffect(renderer, scene) { renderer.submit(scene) }
+    LaunchedEffect(renderer, state) { renderer.updateInteraction(state) }
+    when (renderer) {
+        is FilamentSceneRenderer -> FilamentViewport(
+            renderer = renderer as FilamentRenderer,
+            scene = scene,
+            interactionState = state,
+            onCommand = onCommand,
+            onAtomTap = onAtomTap,
+            onFailure = onFilamentFailure,
+            bondValenceBySite = bondValenceBySite,
+            modifier = modifier,
+        )
+        is LegacySceneRenderer -> renderer.Content(modifier)
+    }
+}

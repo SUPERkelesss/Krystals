@@ -22,6 +22,7 @@
     <string name="help_message">This will open the video tutorial in your browser.</string>
     <string name="about">About</string>
     <string name="sponsor">Sponsor</string>
+    <string name="feedback">Feedback</string>
     <string name="sponsor_title">Sponsor Krystals</string>
     <string name="open_preset_library">Open from preset library…</string>
     <string name="save_to_presets">Save to presets</string>
