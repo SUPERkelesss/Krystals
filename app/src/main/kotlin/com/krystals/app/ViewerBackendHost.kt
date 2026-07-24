@@ -42,7 +42,9 @@ import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.scene.SceneBounds
 import com.krystals.renderer.core.scene.allBounds
+import com.krystals.renderer.core.scene.sceneProjection
 import com.krystals.renderer.core.style.AxisMode
+import com.krystals.renderer.core.style.SelectionColors
 import com.krystals.renderer.core.SceneRenderer
 import com.krystals.renderer.core.style.RenderConfiguration
 import com.krystals.renderer.core.style.ViewerAppearance
@@ -88,7 +90,7 @@ internal fun Modifier.filamentViewerGestures(
             if (!isLocked()) {
                 if (pressed.size == 1) {
                     val delta = pressed.first().position - pressed.first().previousPosition
-                    if (delta.getDistance() > 0f) onCommand(ViewerCommand.Orbit(delta.x, delta.y))
+                    if (delta.getDistance() > 0f) onCommand(ViewerCommand.Orbit(-delta.x, -delta.y))
                 } else if (pressed.size >= 2) {
                     val zoom = event.calculateZoom()
                     val pan = event.calculatePan()
@@ -213,29 +215,16 @@ private fun FilamentLegacyStyleOverlay(
         )
     }
     Canvas(Modifier.fillMaxSize()) {
-        val bounds = cache.bounds ?: return@Canvas
+        cache.bounds ?: return@Canvas
         val atomsById = cache.atomsById
         val camera = state.session.camera
-        val aspect = size.width.toDouble() / size.height.coerceAtLeast(1f)
-        // Match legacy scale: compute span from rotated 2D extents of all-atom bounds.
-        val center = bounds.center + camera.target
-        val corners = bounds.corners
-        val span = if (corners.isNotEmpty()) {
-            val rotated = corners.map { camera.rotation * (it - center) }
-            val extentX = (rotated.maxOf { it.x } - rotated.minOf { it.x }).coerceAtLeast(1.0)
-            val extentY = (rotated.maxOf { it.y } - rotated.minOf { it.y }).coerceAtLeast(1.0)
-            val baseScale = minOf(size.width / extentX, size.height / extentY) * 0.72
-            size.height / (2.0 * baseScale * camera.zoom)
-        } else {
-            bounds.radius / camera.zoom
-        }
-        val scale = (size.height / (span * 2.0)).toFloat()
+        // Project through the shared SceneProjection so the overlay, picking and the Filament
+        // camera always agree (matches the Legacy renderer's framing).
+        val projection = scene.sceneProjection(camera, size.width.toInt(), size.height.toInt())
+        val scale = projection.screenScale().toFloat()
         fun point(id: Long): Offset? = atomsById[id]?.let { atom ->
-            val rotated = camera.rotation * (atom.atom.cartesianCoordinate.toVec3() - bounds.center - camera.target)
-            Offset(
-                size.width / 2f + camera.panX.toFloat() + (rotated.x / (span * aspect) * size.width * 0.5).toFloat(),
-                size.height / 2f + camera.panY.toFloat() - (rotated.y / span * size.height * 0.5).toFloat(),
-            )
+            val (px, py) = projection.project(atom.atom.cartesianCoordinate.toVec3())
+            Offset(px.toFloat(), py.toFloat())
         }
         val lockedIds = state.document.lockedMeasurements.flatMap { it.atomIds }.toSet() + state.document.inspection.lockedInspectedAtomIds
 
@@ -295,6 +284,19 @@ private fun FilamentLegacyStyleOverlay(
                 8f,
                 origin,
             )
+        }
+
+        // P8: 2D selection rings (replaces 3D highlight spheres from GpuInstanceManager).
+        // Draw rings around selected, locked, and inspected atoms — same projection as Legacy.
+        val highlightedIds = state.document.selection.selectedAtomIds.toSet() + lockedIds +
+            listOfNotNull(state.document.inspection.inspectedAtomId)
+        highlightedIds.forEach { atomId ->
+            val atom = atomsById[atomId] ?: return@forEach
+            val center = point(atomId) ?: return@forEach
+            val r = (atom.radius * scale).toFloat().coerceIn(4.5f, 42f)
+            val isLocked = atomId in lockedIds
+            val ringColor = if (isLocked) Color(SelectionColors.LOCKED_ARGB) else Color(SelectionColors.SELECTED_ARGB)
+            drawCircle(ringColor, r + 4f, center, style = Stroke(if (isLocked) 6f else 5f))
         }
 
         val measurementBounds = mutableListOf<Triple<Rect, MeasurementSelection?, Boolean>>()

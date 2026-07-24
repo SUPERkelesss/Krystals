@@ -77,6 +77,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.foundation.border
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalView
@@ -796,10 +797,13 @@ fun AppearanceDialog(
     // up so the viewer can render with it; onPreviewEnd restores the dialog.
     onPreviewStart: (ViewerAppearance) -> Unit = {},
     onPreviewEnd: () -> Unit = {},
+    backgroundFollowTheme: Boolean = true,
+    onBackgroundFollowThemeChange: (Boolean) -> Unit = {},
 ) {
     var appearance by remember { mutableStateOf(tab.appearance) }
     var colorPickerOpen by remember { mutableStateOf(false) }
     var bondColorPickerOpen by remember { mutableStateOf(false) }
+    var followTheme by remember { mutableStateOf(backgroundFollowTheme) }
     // Per v0.5.3a: preview hides the dialog visually (alpha 0) but keeps it mounted so the
     // Preview button's pointerInput survives the press-and-hold and onPreviewEnd fires on release.
     // (v0.5.2a unmounted the dialog on press, killing the gesture → stuck preview.)
@@ -825,18 +829,46 @@ fun AppearanceDialog(
                 Column(Modifier.fillMaxWidth().height(480.dp).verticalScroll(rememberScrollState())) {
             Text(localized("背景色", "Background"), fontWeight = FontWeight.Bold)
             FlowRow(verticalArrangement = Arrangement.Center) {
+                // Follow Theme: half-black/half-white circle, default option.
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+                    Box(
+                        Modifier.size(40.dp).then(
+                            if (followTheme) Modifier.border(2.dp, Color(0xFF7542A5), RoundedCornerShape(20.dp)) else Modifier
+                        ).clickable { followTheme = true; onBackgroundFollowThemeChange(true) }
+                    ) {
+                        Canvas(Modifier.fillMaxSize()) {
+                            drawArc(color = Color.Black, startAngle = 90f, sweepAngle = 180f, useCenter = true, size = size)
+                            drawArc(color = Color.White, startAngle = 270f, sweepAngle = 180f, useCenter = true, size = size)
+                        }
+                    }
+                    Text(localized("跟随主题", "Follow Theme"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
+                }
                 listOf(
-                    0xFF000000L to localized("黑色", "Black"),
-                    0xFFFFFFFFL to localized("白色", "White"),
+                    0xFF101014L to localized("深色", "Dark"),
+                    0xFFF8F8FBL to localized("浅色", "Light"),
                     0xFF4D2D6EL to localized("紫色", "Purple"),
                 ).forEach { (argb, label) ->
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
-                        Box(Modifier.size(40.dp).background(colorFromArgb(argb), RoundedCornerShape(20.dp)).clickable { appearance = appearance.copy(backgroundArgb = argb) })
+                        Box(Modifier.size(40.dp).background(colorFromArgb(argb), RoundedCornerShape(20.dp))
+                            .then(if (appearance.backgroundArgb == argb && !followTheme) Modifier.border(2.dp, Color(0xFF7542A5), RoundedCornerShape(20.dp)) else Modifier)
+                            .clickable { followTheme = false; onBackgroundFollowThemeChange(false); appearance = appearance.copy(backgroundArgb = argb) })
                         Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
                     }
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
-                    Box(Modifier.size(40.dp).background(colorFromArgb(appearance.backgroundArgb), RoundedCornerShape(20.dp)).clickable { colorPickerOpen = true })
+                    Box(Modifier.size(40.dp)
+                        .background(
+                            Brush.sweepGradient(
+                                listOf(
+                                    Color.Red, Color(0xFFFFA500), Color.Yellow,
+                                    Color.Green, Color.Cyan, Color.Blue,
+                                    Color.Magenta, Color.Red,
+                                )
+                            ),
+                            RoundedCornerShape(20.dp),
+                        )
+                        .then(if (!followTheme) Modifier.border(2.dp, Color(0xFF7542A5), RoundedCornerShape(20.dp)) else Modifier)
+                        .clickable { followTheme = false; onBackgroundFollowThemeChange(false); colorPickerOpen = true })
                     Text(localized("自定义", "Custom"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
                 }
             }
@@ -871,14 +903,25 @@ fun AppearanceDialog(
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("化学键", "Bonds"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
             ToggleRow(localized("键反射", "Bond reflection"), appearance.bondReflectionEnabled) { appearance = appearance.copy(bondReflectionEnabled = it) }
-            LabeledSlider(localized("键半径", "Bond radius"), appearance.bondRadius, 0.02f..0.4f, decimals = 2) { appearance = appearance.copy(bondRadius = it) }
+            LabeledSlider(localized("键半径", "Bond radius"), appearance.bondRadius, 0.02f..0.1f, decimals = 2) { appearance = appearance.copy(bondRadius = it) }
             LabeledSlider(localized("化学键不透明度", "Bond opacity"), appearance.bondOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(bondOpacity = it) }
             DropdownField(localized("键颜色", "Bond color"), bondColorLabels[appearance.bondColorMode.ordinal], bondColorLabels) { appearance = appearance.copy(bondColorMode = BondColorMode.entries[bondColorLabels.indexOf(it)]) }
             if (appearance.bondColorMode == BondColorMode.UNICOLOR) FlowRow {
-                listOf(0xFF9A90A0, 0xFF9966CC, 0xFFFFFFFF, 0xFF333333).forEach { argb -> Box(Modifier.padding(5.dp).size(38.dp).background(colorFromArgb(argb), CircleShape).clickable { appearance = appearance.copy(uniformBondArgb = argb) }) }
+                listOf(0xFF9A90A0, 0xFF9966CC, 0xFFFFFFFF, 0xFF333333).forEach { argb -> Box(Modifier.padding(5.dp).size(38.dp).background(colorFromArgb(argb), CircleShape).then(if (appearance.uniformBondArgb == argb) Modifier.border(2.dp, Color(0xFF7542A5), CircleShape) else Modifier).clickable { appearance = appearance.copy(uniformBondArgb = argb) }) }
                 // Per v0.5.3: custom colour swatch opens the colour wheel for the uniform bond colour.
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 5.dp, vertical = 5.dp)) {
-                    Box(Modifier.size(38.dp).background(colorFromArgb(appearance.uniformBondArgb), CircleShape).clickable { bondColorPickerOpen = true })
+                    Box(Modifier.size(38.dp)
+                        .background(
+                            Brush.sweepGradient(
+                                listOf(
+                                    Color.Red, Color(0xFFFFA500), Color.Yellow,
+                                    Color.Green, Color.Cyan, Color.Blue,
+                                    Color.Magenta, Color.Red,
+                                )
+                            ),
+                            CircleShape,
+                        )
+                        .clickable { bondColorPickerOpen = true })
                     Text(localized("自定义", "Custom"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
                 }
             }
@@ -1009,7 +1052,7 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
     }
 }
 
-/** Five horizontal depth samples with their background-mix curve plotted above them. */
+/** Five depth samples (−3, −1.5, 0, +1.5, +3) with the continuous opacity-depth curve plotted above them. */
 @Composable
 private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier = Modifier) {
     val bgCompose = MaterialTheme.colorScheme.surfaceVariant
@@ -1017,7 +1060,7 @@ private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier 
         Canvas(Modifier.fillMaxSize().padding(8.dp)) {
             val near = appearance.dofNear.coerceIn(-5f, 5f)
             val far = appearance.dofFar.coerceIn(-5f, 5f)
-            val depths = listOf(-5f, -2.5f, 0f, 2.5f, 5f)
+            val depths = listOf(-3f, -1.5f, 0f, 1.5f, 3f)
             val radius = size.minDimension * 0.105f
             val xStart = radius * 1.25f
             val xEnd = size.width - radius * 1.25f
@@ -1032,16 +1075,23 @@ private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier 
             drawLine(guideColor, Offset(xStart, chartTop), Offset(xEnd, chartTop), 1.2f, pathEffect = dash)
             drawLine(guideColor, Offset(xStart, chartBottom), Offset(xEnd, chartBottom), 1.2f, pathEffect = dash)
 
-            val fogValues = depths.map { depthCueFog(it, near, far) }
+            // Continuous opacity-depth curve: y plots OPACITY (1−fog), not fog.
+            // fog=0 (full opacity) → top; fog=1 (transparent) → bottom.
+            val samples = 60
             val curve = Path().apply {
-                fogValues.forEachIndexed { index, fog ->
-                    val y = chartBottom - fog * (chartBottom - chartTop)
-                    if (index == 0) moveTo(xPositions[index], y) else lineTo(xPositions[index], y)
+                for (i in 0..samples) {
+                    val d = -3f + 6f * i / samples
+                    val fog = depthCueFog(d, near, far)
+                    val y = chartTop + fog * (chartBottom - chartTop)
+                    val x = xStart + (xEnd - xStart) * i / samples
+                    if (i == 0) moveTo(x, y) else lineTo(x, y)
                 }
             }
             drawPath(curve, Color.White, style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
-            fogValues.forEachIndexed { index, fog ->
-                val y = chartBottom - fog * (chartBottom - chartTop)
+
+            depths.forEachIndexed { index, depth ->
+                val fog = depthCueFog(depth, near, far)
+                val y = chartTop + fog * (chartBottom - chartTop)
                 drawCircle(Color.White, 2.4f, Offset(xPositions[index], y))
                 drawPreviewSphere(Offset(xPositions[index], atomY), radius, appearance, fog, bgCompose)
             }
@@ -1051,8 +1101,17 @@ private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier 
                 color = 0xCCFFFFFF.toInt()
                 textSize = radius * 0.72f
             }
+            // Opacity axis labels (1 = top/full opacity, 0 = bottom/transparent).
             nc.drawText("1", xStart - radius, chartTop + p.textSize * 0.35f, p)
             nc.drawText("0", xStart - radius, chartBottom + p.textSize * 0.35f, p)
+            // Depth axis labels: only −3, 0, +3 (skip −1.5 and +1.5).
+            val labelY = atomY + radius * 1.8f
+            depths.forEachIndexed { index, depth ->
+                if (depth == -1.5f || depth == 1.5f) return@forEachIndexed
+                val label = depth.toInt().toString()
+                val tw = p.measureText(label)
+                nc.drawText(label, xPositions[index] - tw / 2f, labelY, p)
+            }
         }
     }
 }

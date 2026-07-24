@@ -20,7 +20,7 @@ import kotlin.math.exp
  * plain bonding-radius rule set.
  *
  * Data: R0/B parameters from the IUCr BVPARM2020 table, Shannon crystal radii from
- * R. D. Shannon (1976); see [PeriodicTable.bondValenceParam] / [PeriodicTable.shannonCrystalRadius].
+ * R. D. Shannon (1976); see [PeriodicTable.bondValenceParam] / [PeriodicTable.shannonIonicRadius].
  */
 object BondValence {
 
@@ -201,7 +201,7 @@ object BondValence {
 
         val fixedAnionV = PeriodicTable.anionValence(site.species.symbol)
         if (fixedAnionV != null) {
-            val radius = PeriodicTable.shannonCrystalRadius(site.species.symbol, fixedAnionV, cn)
+            val radius = PeriodicTable.shannonIonicRadius(site.species.symbol, fixedAnionV, cn)
             return SiteValence(radius, fixedAnionV, isAnion = true)
         }
 
@@ -237,7 +237,7 @@ object BondValence {
             val err = abs(bvs - v)
             if (err < bestErr) { bestErr = err; bestV = v }
         }
-        val radius = PeriodicTable.shannonCrystalRadius(site.species.symbol, bestV, cn)
+        val radius = PeriodicTable.shannonIonicRadius(site.species.symbol, bestV, cn)
         return SiteValence(radius, bestV, isAnion = false)
     }
 }

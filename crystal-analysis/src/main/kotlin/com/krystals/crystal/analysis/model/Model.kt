@@ -35,8 +35,8 @@ object PeriodicTable {
     fun bondValenceParam(cation: String, cationValence: Int, anion: String, anionValence: Int): BondValenceParam? =
         PeriodicTableData.bondValenceParam(cation, cationValence, anion, anionValence)
     fun cationValences(cation: String): Set<Int> = PeriodicTableData.cationValences(cation)
-    fun shannonCrystalRadius(ion: String, charge: Int, cn: Int): Double? =
-        PeriodicTableData.shannonCrystalRadius(ion, charge, cn)
+    fun shannonIonicRadius(ion: String, charge: Int, cn: Int): Double? =
+        PeriodicTableData.shannonIonicRadius(ion, charge, cn)
     fun anionValence(element: String): Int? = PeriodicTableData.anionValence(element)
     fun isAnion(element: String, other: String): Boolean = PeriodicTableData.isAnion(element, other)
     fun electronegativityPublic(element: String): Double = PeriodicTableData.electronegativityPublic(element)

@@ -17,7 +17,6 @@ import com.krystals.crystal.core.math.Vec3
 import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.style.FrameMode
 import com.krystals.renderer.core.style.LineStyle
-import com.krystals.renderer.core.style.SelectionColors
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -89,7 +88,7 @@ class GpuInstanceManager(
                 0,
                 BatchKey(
                     GeometryKind.CYLINDER,
-                    MaterialKey(Material(0xFFFFFFFF, opacity = 0.55, reflective = false)),
+                    MaterialKey(Material(0xFFFFFFFF, opacity = 0.25, reflective = false)),
                 ),
                 cylinderTransform(start, end, 0.012),
             )
@@ -111,21 +110,8 @@ class GpuInstanceManager(
         auxiliaryIds.toList().asReversed().forEach(::destroy)
         auxiliaryIds.clear()
         auxiliaryMeshes.keys.removeAll { it.startsWith("aux:") }
-        val lockedIds = state.document.lockedMeasurements.flatMap { it.atomIds }.toSet() +
-            state.document.inspection.lockedInspectedAtomIds
-        val highlighted = state.document.selection.selectedAtomIds.toSet() + lockedIds +
-            listOfNotNull(state.document.inspection.inspectedAtomId)
-        highlighted.forEach { atomId ->
-            val atom = atomsById[atomId] ?: return@forEach
-            val color = if (atomId in lockedIds) SelectionColors.LOCKED_ARGB else SelectionColors.SELECTED_ARGB
-            addAuxiliary(
-                InstanceRecord(
-                    "aux:highlight:$atomId", 0,
-                    BatchKey(GeometryKind.HIGHLIGHT, MaterialKey(Material(color, 0.65, reflective = false))),
-                    sphereTransform(atom.atom.cartesianCoordinate.toVec3(), atom.radius * 1.05),
-                ), snapshot,
-            )
-        }
+        // P8: 3D highlight spheres removed — selection rings are now drawn as 2D overlays
+        // in FilamentLegacyStyleOverlay (ViewerBackendHost.kt), matching Legacy's approach.
 
         val measurements = state.document.lockedMeasurements + if (
             state.document.measurementMode != MeasurementMode.NONE && state.document.selection.selectedAtomIds.size > 1

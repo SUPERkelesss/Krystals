@@ -60,7 +60,10 @@ object FloatingBallLayout {
     }
 
     private fun cornerFan(startDegrees: Double): List<FloatPoint> = buildList {
-        listOf(58f, 98f).forEach { radius -> repeat(3) { index -> add(polar(radius, startDegrees + 3.0 + index * 42.0)) } }
+        // Tier 1: radius 58, 2 buttons at 15° and 75°
+        listOf(15.0, 75.0).forEach { deg -> add(polar(58f, startDegrees + deg)) }
+        // Tier 2: radius 98, 4 buttons at 5°, 25°, 65°, 85°
+        listOf(5.0, 30.0, 60.0, 85.0).forEach { deg -> add(polar(98f, startDegrees + deg)) }
     }
 
     private fun sideTriangles(direction: Float) = listOf(

@@ -32,12 +32,15 @@ import com.krystals.interaction.measure.DihedralTool
 import com.krystals.interaction.measure.DistanceTool
 import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.state.InteractionState
+import com.krystals.renderer.core.primitive.BondInstance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.scene.SceneBounds
 import com.krystals.renderer.core.scene.allBounds
+import com.krystals.renderer.core.scene.sceneProjection
 import com.krystals.renderer.core.scene.toCameraDepthRange
 import com.krystals.renderer.core.scene.visibleBounds
 import com.krystals.renderer.core.style.AxisMode
+import com.krystals.renderer.core.style.SelectionColors
 import com.krystals.renderer.core.style.backgroundColor
 import com.krystals.crystal.core.math.Vec3
 import java.nio.ByteBuffer
@@ -129,17 +132,24 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
 
     override fun submit(scene: RenderScene) {
         checkOpen()
-        if (submittedScene === scene) return
-        submittedScene = scene
+        // 4× bond mapping: Filament multiplies bond radius by 0.5 (4× thinner than the
+        // previous 2.0×) so that at the same slider value, bonds render thinner.
+        val scaledScene = scene.copy(
+            objects = scene.objects.map { obj ->
+                if (obj is BondInstance) obj.copy(radius = obj.radius * 0.5) else obj
+            }
+        )
+        if (submittedScene === scaledScene) return
+        submittedScene = scaledScene
         sceneSubmissions++
-        gpuInstances.sync(scene)
-        gpuInstances.updateInteraction(scene, interaction)
-        pickingRenderer.submit(scene)
-        sceneBounds = scene.visibleBounds()
-        allSceneBounds = scene.allBounds()
+        gpuInstances.sync(scaledScene)
+        gpuInstances.updateInteraction(scaledScene, interaction)
+        pickingRenderer.submit(scaledScene)
+        sceneBounds = scaledScene.visibleBounds()
+        allSceneBounds = scaledScene.allBounds()
         sceneCenter = allSceneBounds?.center ?: sceneBounds?.center ?: Vec3.ZERO
         sceneRadius = sceneBounds?.radius ?: 10.0
-        updateClearColor(scene)
+        updateClearColor(scaledScene)
         updateLightingAndDepth()
         updateCamera()
         requestFrames(3)
@@ -287,21 +297,12 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         val state = interaction.session
         view.viewport = Viewport(0, 0, width, height)
         val aspect = width.toDouble() / height
-        // Match legacy scale: compute span from rotated 2D extents of all-atom bounds.
-        val rotation = state.camera.rotation
-        val center = sceneCenter + state.camera.target
-        val corners = allSceneBounds?.corners.orEmpty()
-        val span = if (corners.isNotEmpty()) {
-            val rotated = corners.map { rotation * (it - center) }
-            val extentX = (rotated.maxOf { it.x } - rotated.minOf { it.x }).coerceAtLeast(1.0)
-            val extentY = (rotated.maxOf { it.y } - rotated.minOf { it.y }).coerceAtLeast(1.0)
-            val baseScale = minOf(width / extentX, height / extentY) * 0.72
-            height / (2.0 * baseScale * state.camera.zoom)
-        } else {
-            sceneRadius / state.camera.zoom
-        }
+        // The ortho span comes from the shared SceneProjection so the rendered image, the 2D
+        // overlay, bitmap export and CPU picking always agree on where an atom lands.
+        val span = submittedScene?.sceneProjection(state.camera, width, height)?.span
+            ?: (sceneRadius / state.camera.zoom)
         camera.setProjection(Camera.Projection.ORTHO, -span * aspect, span * aspect, -span, span, -1000.0, 1000.0)
-        camera.setShift(2.0 * state.camera.panX / width, -2.0 * state.camera.panY / height)
+        camera.setShift(state.camera.panX / width, -state.camera.panY / height)
         val worldFromCamera = state.camera.rotation.transposed()
         val target = sceneCenter + state.camera.target
         val eye = target + worldFromCamera * Vec3(0.0, 0.0, max(50.0, sceneRadius * 4.0))
@@ -346,26 +347,11 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         if (atoms.isEmpty()) return
         val state = interaction.document
         val cameraState = interaction.session.camera
-        val width = bitmap.width.toDouble()
-        val height = bitmap.height.toDouble()
-        val aspect = width / height
-        // Match legacy scale: compute span from rotated 2D extents of all-atom bounds.
-        val center = sceneCenter + cameraState.target
-        val corners = allSceneBounds?.corners.orEmpty()
-        val span = if (corners.isNotEmpty()) {
-            val rotated = corners.map { cameraState.rotation * (it - center) }
-            val extentX = (rotated.maxOf { it.x } - rotated.minOf { it.x }).coerceAtLeast(1.0)
-            val extentY = (rotated.maxOf { it.y } - rotated.minOf { it.y }).coerceAtLeast(1.0)
-            val baseScale = minOf(width / extentX, height / extentY) * 0.72
-            height / (2.0 * baseScale * cameraState.zoom)
-        } else {
-            sceneRadius / cameraState.zoom
-        }
+        val projection = scene.sceneProjection(cameraState, bitmap.width, bitmap.height)
         fun project(id: Long): Pair<Float, Float>? {
             val atom = atoms[id]?.atom ?: return null
-            val position = cameraState.rotation * (atom.cartesianCoordinate.toVec3() - sceneCenter - cameraState.target)
-            return ((width * 0.5 + cameraState.panX + position.x / (span * aspect) * width * 0.5).toFloat() to
-                (height * 0.5 + cameraState.panY - position.y / span * height * 0.5).toFloat())
+            val (px, py) = projection.project(atom.cartesianCoordinate.toVec3())
+            return px.toFloat() to py.toFloat()
         }
         val canvas = Canvas(bitmap)
         val scale = (bitmap.width / 1080f).coerceAtLeast(0.5f)
@@ -396,9 +382,8 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             if (selection.mode == MeasurementMode.DIHEDRAL) {
                 DihedralTool.planes(coordinates[0], coordinates[1], coordinates[2], coordinates[3]).forEach { plane ->
                     val sv = plane.vertices.map { v ->
-                        val pos = cameraState.rotation * (v - sceneCenter - cameraState.target)
-                        ((width * 0.5 + cameraState.panX + pos.x / (span * aspect) * width * 0.5).toFloat() to
-                            (height * 0.5 + cameraState.panY - pos.y / span * height * 0.5).toFloat())
+                        val (px, py) = projection.project(v)
+                        px.toFloat() to py.toFloat()
                     }
                     if (sv.size == 4) {
                         val path = Path().apply { moveTo(sv[0].first, sv[0].second); sv.drop(1).forEach { lineTo(it.first, it.second) }; close() }
@@ -447,7 +432,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             val lineHeight = infoPaint.fontMetrics.run { descent - ascent }
             val maxWidth = lines.maxOf(infoPaint::measureText)
             val pad = 16f * scale
-            val atomRadius = (atoms.getValue(id).radius / span * height * 0.5).toFloat()
+            val atomRadius = projection.screenRadius(atoms.getValue(id).radius).toFloat()
             val left = anchor.first + atomRadius + 14f * scale
             val top = anchor.second - atomRadius - 14f * scale - lines.size * lineHeight - pad
             val bottom = anchor.second - atomRadius - 14f * scale + pad
@@ -458,6 +443,19 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             lines.forEachIndexed { index, line ->
                 canvas.drawText(line, left + pad, top + pad + (index + 1) * lineHeight - infoPaint.fontMetrics.descent, infoPaint)
             }
+        }
+        // Selection rings (matching Legacy renderer's drawAtom selection highlight).
+        val lockedIds = state.lockedMeasurements.flatMap { it.atomIds }.toSet() + state.inspection.lockedInspectedAtomIds
+        val highlightedIds = state.selection.selectedAtomIds.toSet() + lockedIds + listOfNotNull(state.inspection.inspectedAtomId)
+        val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        highlightedIds.forEach { id ->
+            val atomInstance = atoms[id] ?: return@forEach
+            val anchor = project(id) ?: return@forEach
+            val isLocked = id in lockedIds
+            ringPaint.color = if (isLocked) SelectionColors.LOCKED_ARGB.toInt() else SelectionColors.SELECTED_ARGB.toInt()
+            ringPaint.strokeWidth = (if (isLocked) 6f else 5f) * scale
+            val r = projection.screenRadius(atomInstance.radius).toFloat().coerceAtLeast(4.5f)
+            canvas.drawCircle(anchor.first, anchor.second, r + 4f * scale, ringPaint)
         }
         if (scene.environment.axes.visible) drawAxesOverlay(canvas, scene, bitmap.width, bitmap.height, scale)
     }

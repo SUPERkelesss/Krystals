@@ -22,6 +22,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -176,6 +177,7 @@ import java.io.File
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 private data class PendingOpen(val uri: Uri, val name: String, val text: String, val candidates: List<Int>)
 
@@ -1027,12 +1029,12 @@ private fun ViewerScreen(
                 ThemeMenuItem(themeMode, onTheme = { mode -> viewModel.tabs.forEach { it.recordHistory() }; onTheme(mode) })
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
-                    TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Text(stringResource(R.string.feedback), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
-                    TextButton(onClick = { menuOpen = false; onAbout() }) { Text(stringResource(R.string.about), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Text(stringResource(R.string.sponsor), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onAbout() }) { Text(stringResource(R.string.about), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text(localized("退出 Krystals", "Exit Krystals")) }, onClick = { menuOpen = false; onExit() })
@@ -1185,19 +1187,68 @@ private fun ViewerScreen(
                     },
                 )
                 val offsets = FloatingBallLayout.toolOffsets(tab.floatingPosition.snap)
+                // Tier split: tier 1 = inner ring (radius ≤ 80px), tier 2 = outer ring.
+                val tier1Count = run {
+                    val firstOuter = offsets.indexOfFirst { sqrt(it.x * it.x + it.y * it.y) > 80f }
+                    if (firstOuter > 0) firstOuter else offsets.size
+                }
+                // Main ball pulse on open: 1.0 → 0.9 → 1.0 in 60ms.
+                val ballScale = remember(tab.id) { Animatable(1f) }
+                LaunchedEffect(toolOpen) {
+                    if (toolOpen) {
+                        ballScale.snapTo(1f)
+                        ballScale.animateTo(0.9f, tween(30, easing = FastOutSlowInEasing))
+                        ballScale.animateTo(1.0f, tween(30, easing = FastOutSlowInEasing))
+                    }
+                }
                 tools.forEachIndexed { index, (icon, active, action) ->
                     val toolOffset = offsets[index]
                     val animProgress = remember(tab.id, index) { Animatable(0f) }
+                    val isTier2 = index >= tier1Count
+                    // Parent tier 1 offset for tier 2 tools (nearest inner-ring button).
+                    val parentOffset = if (isTier2) {
+                        var bestDist = Float.MAX_VALUE
+                        var best = offsets[0]
+                        for (i in 0 until tier1Count) {
+                            val dx = offsets[i].x - toolOffset.x
+                            val dy = offsets[i].y - toolOffset.y
+                            val d = dx * dx + dy * dy
+                            if (d < bestDist) { bestDist = d; best = offsets[i] }
+                        }
+                        best
+                    } else FloatPoint(0f, 0f)
                     LaunchedEffect(toolOpen) {
                         if (toolOpen) {
-                            delay(index * 8L)
-                            animProgress.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
+                            if (isTier2) {
+                                // Tier 2: start after tier 1 completes + 60ms delay, stagger 30ms within tier.
+                                val tier1End = 60L + (tier1Count - 1) * 30L + 280L
+                                val tier2Index = index - tier1Count
+                                delay(tier1End + 60L + tier2Index * 30L)
+                                animProgress.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
+                            } else {
+                                // Tier 1: start after ball pulse (60ms), stagger 30ms.
+                                delay(60L + index * 30L)
+                                animProgress.animateTo(1f, tween(280, easing = FastOutSlowInEasing))
+                            }
                         } else {
-                            delay((tools.lastIndex - index) * 8L)
-                            animProgress.animateTo(0f, tween(180, easing = FastOutSlowInEasing))
+                            // Close: tier 2 recedes first, then tier 1. Slightly faster than open.
+                            if (isTier2) {
+                                delay((tools.lastIndex - index) * 10L)
+                                animProgress.animateTo(0f, tween(100, easing = FastOutSlowInEasing))
+                            } else {
+                                delay(60L + (tier1Count - 1 - index) * 30L)
+                                animProgress.animateTo(0f, tween(120, easing = FastOutSlowInEasing))
+                            }
                         }
                     }
                     val progress = animProgress.value
+                    val visibilityAlpha = (progress / 0.3f).coerceIn(0f, 1f)
+                    val scale = 0.6f + 0.4f * progress
+                    // Tier 2 flies from parent; tier 1 flies from ball centre.
+                    val startX = parentOffset.x
+                    val startY = parentOffset.y
+                    val offsetX = startX + (toolOffset.x - startX) * progress
+                    val offsetY = startY + (toolOffset.y - startY) * progress
                     FloatingActionButton(
                         onClick = { if (progress > 0.5f) action() },
                         shape = CircleShape,
@@ -1205,10 +1256,14 @@ private fun ViewerScreen(
                         contentColor = if (active) baseContainer else baseContent,
                         modifier = Modifier
                             .size(40.dp)
-                            .alpha(progress)
+                            .graphicsLayer {
+                                this.alpha = visibilityAlpha
+                                this.scaleX = scale
+                                this.scaleY = scale
+                            }
                             .offset(
-                                x = (toolOffset.x * progress).dp,
-                                y = (toolOffset.y * progress).dp,
+                                x = offsetX.dp,
+                                y = offsetY.dp,
                             ),
                     ) { Icon(icon, null) }
                 }
@@ -1217,28 +1272,33 @@ private fun ViewerScreen(
                     shape = CircleShape,
                     containerColor = baseContainer,
                     contentColor = baseContent,
-                    modifier = Modifier.size(54.dp).pointerInput(tab.id) {
-                        detectDragGestures(
-                            onDragStart = { floatingDragging = true },
-                            onDragEnd = {
-                                val center = FloatPoint(ballParentSize.width - ballOuterSize.width / 2f + floatingX, ballParentSize.height - ballOuterSize.height / 2f + floatingY)
-                                val snapped = FloatingBallLayout.snap(center, ballParentSize.width.toFloat(), ballParentSize.height.toFloat(), mainBallPx / 2f + snapThresholdPx)
-                                tab.floatingPosition = snapped
-                                preferences.edit().putFloat("${floatingKey}_x", snapped.xFraction).putFloat("${floatingKey}_y", snapped.yFraction).putString("${floatingKey}_snap", snapped.snap.name).apply()
-                                floatingDragging = false
-                            },
-                            onDragCancel = { floatingDragging = false },
-                            onDrag = { change, amount ->
-                                change.consume()
-                                val minX = (ballOuterSize.width + mainBallPx) / 2f - ballParentSize.width
-                                val maxX = (ballOuterSize.width - mainBallPx) / 2f
-                                val minY = (ballOuterSize.height + mainBallPx) / 2f - ballParentSize.height
-                                val maxY = (ballOuterSize.height - mainBallPx) / 2f
-                                floatingX = (floatingX + amount.x).coerceIn(minX, maxX)
-                                floatingY = (floatingY + amount.y).coerceIn(minY, maxY)
-                            },
-                        )
-                    },
+                    modifier = Modifier.size(54.dp)
+                        .graphicsLayer {
+                            this.scaleX = ballScale.value
+                            this.scaleY = ballScale.value
+                        }
+                        .pointerInput(tab.id) {
+                            detectDragGestures(
+                                onDragStart = { floatingDragging = true },
+                                onDragEnd = {
+                                    val center = FloatPoint(ballParentSize.width - ballOuterSize.width / 2f + floatingX, ballParentSize.height - ballOuterSize.height / 2f + floatingY)
+                                    val snapped = FloatingBallLayout.snap(center, ballParentSize.width.toFloat(), ballParentSize.height.toFloat(), mainBallPx / 2f + snapThresholdPx)
+                                    tab.floatingPosition = snapped
+                                    preferences.edit().putFloat("${floatingKey}_x", snapped.xFraction).putFloat("${floatingKey}_y", snapped.yFraction).putString("${floatingKey}_snap", snapped.snap.name).apply()
+                                    floatingDragging = false
+                                },
+                                onDragCancel = { floatingDragging = false },
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    val minX = (ballOuterSize.width + mainBallPx) / 2f - ballParentSize.width
+                                    val maxX = (ballOuterSize.width - mainBallPx) / 2f
+                                    val minY = (ballOuterSize.height + mainBallPx) / 2f - ballParentSize.height
+                                    val maxY = (ballOuterSize.height - mainBallPx) / 2f
+                                    floatingX = (floatingX + amount.x).coerceIn(minX, maxX)
+                                    floatingY = (floatingY + amount.y).coerceIn(minY, maxY)
+                                },
+                            )
+                        },
                 ) { AssetImage("icon_trans.png", Modifier.size(43.dp), ContentScale.Fit) }
             }
             if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateAnalysis(tab, it) }, onMessage = onMessage, onRunBondComputation = onRunBondComputation)
@@ -1284,16 +1344,21 @@ private fun ViewerScreen(
         onRendererBackendChanged = ::selectBackend,
         onPreviewStart = { previewAppearance = it },
         onPreviewEnd = { previewAppearance = null },
+        backgroundFollowTheme = backgroundFollowTheme,
+        onBackgroundFollowThemeChange = onBackgroundFollowThemeChange,
     )
 }
 
 @Composable
 private fun DocumentTabs(viewModel: KrystalsViewModel, onClose: (Int) -> Unit) {
-    LazyRow(Modifier.fillMaxWidth().height(46.dp).background(MaterialTheme.colorScheme.surfaceVariant)) {
+    val singleTab = viewModel.tabs.size == 1
+    val tabBackground = if (singleTab) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant
+    LazyRow(Modifier.fillMaxWidth().height(46.dp).background(tabBackground)) {
         itemsIndexed(viewModel.tabs, key = { _, tab -> tab.id }) { index, tab ->
             var drag by remember { mutableFloatStateOf(0f) }
+            val tabColor = if (singleTab) MaterialTheme.colorScheme.surfaceVariant else if (index == viewModel.selectedIndex) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
             Surface(
-                color = if (index == viewModel.selectedIndex) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface,
+                color = tabColor,
                 modifier = Modifier.fillMaxHeight().pointerInput(tab.id, index) {
                     detectDragGesturesAfterLongPress(
                         onDragEnd = { drag = 0f },

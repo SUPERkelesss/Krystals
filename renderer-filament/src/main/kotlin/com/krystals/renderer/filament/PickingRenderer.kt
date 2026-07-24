@@ -5,7 +5,7 @@ import com.google.android.filament.View
 import com.krystals.interaction.selection.PickResult
 import com.krystals.interaction.state.InteractionState
 import com.krystals.renderer.core.scene.RenderScene
-import com.krystals.renderer.core.scene.visibleBounds
+import com.krystals.renderer.core.scene.sceneProjection
 import kotlin.math.max
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -58,17 +58,19 @@ class PickingRenderer {
 
     internal fun projectPick(x: Float, y: Float): PickResult? {
         val snapshot = scene ?: return null
-        val bounds = snapshot.visibleBounds() ?: return null
         val camera = interaction.session.camera
-        val width = interaction.session.viewportWidth.coerceAtLeast(1)
-        val height = interaction.session.viewportHeight.coerceAtLeast(1)
-        val span = bounds.radius / camera.zoom
-        val aspect = width.toDouble() / height
-        val scale = height / (span * 2.0)
+        // Project through the same SceneProjection the renderer and overlay use, so a tap
+        // hits the atom that is actually rendered at that position (previously this used a
+        // legacy-style projection, so the ring landed on a different atom than the one tapped).
+        val projection = snapshot.sceneProjection(
+            camera,
+            interaction.session.viewportWidth,
+            interaction.session.viewportHeight,
+        )
+        val scale = projection.screenScale()
         return snapshot.atoms.asSequence().filter { it.visible }.map { atom ->
-            val position = camera.rotation * (atom.atom.cartesianCoordinate.toVec3() - bounds.center - camera.target)
-            val px = width / 2.0 + camera.panX + position.x / (span * aspect) * width * 0.5
-            val py = height / 2.0 + camera.panY - position.y / span * height * 0.5
+            val position = projection.viewPosition(atom.atom.cartesianCoordinate.toVec3())
+            val (px, py) = projection.projectView(position)
             val radius = max(22.0, atom.radius * scale * 1.35)
             val distanceSquared = (px - x) * (px - x) + (py - y) * (py - y)
             Triple(atom, position.z, distanceSquared / (radius * radius))

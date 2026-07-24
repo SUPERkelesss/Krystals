@@ -1524,6 +1524,7 @@ object PeriodicTableData {
     // Per v0.5.0: Shannon crystal radii (Å) from "Radii for All Species" (R. D. Shannon 1976,
     // .todos/bondvalence/Radii for All Species.html). Keyed "ion/charge" -> list of www.winter.group.shef.ac.uk
     // (coordination, isHighSpin, crystalRadius). High-spin entries are preferred at lookup.
+    // The lookup function converts crystal radii to ionic radii via [toIonic].
     // ------------------------------------------------------------------
     private val shannonCrystalRadii: Map<String, List<Triple<Int, Boolean, Float>>> = mapOf(
     "Ac/3" to listOf(Triple(6, false, 1.26f)),
@@ -1731,23 +1732,28 @@ object PeriodicTableData {
     "Zr/4" to listOf(Triple(4, false, 0.73f), Triple(5, false, 0.8f), Triple(6, false, 0.86f), Triple(7, false, 0.92f), Triple(8, false, 0.98f), Triple(9, false, 1.03f)),
     )
 
+    /** Convert a stored crystal radius (CR) to ionic radius (IR): IR = CR − 0.14 for cations,
+     *  CR + 0.14 for anions. (Shannon 1976, CR↔IR offset.) */
+    private fun toIonic(cr: Double, charge: Int): Double =
+        if (charge >= 0) cr - 0.14 else cr + 0.14
+
     /**
-     * Shannon crystal radius for (ion, charge) at coordination [cn]. Prefers a high-spin entry when
+     * Shannon ionic radius for (ion, charge) at coordination [cn]. Prefers a high-spin entry when
      * the ion has spin states; if [cn] is not tabulated, the nearest available coordination is used.
      * Returns null when the (ion, charge) pair is absent entirely.
      */
-    fun shannonCrystalRadius(ion: String, charge: Int, cn: Int): Double? {
+    fun shannonIonicRadius(ion: String, charge: Int, cn: Int): Double? {
         val list = shannonCrystalRadii["$ion/$charge"] ?: return null
         if (list.isEmpty()) return null
         // Prefer high spin, then closest coordination number.
         val highSpin = list.filter { it.first == cn && it.second }
-        if (highSpin.isNotEmpty()) return highSpin.first().third.toDouble()
+        if (highSpin.isNotEmpty()) return toIonic(highSpin.first().third.toDouble(), charge)
         val exact = list.filter { it.first == cn }
-        if (exact.isNotEmpty()) return exact.minBy { !it.second }.third.toDouble()
+        if (exact.isNotEmpty()) return toIonic(exact.minBy { !it.second }.third.toDouble(), charge)
         val nearest = list.minBy { kotlin.math.abs(it.first - cn) }
         // Among entries at that nearest CN, prefer high spin.
         val atCn = list.filter { it.first == nearest.first }
-        return atCn.minBy { !it.second }.third.toDouble()
+        return toIonic(atCn.minBy { !it.second }.third.toDouble(), charge)
     }
 
     // ------------------------------------------------------------------

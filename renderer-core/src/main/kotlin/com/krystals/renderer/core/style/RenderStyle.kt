@@ -10,9 +10,9 @@ enum class AxisMode { ABC, XYZ }
 
 data class WorldLight(
     val azimuthDegrees: Float = 25f,
-    val elevationDegrees: Float = 45f,
-    val intensity: Float = 0.4f,
-    val diffusion: Float = 0.7f,
+    val elevationDegrees: Float = 60f,
+    val intensity: Float = 0.8f,
+    val diffusion: Float = 0.8f,
 ) {
     init {
         require(elevationDegrees in 0f..90f) { "light elevation must be between 0 and 90 degrees" }
@@ -23,7 +23,7 @@ data class WorldLight(
 
 data class DepthCueing(
     val enabled: Boolean = true,
-    val near: Float = 0.5f,
+    val near: Float = -0.5f,
     val far: Float = -4.5f,
 ) {
     init {
@@ -73,7 +73,7 @@ data class RenderEnvironment(
     init {
         require((backgroundArgb ushr 32) == 0L) { "background color must be a 32-bit ARGB value" }
         require(atoms.opacity in 0f..1f) { "atom opacity must be between 0 and 1" }
-        require(bonds.radius > 0f) { "bond radius must be positive" }
+        require(bonds.radius >= 0f) { "bond radius must be non-negative" }
         require(bonds.opacity in 0f..1f) { "bond opacity must be between 0 and 1" }
         require(polyhedra.opacity in 0f..1f) { "polyhedron opacity must be between 0 and 1" }
     }
@@ -83,13 +83,13 @@ data class ViewerAppearance(
     val backgroundArgb: Long = 0xFF101014,
     val reflectionEnabled: Boolean = true,
     val lightAzimuth: Float = 25f,
-    val lightElevation: Float = 45f,
-    val lightIntensity: Float = 0.4f,
-    val diffusion: Float = 0.7f,
+    val lightElevation: Float = 60f,
+    val lightIntensity: Float = 0.8f,
+    val diffusion: Float = 0.8f,
     val atomOpacity: Float = 1.0f,
     val frameMode: FrameMode = FrameMode.SINGLE_CELL,
     val lineStyle: LineStyle = LineStyle.SOLID,
-    val bondRadius: Float = 0.20f,
+    val bondRadius: Float = 0.10f,
     val bondOpacity: Float = 1.0f,
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val uniformBondArgb: Long = 0xFF9A90A0,
@@ -100,7 +100,7 @@ data class ViewerAppearance(
     val showAxes: Boolean = true,
     val axisMode: AxisMode = AxisMode.ABC,
     val depthOfFieldEnabled: Boolean = true,
-    val dofNear: Float = 0.5f,
+    val dofNear: Float = -0.5f,
     val dofFar: Float = -4.5f,
 ) {
     init {

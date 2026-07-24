@@ -391,7 +391,7 @@ private fun LegacyCanvasViewport(
                             if (pressed.size == 1) {
                                 val delta = pressed.first().position - pressed.first().previousPosition
                                 if (delta.getDistance() > 0f) {
-                                    controller.rotateByDrag(delta.x, delta.y)
+                                    controller.rotateByDrag(-delta.x, -delta.y)
                                     onViewMoved()
                                 }
                             } else if (pressed.size >= 2) {
