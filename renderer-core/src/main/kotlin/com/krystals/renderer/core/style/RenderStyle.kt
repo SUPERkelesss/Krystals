@@ -9,10 +9,10 @@ enum class BondColorMode { BICOLOR, UNICOLOR }
 enum class AxisMode { ABC, XYZ }
 
 data class WorldLight(
-    val azimuthDegrees: Float = 25f,
+    val azimuthDegrees: Float = 35f,
     val elevationDegrees: Float = 60f,
-    val intensity: Float = 0.8f,
-    val diffusion: Float = 0.8f,
+    val intensity: Float = 0.5f,
+    val diffusion: Float = 0.5f,
 ) {
     init {
         require(elevationDegrees in 0f..90f) { "light elevation must be between 0 and 90 degrees" }
@@ -37,7 +37,7 @@ data class AtomStyle(
 )
 
 data class BondStyle(
-    val radius: Float = 0.20f,
+    val radius: Float = 0.15f,
     val opacity: Float = 1f,
     val colorMode: BondColorMode = BondColorMode.BICOLOR,
     val uniformArgb: Long = 0xFF9A90A0,
@@ -82,14 +82,14 @@ data class RenderEnvironment(
 data class ViewerAppearance(
     val backgroundArgb: Long = 0xFF101014,
     val reflectionEnabled: Boolean = true,
-    val lightAzimuth: Float = 25f,
+    val lightAzimuth: Float = 35f,
     val lightElevation: Float = 60f,
-    val lightIntensity: Float = 0.8f,
-    val diffusion: Float = 0.8f,
+    val lightIntensity: Float = 0.5f,
+    val diffusion: Float = 0.5f,
     val atomOpacity: Float = 1.0f,
     val frameMode: FrameMode = FrameMode.SINGLE_CELL,
     val lineStyle: LineStyle = LineStyle.SOLID,
-    val bondRadius: Float = 0.10f,
+    val bondRadius: Float = 0.15f,
     val bondOpacity: Float = 1.0f,
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val uniformBondArgb: Long = 0xFF9A90A0,

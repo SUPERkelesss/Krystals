@@ -33,6 +33,7 @@ class GpuInstanceManager(
 ) : AutoCloseable {
     private val entities = linkedMapOf<String, Int>()
     private val objectByEntity = linkedMapOf<Int, String>()
+    private val entityLock = Any()
     private val ownedMeshByEntity = linkedMapOf<Int, UploadedMesh>()
     private val auxiliaryIds = linkedSetOf<String>()
     private val sceneAuxiliaryIds = linkedSetOf<String>()
@@ -62,7 +63,7 @@ class GpuInstanceManager(
             if (record.batch.geometry == GeometryKind.POLYHEDRON) return@forEach
             create(record, snapshot)?.let { entity ->
                 entities[id] = entity
-                objectByEntity[entity] = id.substringBeforeLast(":a").substringBeforeLast(":b")
+                synchronized(entityLock) { objectByEntity[entity] = id.substringBeforeLast(":a").substringBeforeLast(":b") }
             }
         }
         polyhedronBatchIds.toList().asReversed().forEach(::destroy)
@@ -77,7 +78,7 @@ class GpuInstanceManager(
             val record = InstanceRecord(id, 0, BatchKey(GeometryKind.POLYHEDRON, MaterialKey(merged.material)), identity())
             create(record, snapshot)?.let { entity ->
                 entities[id] = entity
-                objectByEntity[entity] = merged.objectIds.firstOrNull().orEmpty()
+                synchronized(entityLock) { objectByEntity[entity] = merged.objectIds.firstOrNull().orEmpty() }
                 polyhedronBatchIds += id
             }
         }
@@ -102,7 +103,7 @@ class GpuInstanceManager(
         lastSnapshot = snapshot
     }
 
-    fun objectIdForEntity(entity: Int): String? = objectByEntity[entity]
+    fun objectIdForEntity(entity: Int): String? = synchronized(entityLock) { objectByEntity[entity] }
 
     fun updateInteraction(snapshot: RenderScene, state: InteractionState) {
         if (lastDocumentState == state.document) return
@@ -303,13 +304,6 @@ class GpuInstanceManager(
         }
     }
 
-    private fun planeMesh(vertices: List<Vec3>, normal: Vec3): MeshData {
-        val positions = vertices.flatMap { listOf(it.x.toFloat(), it.y.toFloat(), it.z.toFloat()) }.toFloatArray()
-        val normals = List(vertices.size) { listOf(normal.x.toFloat(), normal.y.toFloat(), normal.z.toFloat()) }.flatten().toFloatArray()
-        val indices = buildList { for (index in 1 until vertices.lastIndex) { add(0); add(index); add(index + 1) } }.toIntArray()
-        return MeshData(positions, normals, indices)
-    }
-
     private fun sphereTransform(center: Vec3, radius: Double) = floatArrayOf(
         radius.toFloat(), 0f, 0f, 0f, 0f, radius.toFloat(), 0f, 0f, 0f, 0f, radius.toFloat(), 0f,
         center.x.toFloat(), center.y.toFloat(), center.z.toFloat(), 1f,
@@ -334,7 +328,7 @@ class GpuInstanceManager(
 
     private fun destroy(id: String) {
         val entity = entities.remove(id) ?: return
-        objectByEntity.remove(entity)
+        synchronized(entityLock) { objectByEntity.remove(entity) }
         ownedMeshByEntity.remove(entity)?.let(meshes::destroy)
         scene.removeEntity(entity)
         engine.destroyEntity(entity)

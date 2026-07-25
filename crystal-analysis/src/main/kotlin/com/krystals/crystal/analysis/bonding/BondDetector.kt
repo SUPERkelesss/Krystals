@@ -88,6 +88,12 @@ object BondDetector {
 
         val primaryAtoms = ArrayList<AtomImage>(base.size * expansion.multiplier)
         val primaryIdByBaseId = HashMap<Long, Long>(base.size)
+        // Index every primary atom by (base atom id, cell offset) so the bond sweep can reuse the
+        // existing primary atom when an image lookup lands inside the primary region — otherwise a
+        // duplicate shell atom is spawned at the primary's exact position and steals its bonds
+        // (which starved original-cell polyhedron centres of ligands in supercells).
+        val baseIdByPrimaryId = HashMap<Long, Long>(base.size * expansion.multiplier)
+        val primaryByCell = HashMap<Pair<Long, Int3>, AtomImage>(base.size * expansion.multiplier)
         var tempId = 1L
         fun nextTempId() = tempId++
         for (ix in 0 until ex) for (iy in 0 until ey) for (iz in 0 until ez) {
@@ -96,13 +102,16 @@ object BondDetector {
                 val fractional = atom.fractionalCoordinate + offset
                 val primaryId = nextTempId()
                 if (ix == 0 && iy == 0 && iz == 0) primaryIdByBaseId[atom.id] = primaryId
-                primaryAtoms += atom.copy(
+                val primary = atom.copy(
                     id = primaryId,
                     fractionalCoordinate = fractional,
                     cartesianCoordinate = structure.lattice.toCartesian(fractional),
                     cellOffset = offset,
                     isShell = false,
                 )
+                baseIdByPrimaryId[primaryId] = atom.id
+                primaryByCell[atom.id to offset] = primary
+                primaryAtoms += primary
             }
         }
 
@@ -195,18 +204,29 @@ object BondDetector {
         }
 
         fun getShellAtom(q: AtomImage, off: Int3): AtomImage {
-            shellByKey[q.id to off]?.let { return it }
+            // q is always a primary atom (the spatial hash holds primaries only). The image this
+            // bond points at lives in cell q.cellOffset + off; when that cell lies inside the
+            // primary region the image IS the primary atom there — reuse it. The pre-v0.6.x key
+            // (q.id, off) never matched the pre-indexed boundary images for q outside the zero
+            // cell, so a duplicate was spawned at the primary's position and stole the bond.
+            val baseId = baseIdByPrimaryId.getValue(q.id)
+            val absoluteOffset = Int3(q.cellOffset.x + off.x, q.cellOffset.y + off.y, q.cellOffset.z + off.z)
+            if (absoluteOffset.x in 0 until ex && absoluteOffset.y in 0 until ey && absoluteOffset.z in 0 until ez) {
+                return primaryByCell.getValue(baseId to absoluteOffset)
+            }
+            val key = primaryIdByBaseId.getValue(baseId) to absoluteOffset
+            shellByKey[key]?.let { return it }
             val frac = q.fractionalCoordinate + off
             val atom = q.copy(
                 id = nextTempId(),
                 fractionalCoordinate = frac,
                 cartesianCoordinate = structure.lattice.toCartesian(frac),
-                cellOffset = off,
+                cellOffset = absoluteOffset,
                 isShell = true,
                 isBoundaryImage = isBoundaryPosition(frac),
             )
             shellAtoms += atom
-            shellByKey[q.id to off] = atom
+            shellByKey[key] = atom
             return atom
         }
 
@@ -286,141 +306,6 @@ object BondDetector {
             "Expansion exceeds limit $MAX_RENDERED_ATOMS"
         }
         val finalBonds = result.map { bond ->
-            bond.copy(atomA = idMap.getValue(bond.atomA), atomB = idMap.getValue(bond.atomB))
-        }
-        return BondNetwork(finalAtoms, finalBonds, structure, expansion)
-    }
-
-    @Suppress("unused")
-    private fun buildNetworkLegacy(
-        structure: CrystalStructure,
-        bondConfiguration: BondConfiguration,
-        expansion: Expansion = Expansion(),
-    ): BondNetwork {
-        val base = SymmetryExpander.expand(structure)
-        // Per v0.5.3b: guard the primary atom count up front (was a post-hoc check on finalAtoms
-        // only, which never tripped for large-shell structures because finalAtoms stays small).
-        require(base.size.toLong() * expansion.multiplier <= MAX_RENDERED_ATOMS) {
-            "Expansion exceeds limit $MAX_RENDERED_ATOMS"
-        }
-        val shellMode = pickShellMode(base.size, expansion)
-        val ex = expansion.x
-        val ey = expansion.y
-        val ez = expansion.z
-        // Per v0.3.4/v0.3.44: materialise a TWO-cell-thick shell of neighbour cells around the
-        // primary expansion region. Primary region = [0,ex) × [0,ey) × [0,ez). Shell region covers
-        // [-2,ex+2) × [-2,ey+2) × [-2,ez+2) minus the primary region. Bonds are computed from every
-        // primary/boundary atom to every atom in the primary+shell region using real Cartesian
-        // distances, so cross-cell bonds are real bonds to real shell atoms. The shell must be two
-        // cells thick so a boundary-image centre (sitting at offset ±1, on a primary-box face) finds
-        // its outward neighbours at offset ±2 materialised — otherwise a corner-atom polyhedron was
-        // only complete at the primary (0,0,0) site. Atoms outside the [0,ex] closure are external
-        // shell (hidden by default); those referenced by a bond are kept so they can be polyhedron
-        // vertices. Shell atoms that are not referenced by any bond are discarded after bonding, and
-        // the kept atoms are renumbered with compact ids.
-        val primaryCapacity = base.size * expansion.multiplier
-        val primaryAtoms = ArrayList<AtomImage>(primaryCapacity)
-        var tempId = 1L
-        fun nextTempId() = tempId++
-        for (ix in 0 until ex) for (iy in 0 until ey) for (iz in 0 until ez) {
-            base.forEach { atom ->
-                val offset = Int3(ix, iy, iz)
-                val fractional = atom.fractionalCoordinate + offset
-                primaryAtoms += atom.copy(
-                    id = nextTempId(),
-                    fractionalCoordinate = fractional,
-                    cartesianCoordinate = structure.lattice.toCartesian(fractional),
-                    cellOffset = offset,
-                    isShell = false,
-                )
-            }
-        }
-
-        val shellAtoms = ArrayList<AtomImage>()
-        val boundaryEps = 1e-6
-        // Per v0.3.44: the shell is TWO cells thick so a boundary-image centre's outward neighbours
-        // are materialised too. A boundary image sits on the primary-box face (offset ±1); its
-        // outward face/edge/corner neighbours land at offset ±2, which a 1-cell shell did not cover —
-        // so a corner-atom polyhedron was only complete at the primary (0,0,0) site. Atoms at offset
-        // ±2 are external shell (outside the [0,ex] closure): hidden by default, but kept when a bond
-        // references them so they can serve as polyhedron vertices.
-        // Per v0.5.3b: large cells degrade to a 1-cell shell ([ShellMode.ONE_CELL]) to avoid OOM;
-        // boundary-image centres then miss their outward polyhedron face, but the primary centres
-        // stay complete and the structure is at least viewable.
-        val shellFrom = if (shellMode == ShellMode.FULL) -2 else -1
-        val shellUntil = { n: Int -> if (shellMode == ShellMode.FULL) n + 2 else n + 1 }
-        for (ix in shellFrom until shellUntil(ex)) for (iy in shellFrom until shellUntil(ey)) for (iz in shellFrom until shellUntil(ez)) {
-            if (ix in 0 until ex && iy in 0 until ey && iz in 0 until ez) continue
-            base.forEach { atom ->
-                val offset = Int3(ix, iy, iz)
-                val fractional = atom.fractionalCoordinate + offset
-                // Per v0.3.41: a shell atom lying on a face of the primary expansion box is a
-                // boundary image (e.g. the (1,0,0) image of a corner atom). Boundary images are
-                // displayed by default. Shell atoms not on any face are genuine external neighbours.
-                // A boundary image must lie on a face of the primary expansion box *and* be within
-                // the closure of that box. This prevents corner/edge atoms from generating extra
-                // images outside the visible supercell (e.g. Cs at (0,-1,0) for a 1×1×1 expansion).
-                val inPrimaryBox =
-                    fractional.x >= -boundaryEps && fractional.x <= ex + boundaryEps &&
-                        fractional.y >= -boundaryEps && fractional.y <= ey + boundaryEps &&
-                        fractional.z >= -boundaryEps && fractional.z <= ez + boundaryEps
-                val onFace =
-                    (fractional.x >= -boundaryEps && fractional.x <= boundaryEps) ||
-                        (fractional.x >= ex - boundaryEps && fractional.x <= ex + boundaryEps) ||
-                        (fractional.y >= -boundaryEps && fractional.y <= boundaryEps) ||
-                        (fractional.y >= ey - boundaryEps && fractional.y <= ey + boundaryEps) ||
-                        (fractional.z >= -boundaryEps && fractional.z <= boundaryEps) ||
-                        (fractional.z >= ez - boundaryEps && fractional.z <= ez + boundaryEps)
-                val isBoundaryImage = inPrimaryBox && onFace
-                shellAtoms += atom.copy(
-                    id = nextTempId(),
-                    fractionalCoordinate = fractional,
-                    cartesianCoordinate = structure.lattice.toCartesian(fractional),
-                    cellOffset = offset,
-                    isShell = true,
-                    isBoundaryImage = isBoundaryImage,
-                )
-            }
-        }
-
-        val rawBonds = inferPrimaryShellBonds(
-            primaryAtoms,
-            shellAtoms,
-            bondConfiguration.rules,
-            bondConfiguration.disabledPairs,
-        )
-
-        // Discard shell atoms that are not referenced by any bond. This keeps the SceneSnapshot small
-        // while still allowing polyhedra to use every cross-cell ligand (they come from bonds).
-        // Per v0.3.41: a shell atom may appear as either atomA (a boundary image acting as a bond
-        // centre) or atomB (an external-shell ligand), so both endpoints must be considered.
-        val atomById = (primaryAtoms + shellAtoms).associateBy { it.id }
-        val referencedShellTempIds = mutableSetOf<Long>()
-        rawBonds.forEach { bond ->
-            atomById[bond.atomA]?.takeIf { it.isShell }?.let { referencedShellTempIds += it.id }
-            atomById[bond.atomB]?.takeIf { it.isShell }?.let { referencedShellTempIds += it.id }
-        }
-        val keptShellAtoms = shellAtoms.filter { it.id in referencedShellTempIds }
-
-        // Renumber kept atoms compactly so the id space is dense.
-        val idMap = mutableMapOf<Long, Long>()
-        var finalId = 1L
-        val finalAtoms = ArrayList<AtomImage>(primaryAtoms.size + keptShellAtoms.size)
-        primaryAtoms.forEach { atom ->
-            idMap[atom.id] = finalId
-            finalAtoms += atom.copy(id = finalId++)
-        }
-        keptShellAtoms.forEach { atom ->
-            idMap[atom.id] = finalId
-            finalAtoms += atom.copy(id = finalId++)
-        }
-        // Per v0.5.3b: the primary count is already guarded up front; this remains as an
-        // invariant assertion (keptShell is bounded by bonds, so finalAtoms stays small).
-        require(finalAtoms.size <= MAX_RENDERED_ATOMS) {
-            "Expansion exceeds limit $MAX_RENDERED_ATOMS"
-        }
-
-        val finalBonds = rawBonds.map { bond ->
             bond.copy(atomA = idMap.getValue(bond.atomA), atomB = idMap.getValue(bond.atomB))
         }
         return BondNetwork(finalAtoms, finalBonds, structure, expansion)

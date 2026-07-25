@@ -6,6 +6,7 @@ import com.krystals.interaction.selection.PickResult
 import com.krystals.interaction.state.InteractionState
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.scene.sceneProjection
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -15,18 +16,18 @@ import kotlin.coroutines.suspendCoroutine
  * overwrite a newer click. CPU projection is retained as an immediate fallback for lost surfaces.
  */
 class PickingRenderer {
-    private var latestRequest = 0L
-    private var scene: RenderScene? = null
-    private var interaction = InteractionState()
+    private val latestRequest = AtomicLong(0L)
+    @Volatile private var scene: RenderScene? = null
+    @Volatile private var interaction = InteractionState()
 
     fun submit(scene: RenderScene) { this.scene = scene }
     fun clear() { scene = null }
     fun updateInteraction(state: InteractionState) { interaction = state }
 
     suspend fun pick(x: Float, y: Float): PickResult? {
-        val request = ++latestRequest
+        val request = latestRequest.incrementAndGet()
         val result = projectPick(x, y)
-        return result.takeIf { request == latestRequest }
+        return result.takeIf { request == latestRequest.get() }
     }
 
     /** Filament's native pick API executes an asynchronous offscreen ID pass and readback. */
@@ -37,11 +38,11 @@ class PickingRenderer {
         callbackHandler: Handler,
         objectIdForEntity: (Int) -> String?,
     ): PickResult? {
-        val request = ++latestRequest
+        val request = latestRequest.incrementAndGet()
         val viewport = view.viewport
         return suspendCoroutine { continuation ->
             view.pick(x.toInt(), (viewport.height - 1 - y.toInt()).coerceAtLeast(0), callbackHandler) { result ->
-                if (request != latestRequest) {
+                if (request != latestRequest.get()) {
                     continuation.resume(null)
                 } else {
                     val objectId = objectIdForEntity(result.renderable)

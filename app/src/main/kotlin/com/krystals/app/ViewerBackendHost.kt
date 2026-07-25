@@ -324,6 +324,35 @@ private fun FilamentLegacyStyleOverlay(
             val points = selectedIds.mapNotNull(::point)
             val coordinates = selectedIds.mapNotNull { atomsById[it]?.atom?.cartesianCoordinate?.toVec3() }
             if (points.size != expected || coordinates.size != expected) return@forEach
+            // Per v0.6: dihedral planes are gradient canvas overlays (matching the Legacy
+            // renderer), same as FilamentRenderer.composeOverlay — they were missing here.
+            if (selection.mode == MeasurementMode.DIHEDRAL) {
+                DihedralTool.planes(coordinates[0], coordinates[1], coordinates[2], coordinates[3]).forEach { plane ->
+                    val sv = plane.vertices.map { v ->
+                        val (px, py) = projection.project(v)
+                        Offset(px.toFloat(), py.toFloat())
+                    }
+                    if (sv.size == 4) {
+                        val path = Path().apply {
+                            moveTo(sv[0].x, sv[0].y)
+                            sv.drop(1).forEach { lineTo(it.x, it.y) }
+                            close()
+                        }
+                        drawPath(
+                            path,
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color(150, 95, 205, 112),
+                                    Color(128, 72, 180, 56),
+                                    Color.Transparent,
+                                ),
+                                start = sv[0],
+                                end = sv[3],
+                            ),
+                        )
+                    }
+                }
+            }
             val label = when (selection.mode) {
                 MeasurementMode.LENGTH -> "%.4f \u00C5".format(DistanceTool.calculate(coordinates[0], coordinates[1]))
                 MeasurementMode.ANGLE -> "%.3f\u00B0".format(AngleTool.calculate(coordinates[0], coordinates[1], coordinates[2]))

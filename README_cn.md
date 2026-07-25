@@ -51,97 +51,64 @@
 ## 架构图
 
 ```mermaid
-flowchart TB
-    subgraph app["app · Android 应用"]
-        UI["KrystalsApp<br/>Compose UI"]
-        VM["DocumentState<br/>ViewModel / 多标签"]
-        Edit["EditorPanels<br/>结构编辑器"]
-        Repo["FileRepository<br/>CIF 读写 / PNG 导出"]
-        Act["ActivationManager<br/>付费激活"]
-    end
-    subgraph interaction["interaction · 后端无关视图交互"]
-        Commands["ViewerCommand / InteractionReducer"]
-        CameraControl["旋转 / 缩放 / 平移 / 对齐"]
-        ViewerTools["选择 / 拾取 / 测量 / 检查 / 可见性"]
-    end
-    subgraph rendererCore["renderer-core · 后端无关场景"]
-        Builder["CrystalSceneBuilder"]
-        Scene["RenderScene / RenderObject"]
-        Primitive["AtomInstance / BondInstance / MeshInstance"]
-    end
-    subgraph rendererLegacy["renderer-legacy · Canvas-Legacy"]
-        VP["CrystalViewport<br/>旧 Canvas 视口"]
-        Exp["CrystalImageExporter<br/>高清位图导出"]
-    end
-    subgraph rendererFilament["renderer-filament · Filament 边界"]
-        Filament["FilamentSceneRenderer"]
-    end
-    subgraph io["crystal-io · CIF 文件 IO"]
-        Codec["CifCodec<br/>无损 CIF 解析/回写"]
-    end
-    subgraph analysis["crystal-analysis · 晶体分析"]
-        Symmetry["SymmetryExpander<br/>AtomImage 展开"]
-        Bonds["BondDetector / BondValence<br/>BondNetwork"]
-        Coordination["CoordinationAnalyzer"]
-        Hull["PolyhedronHull"]
-        Editor["CrystalEditor<br/>EditCommand 不可变编辑"]
-    end
-    subgraph core["crystal-core · 晶体学基础类型"]
-        Geometry["Geometry / Symmetry"]
-        SG["SpaceGroupCatalog<br/>230 空间群"]
-    end
-    subgraph data["crystal-data · 编译期数据表"]
-        Elements["元素 / 离子数据"]
-        SpaceGroups["空间群符号 / 操作"]
+graph TD
+    subgraph App["Application Layer"]
+        APP[":app"]
     end
 
-    UI --> Commands
-    Commands --> CameraControl
-    Commands --> ViewerTools
-    Commands --> VP
-    UI --> Edit
-    UI --> VM
-    Repo -->|"parseStructure"| Codec
-    Codec -->|"CrystalStructure"| Symmetry
-    Edit -->|"EditCommand"| Editor
-    Editor --> Symmetry
-    Symmetry --> Bonds
-    Bonds -->|"BondNetwork"| Builder
-    Builder --> Scene
-    Scene --> Primitive
-    Scene --> VP
-    Scene --> Exp
-    Bonds --> Coordination
-    Coordination --> Hull
-    Repo -->|"write 回写"| Codec
-    Symmetry --> Geometry
-    SG --> SpaceGroups
-    Bonds --> Elements
+    subgraph Renderers["Renderer Layer"]
+        RF[":renderer-filament"]
+        RL[":renderer-legacy"]
+    end
 
-    app -.->|依赖| rendererLegacy
-    app -.->|依赖| interaction
-    app -.->|依赖| analysis
-    app -.->|依赖| io
-    rendererCore -.->|api 依赖| analysis
-    rendererLegacy -.->|依赖| rendererCore
-    rendererLegacy -.->|输入与拾取适配| interaction
-    interaction -.->|相机与场景契约| rendererCore
-    rendererFilament -.->|依赖| rendererCore
-    io -.->|依赖| analysis
-    analysis -.->|依赖| core
-    analysis -.->|依赖| data
-    core -.->|依赖| data
+    subgraph Core["Logic Layer"]
+        IO[":crystal-io"]
+        IC[":interaction"]
+        RC[":renderer-core"]
+        AN[":crystal-analysis"]
+    end
+
+    subgraph Foundation["Foundation Layer"]
+        CC[":crystal-core"]
+        CD[":crystal-data"]
+    end
+
+    %% App dependencies
+    APP --> AN
+    APP --> IO
+    APP --> IC
+    APP --> RF
+    APP --> RL
+
+    %% Renderer dependencies
+    RF --> RC
+    RF --> IC
+    RL --> AN
+    RL --> RC
+    RL --> IC
+    RL --> CD
+
+    %% Core dependencies
+    IC --> RC
+    RC --> AN
+    IO --> AN
+    AN --> CC
+    AN --> CD
+    CC --> CD
 ```
 
 ---
 
 ### 构建安装包
 
-所需环境：
+主要依赖的环境：
 
 - Android Studio with Android SDK 36
+- Kotlin 2.1.21
 - JDK 17
-- Gradle
+- Gradle 8.11.1
+- Google Filament 1.71.5
+- OkHttp 4.12.0
 
 只需运行该脚本文件，即可下载所需环境并配置安装包：
 
@@ -149,11 +116,16 @@ flowchart TB
 .\scripts\bootstrap-build.ps1
 ```
 
-debug APK 文件位于 `app/build/outputs/apk/debug/app-debug.apk`。
+构建输出的 APK 文件位于 `app/build/outputs/apk`。
+
+软件提供的测试命令：
+
+```
+```
 
 ## 贡献者
 
-目前还没有呢……成为其中的一员吧！
+- [SUPERkelesss (kelesss)](https://github.com/SUPERkelesss)
 
 ## 版权说明
 
@@ -162,5 +134,5 @@ debug APK 文件位于 `app/build/outputs/apk/debug/app-debug.apk`。
 ## 鸣谢
 
 
-- Openai ChatGPT 5.6 sol
-- Kimi k3
+- 项目使用的 AI 模型：Openai ChatGPT-5.6-sol & Kimi-k3 & glm-5.2
+- [kunoyo-Galactose](https://github.com/kunoyo-Galactose)

@@ -1,5 +1,6 @@
 package com.krystals.crystal.core.symmetry
 
+import com.krystals.crystal.core.CifParseException
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.math.Mat3
 import com.krystals.crystal.core.math.Vec3
@@ -64,7 +65,10 @@ data class SymmetryOperation(
 
 fun parseFraction(value: String): Double {
     val clean = value.trim().trim('\'', '"')
-    if ('/' !in clean) return clean.toDouble()
+    if ('/' !in clean) return clean.toDoubleOrNull() ?: throw CifParseException("Unparseable CIF fraction: '$value'")
     val parts = clean.split('/', limit = 2)
-    return parts[0].toDouble() / parts[1].toDouble()
+    val num = parts[0].toDoubleOrNull() ?: throw CifParseException("Unparseable CIF fraction: '$value'")
+    val denom = parts.getOrNull(1)?.toDoubleOrNull() ?: throw CifParseException("Unparseable CIF fraction: '$value'")
+    if (denom == 0.0) throw CifParseException("Division by zero in CIF fraction: '$value'")
+    return num / denom
 }

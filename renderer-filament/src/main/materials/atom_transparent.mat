@@ -13,7 +13,7 @@ material {
         { type : float, name : depthCueEnabled },
         { type : float, name : occupancy },
         { type : float, name : reflectionEnabled },
-        { type : float2, name : highlightDirection },
+        { type : float3, name : lightDirection },
         { type : float, name : highlightIntensity },
         { type : float, name : highlightRadius }
     ]
@@ -21,19 +21,24 @@ material {
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        vec3 normal = normalize(mat3(getViewFromWorldMatrix()) * variable_worldNormal.xyz);
-        float edge = clamp(length(normal.xy), 0.0, 1.0);
-        float shade = 1.0 - materialParams.reflectionEnabled * edge * 0.22;
-        vec4 color = vec4(materialParams.baseColor.rgb * shade, materialParams.baseColor.a);
-        float highlightDistance = distance(normal.xy, materialParams.highlightDirection);
-        float highlight = materialParams.reflectionEnabled * materialParams.highlightIntensity *
-            (1.0 - smoothstep(0.0, max(materialParams.highlightRadius, 0.001), highlightDistance));
-        color.rgb = mix(color.rgb, vec3(1.0), highlight);
+        // Per v0.6.2: world-space diffuse + specular lighting (replaces 2D highlight).
+        vec3 worldN = normalize(variable_worldNormal.xyz);
+        vec3 viewN = normalize(mat3(getViewFromWorldMatrix()) * worldN);
+        float edge = clamp(length(viewN.xy), 0.0, 1.0);
+        float edgeShade = 1.0 - materialParams.reflectionEnabled * edge * 0.15;
+        vec3 L = normalize(materialParams.lightDirection);
+        float NdotL = max(dot(worldN, L), 0.0);
+        float ambient = 0.32;
+        float diffuseShade = ambient + (1.0 - ambient) * NdotL;
+        vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);
+        float shininess = max(2.0 / (materialParams.highlightRadius + 0.01), 2.0);
+        float specular = materialParams.reflectionEnabled * materialParams.highlightIntensity * pow(NdotL, shininess);
+        color.rgb = mix(color.rgb, vec3(1.0), specular * 0.6);
         float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
         float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
         color.rgb = mix(color.rgb, materialParams.backgroundColor, fog);
-        float clockwiseFromTwelve = fract(atan(normal.x, normal.y) / 6.28318530 + 1.0);
+        float clockwiseFromTwelve = fract(atan(viewN.x, viewN.y) / 6.28318530 + 1.0);
         color.a *= mix(0.15, 1.0, step(clockwiseFromTwelve, clamp(materialParams.occupancy, 0.0, 1.0)));
         material.baseColor = color;
     }

@@ -83,6 +83,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogWindowProvider
 import com.krystals.crystal.analysis.bonding.BondDetector
@@ -365,23 +366,25 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Ed
 
 @Composable
 private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, FractionalCoordinate) -> Unit) {
-    // 9 matrix entries (default identity) + 3 translation entries (default 0). Per v0.3.3 the
-    // translation is a separate column to the right of the matrix; it applies after the linear
-    // transform in the new fractional basis and allows fractional values (e.g. 1/4, 1/2).
+    // Per v0.6.2: labeled matrix (xx, xy, …, zz) with a vertical separator and translation column.
+    val matrixLabels = listOf("xx", "xy", "xz", "yx", "yy", "yz", "zx", "zy", "zz")
     val matrixValues = remember { List(9) { index -> mutableStateOf(if (index % 4 == 0) "1" else "0") } }
     val translationValues = remember { List(3) { mutableStateOf("0") } }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(localized("3×3 变换矩阵", "3×3 Transform")) },
         text = { Column {
-            repeat(3) { row -> Row(verticalAlignment = Alignment.CenterVertically) {
+            // Per v0.6.2: matrix rows with a continuous vertical bar separator before translation.
+            repeat(3) { row -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 repeat(3) { column ->
-                    OutlinedTextField(matrixValues[row * 3 + column].value, { matrixValues[row * 3 + column].value = it }, singleLine = true, modifier = Modifier.weight(1f).padding(3.dp))
+                    val idx = row * 3 + column
+                    OutlinedTextField(matrixValues[idx].value, { matrixValues[idx].value = it }, singleLine = true, label = { Text(matrixLabels[idx], style = MaterialTheme.typography.labelSmall) }, modifier = Modifier.weight(1f).padding(2.dp), textStyle = MaterialTheme.typography.bodySmall)
                 }
-                // Per v0.3.3: the translation column. tx/ty/tz apply after the matrix, in the new basis.
-                OutlinedTextField(translationValues[row].value, { translationValues[row].value = it }, singleLine = true, label = { Text("t${row + 1}") }, modifier = Modifier.weight(1f).padding(3.dp))
+                // Continuous vertical separator between matrix and translation
+                Box(Modifier.width(2.dp).height(48.dp).background(MaterialTheme.colorScheme.outline))
+                OutlinedTextField(translationValues[row].value, { translationValues[row].value = it }, singleLine = true, label = { Text(if (row == 0) "tx" else if (row == 1) "ty" else "tz", style = MaterialTheme.typography.labelSmall) }, modifier = Modifier.weight(1f).padding(2.dp), textStyle = MaterialTheme.typography.bodySmall)
             } }
-            Text(localized("右侧为平移向量（变换后应用，允许分数如 1/4）", "Right column is the translation (applied after transform; fractions like 1/4 allowed)"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(4.dp))
+            Text(localized("变换后坐标 R' = XR + T", "Transformed coordinate R' = XR + T"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth().padding(top = 4.dp), textAlign = TextAlign.Center)
         } },
         confirmButton = { TextButton(onClick = {
             val rows = List(3) { r -> List(3) { c ->
@@ -486,8 +489,8 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
     // Per v0.5.0: smart-ionic unavailable warning + ε hint. localized() is @Composable, so resolve
     // them here in the composable body and reuse inside non-composable lambdas below.
     val unavailableMessage = localized("智能离子规则在该晶体下不可用", "Smart ionic rules are unavailable for this crystal")
-    val confirmTitle = localized("确认计算", "Confirm")
-    val confirmMessage = localized("当前晶胞原子数过多，计算时间可能较长。确认自动计算化学键规则吗？", "This cell has many atoms; computation may take a while. Recompute bond rules anyway?")
+    val confirmTitle = localized("警告！", "Warning!")
+    val confirmMessage = localized("该晶胞/超胞包含原子数较多，计算量较大，可能导致软件卡顿或崩溃。是否继续？", "This cell/supercell has many atoms; computation is heavy and may cause lag or crashes. Continue?")
     val voronoiWarningTitle = localized("计算已停止", "Calculation stopped")
     val voronoiWarningMessage = localized(
         "周期 Voronoi 搜索范围过大，继续计算可能耗尽内存。请调整晶胞参数或改用键合半径。",
@@ -575,17 +578,16 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
                 }
             }
         }
-        // Per v0.5.0: bond-threshold ε — slider and two-decimal input side by side. Adjusting it
-        // re-runs the last-used source so the scene re-renders immediately; the 100-atom confirm
-        // does not re-prompt on ε changes.
-        Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Per v0.6.2: ε tolerance title + slider + input, with a divider below.
+        Text(localized("容忍度 ε", "tolerance ε"), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 6.dp, bottom = 2.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             var epsilonText by remember(tab.bondEpsilon) { mutableStateOf("%.2f".format(tab.bondEpsilon)) }
             OutlinedTextField(
                 value = epsilonText,
                 onValueChange = { input ->
                     epsilonText = input
                     input.toFloatOrNull()?.let { v ->
-                        val clamped = v.coerceIn(0.0f, 0.5f)
+                        val clamped = v.coerceIn(0.1f, 0.6f)
                         if (clamped.toDouble() != tab.bondEpsilon) {
                             tab.bondEpsilon = clamped.toDouble()
                             rebuildAsync(tab.lastRadiusSource, tab.bondEpsilon, skipConfirm = true)
@@ -596,16 +598,17 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
                 modifier = Modifier.width(88.dp),
             )
             Slider(
-                value = tab.bondEpsilon.toFloat(),
+                value = tab.bondEpsilon.toFloat().coerceIn(0.1f, 0.6f),
                 onValueChange = { v ->
                     tab.bondEpsilon = v.toDouble()
                     rebuildAsync(tab.lastRadiusSource, tab.bondEpsilon, skipConfirm = true)
                 },
-                valueRange = 0f..0.5f,
+                valueRange = 0.1f..0.6f,
                 modifier = Modifier.weight(1f),
             )
         }
         Text(epsilonHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        HorizontalDivider(Modifier.padding(vertical = 8.dp))
         LazyColumn(Modifier.fillMaxSize()) {
             items(visibleRules, key = { it.key }) { rule ->
                 val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
@@ -903,7 +906,7 @@ fun AppearanceDialog(
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("化学键", "Bonds"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
             ToggleRow(localized("键反射", "Bond reflection"), appearance.bondReflectionEnabled) { appearance = appearance.copy(bondReflectionEnabled = it) }
-            LabeledSlider(localized("键半径", "Bond radius"), appearance.bondRadius, 0.02f..0.2f, decimals = 2) { appearance = appearance.copy(bondRadius = it) }
+            LabeledSlider(localized("键半径", "Bond radius"), appearance.bondRadius, 0.02f..0.3f, decimals = 2) { appearance = appearance.copy(bondRadius = it) }
             LabeledSlider(localized("化学键不透明度", "Bond opacity"), appearance.bondOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(bondOpacity = it) }
             DropdownField(localized("键颜色", "Bond color"), bondColorLabels[appearance.bondColorMode.ordinal], bondColorLabels) { appearance = appearance.copy(bondColorMode = BondColorMode.entries[bondColorLabels.indexOf(it)]) }
             if (appearance.bondColorMode == BondColorMode.UNICOLOR) FlowRow {

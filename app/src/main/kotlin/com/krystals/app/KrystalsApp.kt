@@ -21,6 +21,7 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -92,6 +93,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenu
@@ -126,6 +128,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
@@ -184,6 +187,9 @@ private data class PendingOpen(val uri: Uri, val name: String, val text: String,
 /** Per v0.5.3b: holds an open request whose expanded atom count exceeds the warn threshold until
  *  the user confirms or cancels. */
 private data class PendingLargeOpen(val parsed: ParsedStructure, val name: String, val uri: Uri?, val expandedEstimate: Int)
+
+/** Holds a structure-change bond recomputation whose expanded atom count exceeds the warn threshold. */
+private class PendingLargeEdit(val block: suspend () -> com.krystals.crystal.analysis.editing.EditResult?, val expandedEstimate: Int)
 
 /** Per v0.5.3b: scene build runs off the UI thread with this cap; on timeout it fails with a
  *  readable error instead of hanging the viewer. */
@@ -262,6 +268,7 @@ fun KrystalsRoot(
     var computing by remember { mutableStateOf(false) }
     var computationJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var voronoiWarningOpen by remember { mutableStateOf(false) }
+    var cifWarningOpen by remember { mutableStateOf(false) }
     var pendingOpen by remember { mutableStateOf<PendingOpen?>(null) }
     var pendingSaveTabId by remember { mutableStateOf<String?>(null) }
     var closeRequest by remember { mutableStateOf<Int?>(null) }
@@ -307,14 +314,25 @@ fun KrystalsRoot(
     // user is warned before the (possibly degraded) scene is built. Resolved once; reused below.
     val largeCellWarningMessage = localized("原子数较多", "Many atoms")
     var pendingLargeOpen by remember { mutableStateOf<PendingLargeOpen?>(null) }
+    var pendingLargeEdit by remember { mutableStateOf<PendingLargeEdit?>(null) }
 
     /**
      * Per v0.5.0: run a bond-recomputing operation off the UI thread with the global "计算中..."
      * overlay. [block] runs on Dispatchers.Default and returns the new structure (or null to abort
      * silently, e.g. on validation failure where the caller already reported the error).
      */
-    fun runWithBondComputation(block: suspend () -> EditResult?) {
+    fun runWithBondComputation(block: suspend () -> EditResult?, skipLargeCheck: Boolean = false) {
         if (computing) return
+        if (!skipLargeCheck) {
+            val tab = viewModel.current
+            if (tab != null) {
+                val estimate = SymmetryExpander.expand(tab.structure).size
+                if (estimate > LARGE_CELL_WARN_THRESHOLD) {
+                    pendingLargeEdit = PendingLargeEdit(block, estimate)
+                    return
+                }
+            }
+        }
         computing = true
         computationJob = scope.launch {
             val result = try {
@@ -406,23 +424,10 @@ fun KrystalsRoot(
      *  large-cell warning can re-enter here after the user confirms. Declared before [openParsed]
      *  because Kotlin local functions have no forward references. */
     fun doOpenParsed(parsed: ParsedStructure, name: String, uri: Uri?, expandedEstimate: Int) {
-        // Add the tab immediately (so the empty structure shows), then compute rules if needed.
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
         if (tab.bondConfiguration.rules.isEmpty()) {
-            if (expandedEstimate > BondValence.SMART_IONIC_ATOM_LIMIT) {
-                // Large cells skip smart-ionic entirely and use bonding radii off the UI thread
-                // without showing the computing overlay.
-                scope.launch {
-                    val fallback = withContext(Dispatchers.Default) {
-                        CrystalEditor.fromSmartIonicAttempt(tab.structure, tab.bondConfiguration, tab.bondEpsilon, null)
-                    }
-                    viewModel.updateAnalysis(tab, fallback)
-                }
-            } else {
-                // Per v0.5.2b: open-file path uses the 5 s smart-ionic timeout variant.
-                openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
-            }
+            openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
         }
     }
 
@@ -457,7 +462,10 @@ fun KrystalsRoot(
                     val parsed = CifCodec.parseStructure(result.text, result.candidates.first())
                     openParsed(parsed, result.name, result.uri)
                 } else pendingOpen = result
-            }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Unable to open CIF") }
+            }.onFailure { if (it !is CancellationException) {
+                if (it is com.krystals.crystal.core.CifParseException) cifWarningOpen = true
+                else showMessage(it.message ?: "Unable to open CIF")
+            } }
         }
     }
 
@@ -542,6 +550,10 @@ fun KrystalsRoot(
             closeRequest != null -> closeRequest = null
             pendingOpen != null -> pendingOpen = null
             pendingLargeOpen != null -> pendingLargeOpen = null
+            pendingLargeEdit != null -> pendingLargeEdit = null
+            cifWarningOpen -> cifWarningOpen = false
+            codSearchOpen -> codSearchOpen = false
+            mpSearchOpen -> mpSearchOpen = false
             helpOpen -> helpOpen = false
             sponsorOpen -> sponsorOpen = false
             presetOpen -> presetOpen = false
@@ -602,12 +614,16 @@ fun KrystalsRoot(
                             when {
                                 pendingOpen != null -> pendingOpen = null
                                 pendingLargeOpen != null -> pendingLargeOpen = null
+                                pendingLargeEdit != null -> pendingLargeEdit = null
+                                cifWarningOpen -> cifWarningOpen = false
                                 closeRequest != null -> closeRequest = null
                                 exitRequest -> exitRequest = false
                                 helpOpen -> helpOpen = false
                                 sponsorOpen -> sponsorOpen = false
                                 presetOpen -> presetOpen = false
                                 onlineSourceOpen -> onlineSourceOpen = false
+                                codSearchOpen -> codSearchOpen = false
+                                mpSearchOpen -> mpSearchOpen = false
                                 activationOpen -> activationOpen = false
                                 mpKeyDialogOpen -> mpKeyDialogOpen = false
                                 mpPremiumOpen -> mpPremiumOpen = false
@@ -660,15 +676,27 @@ fun KrystalsRoot(
                 },
             )
         }
+        if (cifWarningOpen) {
+            AlertDialog(
+                onDismissRequest = { cifWarningOpen = false },
+                title = { Text(localized("警告", "Warning")) },
+                text = { Text(localized("当前所打开的CIF文件不可读或包含异常字符串。", "The CIF file is unreadable or contains malformed strings.")) },
+                confirmButton = {
+                    TextButton(onClick = { cifWarningOpen = false }) {
+                        Text(stringResource(R.string.confirm))
+                    }
+                },
+            )
+        }
         pendingOpen?.let { pending ->
         val document = remember(pending) { CifCodec.parse(pending.text) }
         AlertDialog(
             onDismissRequest = { pendingOpen = null },
             title = { Text(localized("选择结构", "Select structure")) },
             text = { Column { pending.candidates.forEach { index -> TextButton(onClick = {
-                val parsed = CifCodec.parseStructure(pending.text, index)
-                pendingOpen = null
-                openParsed(parsed, pending.name, pending.uri)
+                runCatching { CifCodec.parseStructure(pending.text, index) }
+                    .onSuccess { parsed -> pendingOpen = null; openParsed(parsed, pending.name, pending.uri) }
+                    .onFailure { if (it is com.krystals.crystal.core.CifParseException) { pendingOpen = null; cifWarningOpen = true } else showMessage(it.message ?: "Unable to open CIF") }
             }) { Text(document.blocks[index].name) } } } },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { pendingOpen = null }) { Text(stringResource(R.string.cancel)) } },
@@ -678,15 +706,30 @@ fun KrystalsRoot(
     pendingLargeOpen?.let { pending ->
         AlertDialog(
             onDismissRequest = { pendingLargeOpen = null },
-            title = { Text(largeCellWarningMessage) },
+            title = { Text(localized("警告！", "Warning!")) },
             text = { Text(localized(
-                "该晶胞展开后约 ${pending.expandedEstimate} 个原子，可能卡顿或崩溃。确认继续？",
-                "This cell has ~${pending.expandedEstimate} expanded atoms; it may lag or crash. Continue?")) },
+                "将要打开的CIF文件包括过多的原子（约 ${pending.expandedEstimate} 个），可能导致软件异常卡顿和崩溃。确认继续吗？",
+                "This CIF contains too many atoms (~${pending.expandedEstimate}), which may cause severe lag or crashes. Continue?")) },
             confirmButton = { TextButton(onClick = {
                 val p = pending; pendingLargeOpen = null
                 doOpenParsed(p.parsed, p.name, p.uri, p.expandedEstimate)
             }) { Text(localized("继续", "Continue")) } },
             dismissButton = { TextButton(onClick = { pendingLargeOpen = null }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+
+    pendingLargeEdit?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { pendingLargeEdit = null },
+            title = { Text(localized("警告！", "Warning!")) },
+            text = { Text(localized(
+                "修改后晶胞将包含过多原子（约 ${pending.expandedEstimate} 个），可能导致软件异常卡顿和崩溃。确认继续吗？",
+                "After modification the cell will have too many atoms (~${pending.expandedEstimate}), which may cause severe lag or crashes. Continue?")) },
+            confirmButton = { TextButton(onClick = {
+                val b = pending.block; pendingLargeEdit = null
+                runWithBondComputation(b, skipLargeCheck = true)
+            }) { Text(localized("继续", "Continue")) } },
+            dismissButton = { TextButton(onClick = { pendingLargeEdit = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
 
@@ -972,22 +1015,36 @@ private fun ViewerScreen(
     var sceneResult by remember(tab.id) {
         mutableStateOf<Result<RenderScene>?>(null)
     }
-    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility) {
-        sceneResult = runCatching {
-            withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
-                withContext(Dispatchers.Default) {
-                    val analysis = BondDetector.buildNetwork(tab.structure, tab.bondConfiguration, tab.expansion)
-                    CrystalRenderSceneFactory.build(
-                        analysis = analysis,
-                        appearance = renderedAppearance,
-                        renderConfiguration = tab.renderConfiguration,
-                        hiddenSiteIds = tab.visibility.hiddenSites,
-                        hiddenBondKeys = tab.visibility.hiddenBondPairs,
-                        showBonds = tab.visibility.showBonds,
-                        polyhedronSiteIds = tab.visibility.polyhedronSites,
-                    )
-                }
-            } ?: throw IllegalStateException("Scene build timed out after ${BUILD_SCENE_TIMEOUT_MS / 1000}s")
+    val currentOrientation = LocalConfiguration.current.orientation
+    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility, currentOrientation) {
+        // Per v0.6.2: add 10ms delay on orientation change so the Compose layout pass settles
+        // before rebuilding the scene — prevents the stale scene from freezing on screen.
+        if (sceneResult != null) delay(10L)
+        // Per v0.6.2: use try-catch instead of runCatching so that CancellationException
+        // (thrown when the effect is cancelled due to a key change) is rethrown, not stored
+        // as a failure. Previously runCatching swallowed it, briefly showing "the coroutine
+        // scope … was cancelled" in the error Text below whenever tab.structure changed.
+        sceneResult = try {
+            Result.success(
+                withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
+                    withContext(Dispatchers.Default) {
+                        val analysis = BondDetector.buildNetwork(tab.structure, tab.bondConfiguration, tab.expansion)
+                        CrystalRenderSceneFactory.build(
+                            analysis = analysis,
+                            appearance = renderedAppearance,
+                            renderConfiguration = tab.renderConfiguration,
+                            hiddenSiteIds = tab.visibility.hiddenSites,
+                            hiddenBondKeys = tab.visibility.hiddenBondPairs,
+                            showBonds = tab.visibility.showBonds,
+                            polyhedronSiteIds = tab.visibility.polyhedronSites,
+                        )
+                    }
+                } ?: throw IllegalStateException("Scene build timed out after ${BUILD_SCENE_TIMEOUT_MS / 1000}s")
+            )
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Throwable) {
+            Result.failure(e)
         }
     }
     // Per v0.5.0: per-site bond-valence sums for the atom-info window (s = X.XX). Recomputed when
@@ -1120,8 +1177,15 @@ private fun ViewerScreen(
                         onFilamentFailure = onFilamentFailure,
                     )
                 }
-                else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(current.exceptionOrNull()?.message ?: "Unable to build scene", color = MaterialTheme.colorScheme.error)
+                else -> {
+                    // Per v0.6.2: defensively suppress CancellationException messages (should
+                    // never reach here after the fix above, but guard against future regressions).
+                    val error = current.exceptionOrNull()
+                    val displayMessage = if (error is CancellationException) "Unable to build scene"
+                        else error?.message ?: "Unable to build scene"
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(displayMessage, color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
 
@@ -1179,12 +1243,12 @@ private fun ViewerScreen(
                 val tools = listOf(
                     Tool(Icons.Default.FitScreen, active = false) { alignOpen = true },
                     Tool(Icons.Default.Straighten, active = tab.measurementMode != MeasurementMode.NONE) { measureOpen = true },
-                    Tool(Icons.Default.Visibility, active = false) { displayOpen = true },
-                    Tool(Icons.Default.Info, active = false) { infoOpen = true },
-                    Tool(Icons.Default.Edit, active = false) { tab.editorOpen = true },
                     Tool(if (tab.interactionState.session.locked) Icons.Default.LockOpen else Icons.Default.Lock, active = tab.interactionState.session.locked) {
                         dispatchViewerCommand(ViewerCommand.ToggleLock)
                     },
+                    Tool(Icons.Default.Info, active = false) { infoOpen = true },
+                    Tool(Icons.Default.Edit, active = false) { tab.editorOpen = true },
+                    Tool(Icons.Default.Visibility, active = false) { displayOpen = true },
                 )
                 val offsets = FloatingBallLayout.toolOffsets(tab.floatingPosition.snap)
                 // Tier split: tier 1 = inner ring (radius ≤ 80px), tier 2 = outer ring.
@@ -1220,10 +1284,15 @@ private fun ViewerScreen(
                     LaunchedEffect(toolOpen) {
                         if (toolOpen) {
                             if (isTier2) {
-                                // Tier 2: start immediately after tier 1 completes, stagger 30ms within tier.
-                                val tier1End = 60L + (tier1Count - 1) * 30L + 280L
+                                // Per v0.6.2: tier 2 starts at a layout-dependent delay after release.
+                                // sideTriangles/horizontalTriangles: 180ms; cornerFan/radial: 120ms.
+                                val tier2BaseDelay = when (tab.floatingPosition.snap) {
+                                    FloatingBallSnap.LEFT, FloatingBallSnap.RIGHT,
+                                    FloatingBallSnap.TOP, FloatingBallSnap.BOTTOM -> 180L
+                                    else -> 120L
+                                }
                                 val tier2Index = index - tier1Count
-                                delay(tier1End + tier2Index * 30L)
+                                delay(tier2BaseDelay + tier2Index * 30L)
                                 animProgress.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
                             } else {
                                 // Tier 1: start after ball pulse (60ms), stagger 30ms.
@@ -1320,6 +1389,12 @@ private fun ViewerScreen(
         angle = angleChoice,
         dihedral = dihedralChoice,
         off = offChoice,
+        activeMode = when (tab.measurementMode) {
+            MeasurementMode.LENGTH -> lengthChoice
+            MeasurementMode.ANGLE -> angleChoice
+            MeasurementMode.DIHEDRAL -> dihedralChoice
+            else -> null
+        },
         onDismiss = { measureOpen = false },
         onChoice = { choice ->
             // Per v0.2.3: switching mode keeps any locked measurement; only the active selection resets.
@@ -1909,12 +1984,12 @@ private fun AlignDialog(onDismiss: () -> Unit, onChoice: (String) -> Unit) {
             Column {
                 Text(localized("空间直角坐标系", "Cartesian"), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 6.dp))
                 LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.height(104.dp)) {
-                    items(listOf("X", "Y", "Z")) { ChoiceTile(it, onChoice) }
+                    items(listOf("X", "Y", "Z")) { ChoiceTile(it, onChoice, textStyle = MaterialTheme.typography.titleLarge) }
                 }
                 Spacer(Modifier.height(14.dp))
                 Text(localized("晶胞轴", "Cell axes"), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 6.dp))
                 LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.height(104.dp)) {
-                    items(listOf("a", "b", "c")) { ChoiceTile(it, onChoice) }
+                    items(listOf("a", "b", "c")) { ChoiceTile(it, onChoice, textStyle = MaterialTheme.typography.titleLarge) }
                 }
             }
         },
@@ -1929,6 +2004,7 @@ private fun MeasureDialog(
     angle: String,
     dihedral: String,
     off: String,
+    activeMode: String? = null,
     onDismiss: () -> Unit,
     onChoice: (String) -> Unit,
 ) {
@@ -1937,7 +2013,9 @@ private fun MeasureDialog(
         title = { Text(localized("测量", "Measure")) },
         text = {
             LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.height(156.dp)) {
-                items(listOf(length, angle, dihedral, off)) { ChoiceTile(it, onChoice, aspect = 1.8f) }
+                items(listOf(length, angle, dihedral, off)) { label ->
+                    ChoiceTile(label, onChoice, aspect = 1.8f, active = label == activeMode && activeMode != off)
+                }
             }
         },
         confirmButton = {},
@@ -1946,13 +2024,25 @@ private fun MeasureDialog(
 }
 
 @Composable
-private fun ChoiceTile(label: String, onClick: (String) -> Unit, aspect: Float = 1f) {
+private fun ChoiceTile(
+    label: String,
+    onClick: (String) -> Unit,
+    aspect: Float = 1f,
+    active: Boolean = false,
+    textStyle: androidx.compose.ui.text.TextStyle? = null,
+) {
+    // Per v0.6.2: in dark mode use light purple (0xFFCFA7F5) for highlights; deep purple in light mode.
+    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val activeColor = if (dark) Color(0xFFCFA7F5) else Color(0xFF7542A5)
+    val resolvedStyle = textStyle ?: if (aspect == 1f) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleMedium
     Card(
         onClick = { onClick(label) },
         modifier = Modifier.padding(4.dp).aspectRatio(aspect),
+        colors = if (active) CardDefaults.cardColors(containerColor = activeColor.copy(alpha = 0.15f)) else CardDefaults.cardColors(),
+        border = if (active) androidx.compose.foundation.BorderStroke(2.dp, activeColor) else null,
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(label, style = if (aspect == 1f) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleMedium)
+            Text(label, style = resolvedStyle, color = if (active) activeColor else Color.Unspecified)
         }
     }
 }
@@ -2044,7 +2134,7 @@ private fun PresetRow(
                         onDismiss()
                         onOpenParsed(parsed, entry.name)
                     }
-                    .onFailure { onMessage(it.message ?: "Unable to open preset") }
+                    .onFailure { if (it !is CancellationException) onMessage(it.message ?: "Unable to open preset") }
             }
         },
         verticalAlignment = Alignment.CenterVertically,

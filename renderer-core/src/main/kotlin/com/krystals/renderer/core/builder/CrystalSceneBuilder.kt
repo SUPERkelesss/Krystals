@@ -29,7 +29,7 @@ data class SceneBuildOptions(
     val defaultBondMaterial: Material = Material(0xFF9A90A0L),
     val defaultPolyhedronMaterial: Material = Material(0x809A90A0L, opacity = 0.5, doubleSided = true),
     val defaultAtomRadius: Double = 0.35,
-    val bondRadius: Double = 0.10,
+    val bondRadius: Double = 0.15,
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val environment: RenderEnvironment = RenderEnvironment(),
 ) {

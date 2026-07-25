@@ -1,13 +1,13 @@
 {
-  "atom_opaque.filamat": "3cd9e6d0a28fcd9ff27c4f340018c20c771b4dea82038c3dd821b9ad500da38e",
-  "atom_transparent.filamat": "678c203451837abf64a9c7aebeb04ae4739d3199592c934a811ef8342bf5d804",
-  "opaque.filamat": "d920ceecbefec244180719507bc48294fcf0457c89d95c75067e549a7d3a76db",
-  "transparent.filamat": "052233d7c18084ee6d28f4f3e3815d60d3668be8702a4cc38bc11ea34b532ca1",
-  "polyhedron.filamat": "da5d26f3627e14c3e212f1410c1c493f141537b7a824791848f926999521cb39",
-  "unlit_opaque.filamat": "f0b7160fc5e1914d417f482ecd2173e45fc2540c1c77ff604e5449c3bc752acb",
-  "unlit_transparent.filamat": "d9ba20527600a41f9715fc7962cab4dfda095188565bdfb4851684725d774b80",
-  "unlit_polyhedron.filamat": "f0c467c887bb0dc970c05cfd6369bb42cd621020bf0799e69ab1a7b3e15fb5e4",
-  "highlight.filamat": "4d959329398825cb6693d569fed49236e7f434c2f04a887cdcda8cf55519c5d1",
-  "depth_cueing.filamat": "a9d2830ce88b8c240a4ef0af83b0724b041bcae739ed42e704700eefac9e7a14",
-  "picking.filamat": "d4b81d4bd51736b4657c13bcf3d38d8b0dba8007292cada0f090ec22a484b129"
+    "atom_opaque.filamat":  "df2f6bf0ac20562dbb9137a1b81c9c1fbc230ef9007e57d7dd7855b6b17e0c05",
+    "atom_transparent.filamat":  "0010abbee2f7d5188bafdcfa6c261e5c3d471d6c9d4acc57fb26ba709e214bda",
+    "opaque.filamat":  "d920ceecbefec244180719507bc48294fcf0457c89d95c75067e549a7d3a76db",
+    "transparent.filamat":  "052233d7c18084ee6d28f4f3e3815d60d3668be8702a4cc38bc11ea34b532ca1",
+    "polyhedron.filamat":  "da5d26f3627e14c3e212f1410c1c493f141537b7a824791848f926999521cb39",
+    "unlit_opaque.filamat":  "f0b7160fc5e1914d417f482ecd2173e45fc2540c1c77ff604e5449c3bc752acb",
+    "unlit_transparent.filamat":  "d9ba20527600a41f9715fc7962cab4dfda095188565bdfb4851684725d774b80",
+    "unlit_polyhedron.filamat":  "f0c467c887bb0dc970c05cfd6369bb42cd621020bf0799e69ab1a7b3e15fb5e4",
+    "highlight.filamat":  "4d959329398825cb6693d569fed49236e7f434c2f04a887cdcda8cf55519c5d1",
+    "depth_cueing.filamat":  "a9d2830ce88b8c240a4ef0af83b0724b041bcae739ed42e704700eefac9e7a14",
+    "picking.filamat":  "d4b81d4bd51736b4657c13bcf3d38d8b0dba8007292cada0f090ec22a484b129"
 }

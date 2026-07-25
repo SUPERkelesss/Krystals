@@ -77,11 +77,13 @@ class MaterialFactory(
         runCatching { instance.setParameter("depthCueEnabled", if (cue.enabled) 1f else 0f) }
         runCatching { instance.setParameter("roughness", light.diffusion.coerceIn(0.04f, 1f)) }
         runCatching { instance.setParameter("specular", if (key.reflective) light.intensity else 0f) }
+        // Per v0.6.2: world-space light direction (float3) replaces 2D highlightDirection.
         runCatching {
             instance.setParameter(
-                "highlightDirection",
-                (-kotlin.math.cos(azimuth) * kotlin.math.cos(elevation) * 0.95).toFloat(),
-                (kotlin.math.sin(azimuth) * kotlin.math.cos(elevation) * 0.95).toFloat(),
+                "lightDirection",
+                (-kotlin.math.cos(azimuth) * kotlin.math.cos(elevation)).toFloat(),
+                (kotlin.math.sin(azimuth) * kotlin.math.cos(elevation)).toFloat(),
+                kotlin.math.sin(elevation).toFloat(),
             )
         }
         runCatching { instance.setParameter("highlightIntensity", light.intensity) }
