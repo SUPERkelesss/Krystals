@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Per v0.6.3: inset the launcher foreground to 1/3 of its original size within the
+     adaptive-icon safe zone. The background color (#3D3678) fills the remaining area. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_launcher_foreground_full"
+    android:insetLeft="16%"
+    android:insetTop="16%"
+    android:insetRight="16%"
+    android:insetBottom="16%" />

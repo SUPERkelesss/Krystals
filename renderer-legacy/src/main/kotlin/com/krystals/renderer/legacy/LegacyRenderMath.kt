@@ -44,14 +44,19 @@ internal fun <T> Iterable<T>.legacyBackToFront(
 /** Legacy camera space uses +Z toward the viewer and -Z away from the viewer. */
 internal fun legacyCameraDepth(cameraSpace: Vec3): Double = cameraSpace.z
 
-/** Screen-space light direction. X points right, Y points down and +Z points at the viewer. */
+/** Screen-space light direction. X points right, Y points down and +Z points at the viewer.
+ *  Per v0.6.5: theta (azimuth) around camera forward (+Z); phi (elevation) from viewing axis.
+ *  Surface-to-light: L = (sin(φ)·cos(θ), sin(φ)·sin(θ), cos(φ)).
+ *  Travel direction in screen space: (-sin(φ)·cos(θ), sin(φ)·sin(θ)).
+ *  z component is surface-to-light forward: cos(φ). */
 internal fun legacyLightDirection(azimuthDegrees: Float, elevationDegrees: Float): Vec3 {
-    val azimuth = azimuthDegrees / 180.0 * PI
-    val elevation = elevationDegrees.coerceIn(0f, 90f) / 180.0 * PI
+    val theta = azimuthDegrees / 180.0 * PI
+    val phi = elevationDegrees.coerceIn(0f, 90f) / 180.0 * PI
+    val sinPhi = sin(phi)
     return Vec3(
-        cos(azimuth) * cos(elevation),
-        sin(azimuth) * cos(elevation),
-        sin(elevation),
+        -sinPhi * cos(theta),
+        sinPhi * sin(theta),
+        cos(phi),
     )
 }
 

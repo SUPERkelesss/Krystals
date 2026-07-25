@@ -811,6 +811,7 @@ fun AppearanceDialog(
     // Preview button's pointerInput survives the press-and-hold and onPreviewEnd fires on release.
     // (v0.5.2a unmounted the dialog on press, killing the gesture → stuck preview.)
     var previewing by remember { mutableStateOf(false) }
+    var resetConfirmOpen by remember { mutableStateOf(false) }
     val frameLabels = listOf(localized("不显示框线", "No frame"), localized("单个晶胞", "Single cell"), localized("所有框线", "All frames"))
     val lineLabels = listOf(localized("实线", "Solid"), localized("虚线", "Dashed"))
     val bondColorLabels = listOf(localized("双色圆柱", "Bicolor cylinder"), localized("单色圆柱", "Unicolor cylinder"))
@@ -973,6 +974,12 @@ fun AppearanceDialog(
                 }
             }
         }
+        // Per v0.6.3: Restore defaults button at the bottom center.
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.Center) {
+            TextButton(onClick = { resetConfirmOpen = true }) {
+                Text(localized("恢复默认设置", "Restore Defaults"), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         // Per v0.5.2a: Preview (press-and-hold, rounded) / Cancel (text) / Save (rounded).
         Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             // Preview: press-and-hold via detectTapGestures.onPress; no onClick.
@@ -1014,6 +1021,16 @@ fun AppearanceDialog(
             },
         )
     }
+
+    if (resetConfirmOpen) {
+        AlertDialog(
+            onDismissRequest = { resetConfirmOpen = false },
+            title = { Text(localized("确认", "Confirm")) },
+            text = { Text(localized("确认将外观设置为默认设置吗？", "Reset all appearance settings to defaults?")) },
+            confirmButton = { TextButton(onClick = { resetConfirmOpen = false; appearance = ViewerAppearance(); followTheme = true; onBackgroundFollowThemeChange(true) }) { Text(stringResource(R.string.confirm)) } },
+            dismissButton = { TextButton(onClick = { resetConfirmOpen = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
 }
 
 @Composable
@@ -1037,10 +1054,11 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
             val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
             // Per v0.5.3: slightly lower the preview sphere's own lightness so the highlight reads.
             val gray = Color(0xFF747479).copy(alpha = opacity)
-            val azimuth = appearance.lightAzimuth / 180f * PI.toFloat()
-            val elevation = appearance.lightElevation / 180f * PI.toFloat()
-            val lightOffset = radius * .95f * cos(elevation)
-            val highlight = center - Offset(cos(azimuth) * lightOffset, sin(azimuth) * lightOffset)
+            val theta = appearance.lightAzimuth / 180f * PI.toFloat()
+            val phi = appearance.lightElevation / 180f * PI.toFloat()
+            val sinPhi = sin(phi)
+            val lightOffset = radius * .95f * sinPhi
+            val highlight = Offset(center.x + cos(theta) * lightOffset, center.y - sin(theta) * lightOffset)
             drawCircle(gray, radius, center)
             if (appearance.reflectionEnabled && opacity > 0.01f) {
                 val highlightBrush = Brush.radialGradient(
@@ -1127,10 +1145,10 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
     val base = Color(0xFF747479).blend(bg, fog)
     drawCircle(base, r, c)
     if (appearance.reflectionEnabled) {
-        val azimuth = appearance.lightAzimuth / 180f * PI.toFloat()
-        val elevation = appearance.lightElevation / 180f * PI.toFloat()
-        val lightOffset = r * .95f * cos(elevation)
-        val highlight = c - Offset(cos(azimuth) * lightOffset, sin(azimuth) * lightOffset)
+        val theta = appearance.lightAzimuth / 180f * PI.toFloat()
+        val phi = appearance.lightElevation / 180f * PI.toFloat()
+        val sinPhi = sin(phi)
+        val highlight = Offset(c.x + cos(theta) * sinPhi * r * .95f, c.y - sin(theta) * sinPhi * r * .95f)
         val highlightBrush = Brush.radialGradient(
             listOf(Color.White.copy(alpha = appearance.lightIntensity.coerceIn(.05f, 1f) * (1f - fog)), Color.Transparent),
             center = highlight,

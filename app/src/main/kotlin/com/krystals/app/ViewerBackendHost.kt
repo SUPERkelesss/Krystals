@@ -55,6 +55,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -241,36 +242,70 @@ private fun FilamentLegacyStyleOverlay(
             val labels = if (scene.environment.axes.mode == AxisMode.ABC) listOf("a", "b", "c") else listOf("X", "Y", "Z")
             val colors = listOf(Color(0xFFE57373), Color(0xFF81C784), Color(0xFF64B5F6))
             val origin = Offset(size.width * 0.08f + 28f, size.height * 0.08f + 40f)
-            val arrowLength = 56f
-            val headLength = 16f
+            val arrowLength = 150f
+            val headLengthBase = 14f
             val light = scene.environment.worldLight
-            val azimuth = light.azimuthDegrees / 180f * PI.toFloat()
-            val elevation = light.elevationDegrees / 180f * PI.toFloat()
-            val lightOffset = Offset(cos(azimuth) * cos(elevation), sin(azimuth) * cos(elevation))
+            val theta = light.azimuthDegrees / 180f * PI.toFloat()
+            val phi = light.elevationDegrees / 180f * PI.toFloat()
+            val lightOffset = Offset(cos(theta) * sin(phi), -sin(theta) * sin(phi))
             val axisPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 textSize = 30f
                 setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
             }
             directions.forEachIndexed { index, axis ->
-                val direction = camera.rotation * axis
-                val projected = Offset(direction.x.toFloat(), -direction.y.toFloat())
-                val projectedLength = projected.getDistance()
-                val unit = if (projectedLength > 0.0001f) projected / projectedLength else Offset.Zero
-                val end = origin + unit * arrowLength
+                val direction = (camera.rotation * axis).normalized()
+                val dx = direction.x.toFloat()
+                val dy = -direction.y.toFloat()
+                // Per v0.6.3: arrow length varies with projected direction (3D perspective).
+                val projectedLength = kotlin.math.sqrt(dx * dx + dy * dy)
+                val visibleLength = arrowLength * projectedLength
+                val unit = if (projectedLength > 0.0001f) Offset(dx / projectedLength, dy / projectedLength) else Offset.Zero
+                val end = origin + unit * visibleLength
+                // Per v0.6.3: fixed arrowhead size (not scaled by projectedLength).
+                val headLength = headLengthBase
                 val shaftEnd = end - unit * headLength
                 val color = colors[index]
-                drawLine(Color.Black.copy(alpha = 0.48f), origin, shaftEnd, 7f)
-                drawLine(color, origin, shaftEnd, 5f)
-                val perpendicular = Offset(-unit.y, unit.x)
+                val perp = Offset(-unit.y, unit.x)
+                val halfWidth = 4f
+                // 3D cylinder shaft: draw as rotated rectangle with perpendicular gradient.
+                val shaftAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                drawContext.canvas.nativeCanvas.save()
+                drawContext.canvas.nativeCanvas.rotate(shaftAngle, origin.x, origin.y)
+                val shaftLen = (visibleLength - headLength).coerceAtLeast(0f)
+                val shaftBrush = Brush.linearGradient(
+                    listOf(
+                        color.copy(alpha = 0.4f),
+                        color,
+                        color.copy(red = (color.red * 0.6f + 1f * 0.4f).coerceIn(0f, 1f), green = (color.green * 0.6f + 1f * 0.4f).coerceIn(0f, 1f), blue = (color.blue * 0.6f + 1f * 0.4f).coerceIn(0f, 1f)),
+                        color,
+                        color.copy(alpha = 0.4f),
+                    ),
+                    start = Offset(origin.x, origin.y - halfWidth),
+                    end = Offset(origin.x, origin.y + halfWidth),
+                )
+                drawRect(shaftBrush, topLeft = Offset(origin.x, origin.y - halfWidth), size = androidx.compose.ui.geometry.Size(shaftLen, halfWidth * 2f))
+                drawContext.canvas.nativeCanvas.restore()
+                // 3D cone arrowhead: filled triangle with perpendicular gradient.
                 val halfHead = headLength * 0.6f
                 val base = end - unit * headLength
                 val arrow = Path().apply {
                     moveTo(end.x, end.y)
-                    lineTo(base.x + perpendicular.x * halfHead, base.y + perpendicular.y * halfHead)
-                    lineTo(base.x - perpendicular.x * halfHead, base.y - perpendicular.y * halfHead)
+                    lineTo(base.x + perp.x * halfHead, base.y + perp.y * halfHead)
+                    lineTo(base.x - perp.x * halfHead, base.y - perp.y * halfHead)
                     close()
                 }
-                drawPath(arrow, color)
+                val headBrush = Brush.linearGradient(
+                    listOf(
+                        color.copy(alpha = 0.4f),
+                        color,
+                        color.copy(red = (color.red * 0.6f + 1f * 0.4f).coerceIn(0f, 1f), green = (color.green * 0.6f + 1f * 0.4f).coerceIn(0f, 1f), blue = (color.blue * 0.6f + 1f * 0.4f).coerceIn(0f, 1f)),
+                        color,
+                        color.copy(alpha = 0.4f),
+                    ),
+                    start = Offset(base.x + perp.x * halfHead, base.y + perp.y * halfHead),
+                    end = Offset(base.x - perp.x * halfHead, base.y - perp.y * halfHead),
+                )
+                drawPath(arrow, headBrush)
                 axisPaint.color = color.toArgb()
                 drawContext.canvas.nativeCanvas.drawText(labels[index], end.x + 4f, end.y - 4f, axisPaint)
             }
@@ -278,7 +313,7 @@ private fun FilamentLegacyStyleOverlay(
             drawCircle(
                 Brush.radialGradient(
                     listOf(Color(0xFFE0E0E0), Color(0xFF68686F)),
-                    center = origin - lightOffset * 3f,
+                    center = origin + lightOffset * 3f,
                     radius = 8f,
                 ),
                 8f,

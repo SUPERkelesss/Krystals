@@ -695,9 +695,9 @@ object CrystalImageExporter {
         }
         val colors = listOf(0xFFE57373.toInt(), 0xFF81C784.toInt(), 0xFF64B5F6.toInt())
         val origin = PointF(width * 0.08f + 28f, height * 0.08f + 40f)
-        val arrowLen = 56f
+        val arrowLen = 150f
         val halfWidth = 3f
-        val headLen = 16f
+        val headLenBase = 14f
         val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
         val lightX = light.x.toFloat()
         val lightY = light.y.toFloat()
@@ -705,17 +705,21 @@ object CrystalImageExporter {
             strokeWidth = 4f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(5f, 1f, 1f, Color.BLACK)
         }
         directions.forEachIndexed { index, dir ->
-            val rotated = controller.rotation * dir
-            val projected = PointF(rotated.x.toFloat(), -rotated.y.toFloat())
-            val len = sqrt(projected.x * projected.x + projected.y * projected.y)
-            val unitX = if (len > 0.0001f) projected.x / len else 0f
-            val unitY = if (len > 0.0001f) projected.y / len else 0f
-            val tipX = origin.x + unitX * arrowLen
-            val tipY = origin.y + unitY * arrowLen
+            val rotated = (controller.rotation * dir).normalized()
+            // Per v0.6.3: arrow length varies with projected direction (3D perspective).
+            val dx = rotated.x.toFloat()
+            val dy = -rotated.y.toFloat()
+            val projectedLength = sqrt(dx * dx + dy * dy)
+            val visibleLen = arrowLen * projectedLength
+            val unitX = if (projectedLength > 0.0001f) dx / projectedLength else 0f
+            val unitY = if (projectedLength > 0.0001f) dy / projectedLength else 0f
+            val tipX = origin.x + unitX * visibleLen
+            val tipY = origin.y + unitY * visibleLen
             val color = colors[index]
             val perpX = -unitY
             val perpY = unitX
             val lightOnPerp = (lightX * perpX + lightY * perpY).toDouble()
+            val headLen = headLenBase
             // 3D cylinder shaft, lit the same way bonds are.
             val shaftEndX = tipX - unitX * headLen
             val shaftEndY = tipY - unitY * headLen

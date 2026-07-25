@@ -1075,8 +1075,8 @@ private fun DrawScope.drawAxes(
     }
     val colors = listOf(Color(0xFFE57373), Color(0xFF81C784), Color(0xFF64B5F6))
     val origin = Offset(size.width * 0.08f + 28f, size.height * 0.08f + 40f)
-    val arrowLen = 56f
-    val headLen = 16f
+    val arrowLen = 150f
+    val headLenBase = 14f
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         strokeWidth = 5f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
     }
@@ -1084,17 +1084,20 @@ private fun DrawScope.drawAxes(
         color = android.graphics.Color.argb(122, 0, 0, 0); strokeWidth = 7f; strokeCap = Paint.Cap.ROUND
     }
     directions.forEachIndexed { index, dir ->
-        val rotated = controller.rotation * dir
-        // Normalize the projected direction so each arrow is the same screen length.
-        val projected = Offset(rotated.x.toFloat(), -rotated.y.toFloat())
-        val len = projected.getDistance()
-        val unit = if (len > 0.0001f) projected / len else Offset(0f, 0f)
-        val tip = origin + unit * arrowLen
+        val rotated = (controller.rotation * dir).normalized()
+        // Per v0.6.3: arrow length varies with projected direction (3D perspective).
+        val dx = rotated.x.toFloat()
+        val dy = -rotated.y.toFloat()
+        val projectedLength = kotlin.math.sqrt(dx * dx + dy * dy)
+        val visibleLen = arrowLen * projectedLength
+        val unit = if (projectedLength > 0.0001f) Offset(dx / projectedLength, dy / projectedLength) else Offset(0f, 0f)
+        val tip = origin + unit * visibleLen
+        val headLen = headLenBase
         val color = colors[index]
         val perp = Offset(-unit.y, unit.x)
         val headBase = tip - unit * headLen
         val headHalf = headLen * 0.6f
-        // Simple 2D shaft with shadow (matching filament overlay).
+        // Simple 2D shaft with shadow.
         drawContext.canvas.nativeCanvas.drawLine(origin.x, origin.y, headBase.x, headBase.y, shadowPaint)
         paint.color = color.toArgb()
         drawContext.canvas.nativeCanvas.drawLine(origin.x, origin.y, headBase.x, headBase.y, paint)
@@ -1111,10 +1114,9 @@ private fun DrawScope.drawAxes(
     }
     // Center hub with radial gradient (matching filament overlay).
     val hubRadius = 8f
-    val azimuth = appearance.lightAzimuth / 180f * PI.toFloat()
-    val elevation = appearance.lightElevation / 180f * PI.toFloat()
-    val highlightX = origin.x - cos(azimuth) * cos(elevation) * 3f
-    val highlightY = origin.y - sin(azimuth) * cos(elevation) * 3f
+    val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
+    val highlightX = (origin.x + light.x * (-hubRadius * 0.375)).toFloat()
+    val highlightY = (origin.y + light.y * (-hubRadius * 0.375)).toFloat()
     drawCircle(Color.Black.copy(alpha = 0.5f), hubRadius + 1f, origin + Offset(1f, 1f))
     drawCircle(
         Brush.radialGradient(

@@ -87,6 +87,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Visibility
@@ -436,12 +437,16 @@ fun KrystalsRoot(
      *  Per v0.5.3b: cells expanding past [LARGE_CELL_WARN_THRESHOLD] atoms are gated behind a
      *  confirm dialog; the user can still open them in degraded mode. */
     fun openParsed(parsed: ParsedStructure, name: String, uri: Uri?) {
-        val expandedEstimate = SymmetryExpander.expand(parsed.structure).size
-        if (expandedEstimate > LARGE_CELL_WARN_THRESHOLD) {
-            pendingLargeOpen = PendingLargeOpen(parsed, name, uri, expandedEstimate)
-            return
+        // Per v0.6.3: move SymmetryExpander.expand() off the main thread — it was the bottleneck
+        // that made opening a CIF freeze the UI before the viewer appeared.
+        scope.launch {
+            val expandedEstimate = withContext(Dispatchers.Default) { SymmetryExpander.expand(parsed.structure).size }
+            if (expandedEstimate > LARGE_CELL_WARN_THRESHOLD) {
+                pendingLargeOpen = PendingLargeOpen(parsed, name, uri, expandedEstimate)
+                return@launch
+            }
+            doOpenParsed(parsed, name, uri, expandedEstimate)
         }
-        doOpenParsed(parsed, name, uri, expandedEstimate)
     }
 
     fun loadUri(uri: Uri) {
@@ -918,6 +923,9 @@ private fun ViewerScreen(
 ) {
     val tab = viewModel.current ?: return
     val scope = rememberCoroutineScope()
+    // Per v0.6.3: pre-resolve composable values for use in non-composable onClick lambdas.
+    val shareLabel = localized("分享到…", "Share to…")
+    val shareContext = LocalContext.current
     var preferredBackend by remember { mutableStateOf(RendererBackendStore.load(preferences)) }
     var filamentSessionFailed by remember(preferredBackend) { mutableStateOf(false) }
     var activeFilamentRenderer by remember { mutableStateOf<FilamentRenderer?>(null) }
@@ -1015,11 +1023,11 @@ private fun ViewerScreen(
     var sceneResult by remember(tab.id) {
         mutableStateOf<Result<RenderScene>?>(null)
     }
-    val currentOrientation = LocalConfiguration.current.orientation
-    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility, currentOrientation) {
-        // Per v0.6.2: add 10ms delay on orientation change so the Compose layout pass settles
-        // before rebuilding the scene — prevents the stale scene from freezing on screen.
-        if (sceneResult != null) delay(10L)
+    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility) {
+        // Per v0.6.3: removed currentOrientation key + delay — the Filament viewport already
+        // handles size changes via onSizeChanged → SetViewport, so rebuilding the entire scene on
+        // rotation was unnecessary and caused the freeze. The renderer's updateInteraction handles
+        // viewport changes without needing a new scene.
         // Per v0.6.2: use try-catch instead of runCatching so that CancellationException
         // (thrown when the effect is cancelled due to a key change) is rethrown, not stored
         // as a failure. Previously runCatching swallowed it, briefly showing "the coroutine
@@ -1061,6 +1069,7 @@ private fun ViewerScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.open_preset_library)) }, leadingIcon = { Icon(Icons.Default.Inventory2, null) }, onClick = { menuOpen = false; onOpenPreset() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.Science, null) }, onClick = { menuOpen = false; onOnlineSource() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
+                HorizontalDivider()
                 DropdownMenuItem(text = { Text(stringResource(R.string.save)) }, leadingIcon = { Icon(Icons.Default.Save, null) }, onClick = { menuOpen = false; onSave(tab) })
                 DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = { menuOpen = false; onSaveToPreset() })
                     DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
@@ -1080,6 +1089,33 @@ private fun ViewerScreen(
                             }
                         }
                     } ?: onMessage("Unable to export current crystal")
+                })
+                DropdownMenuItem(text = { Text(localized("分享到…", "Share to…")) }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
+                    menuOpen = false
+                    scope.launch {
+                        runCatching {
+                            val cifContent = CifCodec.write(
+                                tab.parsed,
+                                tab.structure,
+                                tab.bondConfiguration,
+                                tab.renderConfiguration.toCifDisplayMetadata(),
+                            )
+                            withContext(Dispatchers.IO) {
+                                val tempFile = File(shareContext.cacheDir, "${tab.name.ensureCifExtension()}")
+                                tempFile.writeText(cifContent, Charsets.UTF_8)
+                                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                    type = "chemical/x-cif"
+                                    putExtra(android.content.Intent.EXTRA_STREAM, androidx.core.content.FileProvider.getUriForFile(shareContext, "${shareContext.packageName}.fileprovider", tempFile))
+                                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                val chooserIntent = android.content.Intent.createChooser(shareIntent, shareLabel)
+                                chooserIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                shareContext.startActivity(chooserIntent)
+                            }
+                        }.onFailure { error ->
+                            if (error !is CancellationException) onMessage(error.message ?: "Share failed")
+                        }
+                    }
                 })
                 HorizontalDivider()
                 LanguageMenuItem(language, onLanguage)
@@ -1368,7 +1404,7 @@ private fun ViewerScreen(
                                 },
                             )
                         },
-                ) { AssetImage("icon_trans.png", Modifier.size(43.dp), ContentScale.Fit) }
+                ) { AssetImage("icon_trans_release.png", Modifier.size(40.dp), ContentScale.Fit) }
             }
             if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateAnalysis(tab, it) }, onMessage = onMessage, onRunBondComputation = onRunBondComputation)
         }

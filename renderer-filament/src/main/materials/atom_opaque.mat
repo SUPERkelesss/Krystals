@@ -23,9 +23,12 @@ fragment {
         // Edge / rim darkening from view-space normal (perspective-dependent).
         float edge = clamp(length(viewN.xy), 0.0, 1.0);
         float edgeShade = 1.0 - materialParams.reflectionEnabled * edge * 0.15;
-        // World-space diffuse from light direction.
+        // Per v0.6.3: use view-space normals for lighting so the highlight stays fixed in
+        // view space (doesn't rotate with the crystal). The lightDirection parameter is already
+        // in view space; previously it was dotted with worldN (world-space), making the light
+        // fixed in world space and causing the highlight to rotate opposite to the crystal.
         vec3 L = normalize(materialParams.lightDirection);
-        float NdotL = max(dot(worldN, L), 0.0);
+        float NdotL = max(dot(viewN, L), 0.0);
         float ambient = 0.32;
         float diffuseShade = ambient + (1.0 - ambient) * NdotL;
         vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);

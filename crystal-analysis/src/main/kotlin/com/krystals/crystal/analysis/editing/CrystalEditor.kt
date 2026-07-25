@@ -240,9 +240,18 @@ object CrystalEditor {
         bondConfiguration: BondConfiguration,
         toRhombohedral: Boolean,
     ): EditResult {
-        val rows = if (toRhombohedral) listOf(listOf(1, 0, 0), listOf(1, 1, 0), listOf(1, 1, 1))
-        else listOf(listOf(1, 0, 0), listOf(-1, 1, 0), listOf(0, -1, 1))
-        val transform = Mat3.fromRows(rows)
+        // Per v0.6.2: correct hexagonal ↔ rhombohedral (obverse setting) transformation.
+        // Hex → Rhom: a_r=(2a+b+c)/3, b_r=(-a+b+c)/3, c_r=(-a-2b+c)/3  (det=1/3)
+        // Rhom → Hex: a_h=a_r-b_r,      b_h=b_r-c_r,      c_h=a_r+b_r+c_r  (det=3)
+        val transform = if (toRhombohedral) Mat3(
+            Vec3(2.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+            Vec3(-1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+            Vec3(-1.0 / 3.0, -2.0 / 3.0, 1.0 / 3.0),
+        ) else Mat3(
+            Vec3(1.0, -1.0, 0.0),
+            Vec3(0.0, 1.0, -1.0),
+            Vec3(1.0, 1.0, 1.0),
+        )
         val inverse = transform.inverse()
         val newCellMatrix = structure.lattice.matrix * transform
         val sites = structure.sites.map { site ->

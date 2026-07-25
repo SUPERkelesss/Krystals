@@ -233,7 +233,9 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                             engine.destroyRenderTarget(target)
                             engine.destroyTexture(depth)
                             engine.destroyTexture(color)
-                            val bitmap = Bitmap.createBitmap(argb, width, height, Bitmap.Config.ARGB_8888)
+                            val sourceBitmap = Bitmap.createBitmap(argb, width, height, Bitmap.Config.ARGB_8888)
+                            val bitmap = sourceBitmap.copy(Bitmap.Config.ARGB_8888, true)
+                            sourceBitmap.recycle()
                             composeOverlay(bitmap)
                             requestFrames(1)
                             continuation.resume(bitmap)
@@ -313,10 +315,13 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private fun updateLightingAndDepth() {
         val scene = submittedScene ?: return
         val light = scene.environment.worldLight
-        val azimuth = light.azimuthDegrees / 180.0 * PI
-        val elevation = light.elevationDegrees / 180.0 * PI
-        val cameraDirection = Vec3(cos(elevation) * cos(azimuth), cos(elevation) * sin(azimuth), sin(elevation)) * -1.0
-        val worldDirection = interaction.session.camera.rotation.transposed() * cameraDirection
+        // Per v0.6.5: theta (azimuth) around camera forward (+Z); phi (elevation) from viewing axis.
+        val theta = light.azimuthDegrees / 180.0 * PI
+        val phi = light.elevationDegrees / 180.0 * PI
+        val sinPhi = sin(phi)
+        val surfaceToLight = Vec3(sinPhi * cos(theta), sinPhi * sin(theta), cos(phi))
+        val travelDir = surfaceToLight * -1.0
+        val worldDirection = interaction.session.camera.rotation.transposed() * travelDir
         val lightInstance = engine.lightManager.getInstance(lightEntity)
         engine.lightManager.setDirection(lightInstance, worldDirection.x.toFloat(), worldDirection.y.toFloat(), worldDirection.z.toFloat())
         engine.lightManager.setIntensity(lightInstance, (light.intensity * 100_000f).coerceAtLeast(1f))
@@ -471,21 +476,24 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         val colors = intArrayOf(0xFFE57373.toInt(), 0xFF81C784.toInt(), 0xFF64B5F6.toInt())
         val originX = width * 0.08f + 28f * scale
         val originY = height * 0.08f + 40f * scale
-        val arrowLength = 56f * scale
-        val headLength = 16f * scale
+        val maxArrowLength = 150f * scale
         val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = 30f * scale
             setShadowLayer(4f * scale, scale, scale, Color.BLACK)
         }
         directions.forEachIndexed { index, direction ->
-            val rotated = interaction.session.camera.rotation * direction
+            val rotated = interaction.session.camera.rotation * direction.normalized()
             val dx = rotated.x.toFloat()
             val dy = -rotated.y.toFloat()
-            val length = kotlin.math.sqrt(dx * dx + dy * dy)
-            val ux = if (length > 0.0001f) dx / length else 0f
-            val uy = if (length > 0.0001f) dy / length else 0f
-            val tipX = originX + ux * arrowLength
-            val tipY = originY + uy * arrowLength
+            // Per v0.6.3: arrow length varies with the projected direction — arrows pointing
+            // toward/away from the viewer shrink, arrows in the screen plane stay full length.
+            val projectedLength = kotlin.math.sqrt(dx * dx + dy * dy)
+            val visibleLength = maxArrowLength * projectedLength
+            val ux = if (projectedLength > 0.0001f) dx / projectedLength else 0f
+            val uy = if (projectedLength > 0.0001f) dy / projectedLength else 0f
+            val tipX = originX + ux * visibleLength
+            val tipY = originY + uy * visibleLength
+            val headLength = 14f * scale
             val baseX = tipX - ux * headLength
             val baseY = tipY - uy * headLength
             val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(122, 0, 0, 0); strokeWidth = 7f * scale; strokeCap = Paint.Cap.ROUND }
@@ -505,11 +513,12 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             labelPaint.color = colors[index]
             canvas.drawText(labels[index], tipX + 4f * scale, tipY - 4f * scale, labelPaint)
         }
+        // Per v0.6.3: gray sphere at the origin (vertex of the three arrows).
         val light = scene.environment.worldLight
-        val azimuth = light.azimuthDegrees / 180f * PI.toFloat()
-        val elevation = light.elevationDegrees / 180f * PI.toFloat()
-        val highlightX = originX - cos(azimuth) * cos(elevation) * 3f * scale
-        val highlightY = originY - sin(azimuth) * cos(elevation) * 3f * scale
+        val theta = light.azimuthDegrees / 180f * PI.toFloat()
+        val phi = light.elevationDegrees / 180f * PI.toFloat()
+        val highlightX = originX + (sin(phi) * cos(theta) * 3f * scale)
+        val highlightY = originY - (sin(phi) * sin(theta) * 3f * scale)
         val centerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = RadialGradient(highlightX, highlightY, 8f * scale, intArrayOf(0xFFE0E0E0.toInt(), 0xFF68686F.toInt()), null, Shader.TileMode.CLAMP)
         }

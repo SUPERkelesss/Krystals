@@ -26,8 +26,9 @@ fragment {
         vec3 viewN = normalize(mat3(getViewFromWorldMatrix()) * worldN);
         float edge = clamp(length(viewN.xy), 0.0, 1.0);
         float edgeShade = 1.0 - materialParams.reflectionEnabled * edge * 0.15;
+        // Per v0.6.3: use view-space normals for lighting (see atom_opaque.mat).
         vec3 L = normalize(materialParams.lightDirection);
-        float NdotL = max(dot(worldN, L), 0.0);
+        float NdotL = max(dot(viewN, L), 0.0);
         float ambient = 0.32;
         float diffuseShade = ambient + (1.0 - ambient) * NdotL;
         vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);
