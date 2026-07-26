@@ -29,7 +29,7 @@ fragment {
         // fixed in world space and causing the highlight to rotate opposite to the crystal.
         vec3 L = normalize(materialParams.lightDirection);
         float NdotL = max(dot(viewN, L), 0.0);
-        float ambient = 0.32;
+        float ambient = clamp(0.8 - 0.4 * materialParams.highlightIntensity, 0.4, 0.8);
         float diffuseShade = ambient + (1.0 - ambient) * NdotL;
         vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);
         // Specular highlight (world-space).

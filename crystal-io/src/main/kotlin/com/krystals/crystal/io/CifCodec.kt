@@ -293,7 +293,10 @@ object CifCodec {
                 operations,
                 sites,
             ),
-            bondConfiguration = BondConfiguration(krystalsRules + vestaRules + geomRules),
+            // Per v0.6.3: temporarily disable importing bond rules from CIF — always start
+            // with an empty configuration so smart-ionic / bonding-radius rules are freshly
+            // computed. To re-enable, replace with: BondConfiguration(krystalsRules + vestaRules + geomRules)
+            bondConfiguration = BondConfiguration(),
             displayMetadata = CifDisplayMetadata(colorOverrides),
         )
     }

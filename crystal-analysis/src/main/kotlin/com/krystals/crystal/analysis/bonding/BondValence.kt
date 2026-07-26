@@ -156,6 +156,11 @@ object BondValence {
 
         val cnByAtom = HashMap<Long, Int>()
         for ((a, b, _) in neighbours) {
+            val atomA = atomById[a] ?: continue
+            val atomB = atomById[b] ?: continue
+            // Per v0.5.2b: exclude same-element neighbours from coordination-number counts,
+            // consistent with BVS and distance collection which already skip them.
+            if (atomA.species == atomB.species) continue
             cnByAtom[a] = (cnByAtom[a] ?: 0) + 1
             cnByAtom[b] = (cnByAtom[b] ?: 0) + 1
         }

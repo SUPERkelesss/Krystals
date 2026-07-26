@@ -82,9 +82,9 @@ data class RenderEnvironment(
 data class ViewerAppearance(
     val backgroundArgb: Long = 0xFF101014,
     val reflectionEnabled: Boolean = true,
-    val lightAzimuth: Float = 35f,
-    val lightElevation: Float = 60f,
-    val lightIntensity: Float = 0.5f,
+    val lightAzimuth: Float = 150f,
+    val lightElevation: Float = 45f,
+    val lightIntensity: Float = 0.4f,
     val diffusion: Float = 0.5f,
     val atomOpacity: Float = 1.0f,
     val frameMode: FrameMode = FrameMode.SINGLE_CELL,

@@ -4,8 +4,12 @@ import android.util.Log
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.ParsedStructure
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -20,20 +24,83 @@ data class CodSearchResult(
     val nel: Int,
 )
 
+data class CodMirror(val testUrl: String, val apiBase: String)
+
 /**
  * Import from the Crystallography Open Database (COD). Unlike [MaterialsProject], COD requires no
  * API key. Searching hits `result.php?format=csv`; downloading fetches the raw CIF at
  * `<file>.cif`. Both are plain HTTP GETs with an explicit User-Agent.
+ *
+ * Per v0.6.3: supports multiple COD mirrors. On page open the app tests all mirrors concurrently
+ * and selects the one with the lowest latency for subsequent queries.
  */
 object CrystallographyOpenDatabase {
-    private const val BASE_HOST = "www.crystallography.net"
-    private const val BASE_PATH = "cod"
+    val MIRRORS = listOf(
+        CodMirror("https://www.crystallography.net", "https://www.crystallography.net/cod"),
+        CodMirror("http://qiserver.ugr.es/cod/", "http://qiserver.ugr.es/cod"),
+        CodMirror("http://cod.ibt.lt/", "http://cod.ibt.lt/cod"),
+    )
+
+    @Volatile
+    private var selectedMirror: CodMirror = MIRRORS.first()
+
+    // Per v0.6.3: guard so the mirror is only tested once per process lifetime.
+    // On cold start this is false → test runs; subsequent COD page opens reuse the result.
+    private var mirrorTested = false
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    private val testClient = OkHttpClient.Builder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .build()
+
     enum class SearchMode { FORMULA, ELEMENT, TEXT }
+
+    /**
+     * Per v0.6.3: test all mirrors concurrently; the FIRST successful response wins.
+     * Once a mirror is selected it persists for the process lifetime. Cold start (app
+     * reopen) resets everything so the test runs fresh on next COD search entry.
+     */
+    suspend fun testMirrors(): CodMirror? {
+        if (mirrorTested) return selectedMirror
+        return withContext(Dispatchers.IO) {
+            coroutineScope {
+            val deferreds = MIRRORS.map { mirror ->
+                async {
+                    runCatching {
+                        val start = System.currentTimeMillis()
+                        val request = Request.Builder()
+                            .url(mirror.testUrl)
+                            .get()
+                            .header("User-Agent", "Krystals/${com.krystals.app.BuildConfig.VERSION_NAME}")
+                            .build()
+                        testClient.newCall(request).execute().use { response ->
+                            val elapsed = System.currentTimeMillis() - start
+                            Log.d("COD", "mirror ${mirror.testUrl} responded: HTTP ${response.code} in ${elapsed}ms")
+                            mirror
+                        }
+                    }.getOrNull()
+                }
+            }
+            kotlinx.coroutines.selects.select<CodMirror?> {
+                deferreds.forEach { d -> d.onAwait { it } }
+            }
+        }
+    }.also { winner ->
+            if (winner != null) {
+                selectedMirror = winner
+                mirrorTested = true
+            }
+        }
+    }
+
+    fun selectMirror(mirror: CodMirror) {
+        selectedMirror = mirror
+    }
 
     private fun request(url: HttpUrl): Request = Request.Builder()
         .url(url)
@@ -92,10 +159,8 @@ object CrystallographyOpenDatabase {
     suspend fun search(query: String, mode: SearchMode, maxElements: Int? = null): Result<List<CodSearchResult>> = withContext(Dispatchers.IO) {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return@withContext Result.success(emptyList())
-        val builder = HttpUrl.Builder()
-            .scheme("https")
-            .host(BASE_HOST)
-            .addPathSegment(BASE_PATH)
+        val base = selectedMirror.apiBase.toHttpUrl()
+        val builder = base.newBuilder()
             .addPathSegment("result.php")
             .addQueryParameter("format", "csv")
             .addQueryParameter("count", "50")
@@ -202,10 +267,8 @@ object CrystallographyOpenDatabase {
     }
 
     suspend fun downloadCif(fileId: String, target: File): Result<ParsedStructure> = withContext(Dispatchers.IO) {
-        val url = HttpUrl.Builder()
-            .scheme("https")
-            .host(BASE_HOST)
-            .addPathSegment(BASE_PATH)
+        val base = selectedMirror.apiBase.toHttpUrl()
+        val url = base.newBuilder()
             .addPathSegment("$fileId.cif")
             .build()
         runCatching {

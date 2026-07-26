@@ -1524,7 +1524,8 @@ object PeriodicTableData {
     // Per v0.5.0: Shannon crystal radii (Å) from "Radii for All Species" (R. D. Shannon 1976,
     // .todos/bondvalence/Radii for All Species.html). Keyed "ion/charge" -> list of www.winter.group.shef.ac.uk
     // (coordination, isHighSpin, crystalRadius). High-spin entries are preferred at lookup.
-    // The lookup function converts crystal radii to ionic radii via [toIonic].
+    // Per v0.6.3: the lookup now returns the Ionic radii column directly (CR−0.14 for cations,
+    // CR+0.14 for anions), matching the HTML file's "Ionic radii" column.
     // ------------------------------------------------------------------
     private val shannonCrystalRadii: Map<String, List<Triple<Int, Boolean, Float>>> = mapOf(
     "Ac/3" to listOf(Triple(6, false, 1.26f)),
@@ -1732,10 +1733,15 @@ object PeriodicTableData {
     "Zr/4" to listOf(Triple(4, false, 0.73f), Triple(5, false, 0.8f), Triple(6, false, 0.86f), Triple(7, false, 0.92f), Triple(8, false, 0.98f), Triple(9, false, 1.03f)),
     )
 
-    /** Convert a stored crystal radius (CR) to ionic radius (IR): IR = CR − 0.14 for cations,
-     *  CR + 0.14 for anions. (Shannon 1976, CR↔IR offset.) */
-    private fun toIonic(cr: Double, charge: Int): Double =
-        if (charge >= 0) cr - 0.14 else cr + 0.14
+    /** Per v0.6.3: lazily convert crystal radii to ionic radii (the "Ionic radii" column
+     *  from the Shannon 1976 table). IR = CR − 0.14 for cations, CR + 0.14 for anions. */
+    private val shannonIonicRadiiData: Map<String, List<Triple<Int, Boolean, Float>>> by lazy {
+        shannonCrystalRadii.mapValues { (key, list) ->
+            val charge = key.substringAfter('/').toIntOrNull() ?: 0
+            val offset = if (charge >= 0) -0.14f else 0.14f
+            list.map { (cn, spin, cr) -> Triple(cn, spin, cr + offset) }
+        }
+    }
 
     /**
      * Shannon ionic radius for (ion, charge) at coordination [cn]. Prefers a high-spin entry when
@@ -1743,17 +1749,17 @@ object PeriodicTableData {
      * Returns null when the (ion, charge) pair is absent entirely.
      */
     fun shannonIonicRadius(ion: String, charge: Int, cn: Int): Double? {
-        val list = shannonCrystalRadii["$ion/$charge"] ?: return null
+        val list = shannonIonicRadiiData["$ion/$charge"] ?: return null
         if (list.isEmpty()) return null
         // Prefer high spin, then closest coordination number.
         val highSpin = list.filter { it.first == cn && it.second }
-        if (highSpin.isNotEmpty()) return toIonic(highSpin.first().third.toDouble(), charge)
+        if (highSpin.isNotEmpty()) return highSpin.first().third.toDouble()
         val exact = list.filter { it.first == cn }
-        if (exact.isNotEmpty()) return toIonic(exact.minBy { !it.second }.third.toDouble(), charge)
+        if (exact.isNotEmpty()) return exact.minBy { !it.second }.third.toDouble()
         val nearest = list.minBy { kotlin.math.abs(it.first - cn) }
         // Among entries at that nearest CN, prefer high spin.
         val atCn = list.filter { it.first == nearest.first }
-        return toIonic(atCn.minBy { !it.second }.third.toDouble(), charge)
+        return atCn.minBy { !it.second }.third.toDouble()
     }
 
     // ------------------------------------------------------------------

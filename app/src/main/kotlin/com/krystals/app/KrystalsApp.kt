@@ -28,6 +28,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -423,13 +425,12 @@ fun KrystalsRoot(
 
     /** Per v0.5.3b: the actual tab insertion + bond computation, split out of [openParsed] so the
      *  large-cell warning can re-enter here after the user confirms. Declared before [openParsed]
-     *  because Kotlin local functions have no forward references. */
+     *  because Kotlin local functions have no forward references.
+     *  Per v0.5.2b: always synthesize bond rules, ignoring any rules carried in the CIF. */
     fun doOpenParsed(parsed: ParsedStructure, name: String, uri: Uri?, expandedEstimate: Int) {
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
-        if (tab.bondConfiguration.rules.isEmpty()) {
-            openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
-        }
+        openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
     }
 
     /** Per v0.5.0: add a parsed structure, synthesizing bond rules off-UI with the computing overlay.
@@ -923,6 +924,12 @@ private fun ViewerScreen(
 ) {
     val tab = viewModel.current ?: return
     val scope = rememberCoroutineScope()
+    // Per v0.6.3: export-image loading dialog with back-button cancel.
+    var exporting by remember { mutableStateOf(false) }
+    var exportJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    // Secret: long-press the exit button for 5s to unlock the broken-export easter egg.
+    var secretUnlocked by remember { mutableStateOf(false) }
+    val exportingMessage = localized("导出图片中...", "Exporting image...")
     // Per v0.6.3: pre-resolve composable values for use in non-composable onClick lambdas.
     val shareLabel = localized("分享到…", "Share to…")
     val shareContext = LocalContext.current
@@ -1023,6 +1030,12 @@ private fun ViewerScreen(
     var sceneResult by remember(tab.id) {
         mutableStateOf<Result<RenderScene>?>(null)
     }
+    // Per v0.6.3: scene build timeout/failure dialog with undo.
+    var sceneBuildError by remember(tab.id) { mutableStateOf<String?>(null) }
+    val sceneTimeoutMessage = localized(
+        "构建场景原子数过多，回退回前列场景。",
+        "Too many atoms in scene, reverting to previous scene.",
+    )
     LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility) {
         // Per v0.6.3: removed currentOrientation key + delay — the Filament viewport already
         // handles size changes via onSizeChanged → SetViewport, so rebuilding the entire scene on
@@ -1033,25 +1046,31 @@ private fun ViewerScreen(
         // as a failure. Previously runCatching swallowed it, briefly showing "the coroutine
         // scope … was cancelled" in the error Text below whenever tab.structure changed.
         sceneResult = try {
-            Result.success(
-                withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
-                    withContext(Dispatchers.Default) {
-                        val analysis = BondDetector.buildNetwork(tab.structure, tab.bondConfiguration, tab.expansion)
-                        CrystalRenderSceneFactory.build(
-                            analysis = analysis,
-                            appearance = renderedAppearance,
-                            renderConfiguration = tab.renderConfiguration,
-                            hiddenSiteIds = tab.visibility.hiddenSites,
-                            hiddenBondKeys = tab.visibility.hiddenBondPairs,
-                            showBonds = tab.visibility.showBonds,
-                            polyhedronSiteIds = tab.visibility.polyhedronSites,
-                        )
-                    }
-                } ?: throw IllegalStateException("Scene build timed out after ${BUILD_SCENE_TIMEOUT_MS / 1000}s")
-            )
+            val scene = withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
+                withContext(Dispatchers.Default) {
+                    val analysis = BondDetector.buildNetwork(tab.structure, tab.bondConfiguration, tab.expansion)
+                    CrystalRenderSceneFactory.build(
+                        analysis = analysis,
+                        appearance = renderedAppearance,
+                        renderConfiguration = tab.renderConfiguration,
+                        hiddenSiteIds = tab.visibility.hiddenSites,
+                        hiddenBondKeys = tab.visibility.hiddenBondPairs,
+                        showBonds = tab.visibility.showBonds,
+                        polyhedronSiteIds = tab.visibility.polyhedronSites,
+                    )
+                }
+            }
+            if (scene != null) Result.success(scene)
+            else {
+                // Per v0.6.3: scene build timed out — show dialog and undo.
+                sceneBuildError = sceneTimeoutMessage
+                Result.failure(IllegalStateException(sceneTimeoutMessage))
+            }
         } catch (ce: CancellationException) {
             throw ce
         } catch (e: Throwable) {
+            // Per v0.6.3: scene build failed — show dialog and undo.
+            sceneBuildError = e.message ?: sceneTimeoutMessage
             Result.failure(e)
         }
     }
@@ -1072,20 +1091,29 @@ private fun ViewerScreen(
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text(stringResource(R.string.save)) }, leadingIcon = { Icon(Icons.Default.Save, null) }, onClick = { menuOpen = false; onSave(tab) })
                 DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = { menuOpen = false; onSaveToPreset() })
-                    DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
+                DropdownMenuItem(text = { Text(stringResource(R.string.export_image), color = if (secretUnlocked) Color.Red else Color.Unspecified) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
                     menuOpen = false
+                    val useMsaa = secretUnlocked
+                    secretUnlocked = false
                     sceneResult?.getOrNull()?.let { scene ->
-                        scope.launch {
-                            runCatching {
-                                val filamentBitmap = if (effectiveBackend == RendererBackend.FILAMENT) {
-                                    runCatching { activeFilamentRenderer?.renderToBitmap(1080, 1080) }.getOrNull()
+                        exporting = true
+                        exportJob = scope.launch {
+                            try {
+                                // Per v0.6.3: ensure the scene is submitted before exporting,
+                                // so renderToBitmap doesn't return null on first attempt.
+                                val renderer = activeFilamentRenderer
+                                val filamentBitmap = if (effectiveBackend == RendererBackend.FILAMENT && renderer != null) {
+                                    runCatching { renderer.submit(scene); renderer.renderToBitmap(useMsaa = useMsaa) }.getOrNull()
                                 } else null
                                 val bitmap = filamentBitmap ?: withContext(Dispatchers.Default) {
                                     CrystalImageExporter.render(scene, tab.appearance, tab.renderConfiguration, tab.interactionState, bondValenceBySite)
                                 }
                                 onExport(bitmap)
-                            }.onFailure { error ->
+                            } catch (error: Exception) {
                                 if (error !is CancellationException) onMessage(error.message ?: "Export failed")
+                            } finally {
+                                exporting = false
+                                exportJob = null
                             }
                         }
                     } ?: onMessage("Unable to export current crystal")
@@ -1130,7 +1158,23 @@ private fun ViewerScreen(
                     TextButton(onClick = { menuOpen = false; onSponsor() }) { Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 HorizontalDivider()
-                DropdownMenuItem(text = { Text(localized("退出 Krystals", "Exit Krystals")) }, onClick = { menuOpen = false; onExit() })
+                DropdownMenuItem(
+                    text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) },
+                    onClick = { menuOpen = false; onExit() },
+                    modifier = Modifier.pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown()
+                            val job = scope.launch {
+                                delay(5000)
+                                secretUnlocked = true
+                            }
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.changes.all { !it.pressed }) { job.cancel(); break }
+                            }
+                        }
+                    },
+                )
             } } },
             actions = {
                 IconButton(onClick = { tab.undo() }, enabled = tab.history.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, localized("撤回", "Undo")) }
@@ -1221,6 +1265,40 @@ private fun ViewerScreen(
                         else error?.message ?: "Unable to build scene"
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(displayMessage, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+            // Per v0.6.3: scene build timeout/failure dialog — undo to previous state.
+            sceneBuildError?.let { message ->
+                AlertDialog(
+                    onDismissRequest = {
+                        sceneBuildError = null
+                        tab.undo()
+                    },
+                    title = { Text(localized("场景构建失败", "Scene build failed")) },
+                    text = { Text(message) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            sceneBuildError = null
+                            tab.undo()
+                        }) { Text(localized("回退", "Undo")) }
+                    },
+                )
+            }
+
+            // Per v0.6.3: export-image loading dialog with back-button cancel.
+            if (exporting) {
+                androidx.compose.material3.BasicAlertDialog(onDismissRequest = {
+                    exportJob?.cancel()
+                    exporting = false
+                    exportJob = null
+                }) {
+                    androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
+                        Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            androidx.compose.material3.CircularProgressIndicator()
+                            Text(exportingMessage)
+                        }
                     }
                 }
             }
@@ -1404,7 +1482,7 @@ private fun ViewerScreen(
                                 },
                             )
                         },
-                ) { AssetImage("icon_trans_release.png", Modifier.size(40.dp), ContentScale.Fit) }
+                ) { AssetImage("icon_trans_release.png", Modifier.size(50.dp), ContentScale.Fit) }
             }
             if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateAnalysis(tab, it) }, onMessage = onMessage, onRunBondComputation = onRunBondComputation)
         }
@@ -1528,15 +1606,28 @@ private data class LegendEntry(val label: String, val argb: Long)
 
 @Composable
 private fun ElementLegend(entries: List<LegendEntry>, expanded: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    var legendHeight by remember { mutableStateOf(220.dp) }
+    val density = LocalDensity.current
     Surface(modifier.alpha(0.84f), shape = RoundedCornerShape(14.dp), tonalElevation = 5.dp) {
         Column(Modifier.width(if (expanded) 130.dp else 140.dp)) {
-            Row(Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.fillMaxWidth()
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, amount ->
+                            change.consume()
+                            legendHeight = (legendHeight - with(density) { amount.y.toDp() }).coerceIn(80.dp, 600.dp)
+                        }
+                    }
+                    .clickable(onClick = onToggle)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Icon(Icons.Default.Palette, null, modifier = Modifier.size(18.dp))
                 Text(localized("图例", "Legend"), modifier = Modifier.weight(1f).padding(start = 6.dp), style = MaterialTheme.typography.labelLarge)
                 Icon(if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp, null, modifier = Modifier.size(18.dp))
             }
             if (expanded) {
-                Column(Modifier.fillMaxWidth().height(220.dp).verticalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp)) {
+                Column(Modifier.fillMaxWidth().height(legendHeight).verticalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp)) {
                     entries.forEach { entry ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(18.dp).background(Color(entry.argb), CircleShape))
@@ -2245,13 +2336,33 @@ private fun MpSearchScreen(
     var results by remember { mutableStateOf<List<MpSearchResult>?>(null) }
     var searching by remember { mutableStateOf(false) }
     var downloadingId by remember { mutableStateOf<String?>(null) }
+    var testingConnection by remember { mutableStateOf(true) }
+    var connectionError by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        if (MaterialsProject.testConnection()) {
+            testingConnection = false
+        } else {
+            testingConnection = false
+            connectionError = true
+        }
+    }
+    BackHandler(testingConnection) { onBack() }
     // Full-screen surface so the screen covers the whole viewport (status bar area
     // included via the Scaffold insets already applied above) instead of a padded column.
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
     ) {
+        if (testingConnection) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text(localized("测试节点中…", "Testing connection…"))
+                }
+            }
+        } else {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
@@ -2330,6 +2441,19 @@ private fun MpSearchScreen(
                 }
             }
         }
+        }
+        if (connectionError) {
+            AlertDialog(
+                onDismissRequest = { connectionError = false; onBack() },
+                title = { Text(localized("无法连接", "Connection failed")) },
+                text = { Text(localized("当前无法连接到Materials Project数据库，可能是网络不可用或链路异常。", "Unable to connect to the Materials Project database. The network may be unavailable or the link is abnormal.")) },
+                confirmButton = {
+                    TextButton(onClick = { connectionError = false; onBack() }) {
+                        Text(stringResource(R.string.confirm))
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -2352,11 +2476,33 @@ private fun CodSearchScreen(
     var results by remember { mutableStateOf<List<CodSearchResult>?>(null) }
     var searching by remember { mutableStateOf(false) }
     var downloadingId by remember { mutableStateOf<String?>(null) }
+    var testingMirrors by remember { mutableStateOf(true) }
+    var connectionError by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        val mirror = CrystallographyOpenDatabase.testMirrors()
+        if (mirror != null) {
+            CrystallographyOpenDatabase.selectMirror(mirror)
+            testingMirrors = false
+        } else {
+            testingMirrors = false
+            connectionError = true
+        }
+    }
+    BackHandler(testingMirrors) { onBack() }
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
     ) {
+        if (testingMirrors) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text(localized("测试节点中…", "Testing mirrors…"))
+                }
+            }
+        } else {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
@@ -2466,6 +2612,19 @@ private fun CodSearchScreen(
                     }
                 }
             }
+        }
+        }
+        if (connectionError) {
+            AlertDialog(
+                onDismissRequest = { connectionError = false; onBack() },
+                title = { Text(localized("无法连接", "Connection failed")) },
+                text = { Text(localized("当前无法连接到COD数据库，可能是网络不可用或链路异常。", "Unable to connect to the COD database. The network may be unavailable or the link is abnormal.")) },
+                confirmButton = {
+                    TextButton(onClick = { connectionError = false; onBack() }) {
+                        Text(stringResource(R.string.confirm))
+                    }
+                },
+            )
         }
     }
 }

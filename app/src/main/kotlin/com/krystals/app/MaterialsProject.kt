@@ -35,6 +35,29 @@ object MaterialsProject {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    private val testClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .build()
+
+    /**
+     * Test connectivity to the Materials Project API host. Any HTTP response (even 4xx/5xx)
+     * counts as reachable — only network-level failures are treated as unreachable.
+     */
+    suspend fun testConnection(): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val request = Request.Builder()
+                .url("https://$BASE_HOST/")
+                .get()
+                .header("User-Agent", "Krystals/${com.krystals.app.BuildConfig.VERSION_NAME}")
+                .build()
+            testClient.newCall(request).execute().use { response ->
+                Log.d("MP", "connection test: HTTP ${response.code}")
+                true
+            }
+        }.getOrDefault(false)
+    }
+
     private fun prefs(context: Context): SharedPreferences = context.getSharedPreferences("krystals", Context.MODE_PRIVATE)
 
     fun hasKey(context: Context): Boolean = !prefs(context).getString(PREFS_KEY, null).isNullOrBlank()

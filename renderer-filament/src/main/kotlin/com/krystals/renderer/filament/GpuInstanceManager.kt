@@ -21,7 +21,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
-private const val FRAME_RADIUS_FACTOR = 0.002
+private const val FRAME_RADIUS_FACTOR = 0.001
 private const val FRAME_CLIP_MIN_LENGTH = 1e-6
 
 /** Materializes InstanceManager's stable diff as automatically-instanced Filament entities. */
@@ -89,9 +89,9 @@ class GpuInstanceManager(
                 0,
                 BatchKey(
                     GeometryKind.CYLINDER,
-                    MaterialKey(Material(0xFFFFFFFF, opacity = 0.25, reflective = false)),
+                    MaterialKey(Material(0xFFFFFFFF, opacity = 0.5, reflective = false)),
                 ),
-                cylinderTransform(start, end, 0.012),
+                cylinderTransform(start, end, 0.008),
             )
             create(record, snapshot)?.let { entity ->
                 entities[id] = entity

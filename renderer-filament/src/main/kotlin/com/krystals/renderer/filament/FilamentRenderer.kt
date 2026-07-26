@@ -190,16 +190,27 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         return pickingRenderer.pick(x, y)
     }
 
-    override suspend fun renderToBitmap(width: Int, height: Int): Bitmap? {
-        require(width in 512..4096 && height in 512..4096) { "export size must be between 512 and 4096" }
+    override suspend fun renderToBitmap(width: Int, height: Int, useMsaa: Boolean): Bitmap? {
+        // Per v0.6.3: when width/height are 0, use the live viewport dimensions so the
+        // exported image matches the on-screen size at the same resolution.
+        val actualWidth = if (width <= 0) interaction.session.viewportWidth.coerceIn(512, 4096) else width
+        val actualHeight = if (height <= 0) interaction.session.viewportHeight.coerceIn(512, 4096) else height
+        require(actualWidth in 512..4096 && actualHeight in 512..4096) { "export size must be between 512 and 4096" }
         if (closed.get() || submittedScene == null) return null
         return suspendCoroutine { continuation ->
             onMain {
                 runCatching {
-                    val color = Texture.Builder().width(width).height(height).levels(1)
+                    // Secret: when useMsaa is true, re-enable the MSAA+FXAA path that produces
+                    // a corrupted (blue-noise) image. This is the "broken export" easter egg.
+                    if (useMsaa) {
+                        view.setSampleCount(4)
+                        view.setPostProcessingEnabled(true)
+                        view.setAntiAliasing(View.AntiAliasing.FXAA)
+                    }
+                    val color = Texture.Builder().width(actualWidth).height(actualHeight).levels(1)
                         .sampler(Texture.Sampler.SAMPLER_2D).format(Texture.InternalFormat.RGBA8)
                         .usage(Texture.Usage.COLOR_ATTACHMENT or Texture.Usage.BLIT_SRC).build(engine)
-                    val depth = Texture.Builder().width(width).height(height).levels(1)
+                    val depth = Texture.Builder().width(actualWidth).height(actualHeight).levels(1)
                         .sampler(Texture.Sampler.SAMPLER_2D).format(Texture.InternalFormat.DEPTH24)
                         .usage(Texture.Usage.DEPTH_ATTACHMENT).build(engine)
                     val target = RenderTarget.Builder()
@@ -209,40 +220,64 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                     val previousTarget = view.renderTarget
                     val previousViewport = view.viewport
                     view.renderTarget = target
-                    view.viewport = Viewport(0, 0, width, height)
-                    updateCamera(width, height)
+                    view.viewport = Viewport(0, 0, actualWidth, actualHeight)
+                    updateCamera(actualWidth, actualHeight)
                     renderer.renderStandaloneView(view)
-                    val pixels = ByteBuffer.allocateDirect(width * height * 4).order(ByteOrder.nativeOrder())
+                    val pixels = ByteBuffer.allocateDirect(actualWidth * actualHeight * 4).order(ByteOrder.nativeOrder())
+                    // Per v0.6.3: move pixel processing + composeOverlay to a background thread
+                    // to prevent blocking the main thread (which caused "Skipped 76 frames!").
                     val descriptor = Texture.PixelBufferDescriptor(pixels, Texture.Format.RGBA, Texture.Type.UBYTE).apply {
                         setCallback(mainHandler) {
-                            val argb = IntArray(width * height)
-                            pixels.rewind()
-                            for (sourceY in 0 until height) {
-                                val destinationY = height - 1 - sourceY
-                                for (xIndex in 0 until width) {
-                                    val r = pixels.get().toInt() and 0xFF
-                                    val g = pixels.get().toInt() and 0xFF
-                                    val b = pixels.get().toInt() and 0xFF
-                                    val a = pixels.get().toInt() and 0xFF
-                                    argb[destinationY * width + xIndex] = (a shl 24) or (r shl 16) or (g shl 8) or b
+                            Thread {
+                                try {
+                                    val argb = IntArray(actualWidth * actualHeight)
+                                    pixels.rewind()
+                                    for (sourceY in 0 until actualHeight) {
+                                        val destinationY = sourceY
+                                        for (xIndex in 0 until actualWidth) {
+                                            val r = pixels.get().toInt() and 0xFF
+                                            val g = pixels.get().toInt() and 0xFF
+                                            val b = pixels.get().toInt() and 0xFF
+                                            val a = pixels.get().toInt() and 0xFF
+                                            argb[destinationY * actualWidth + xIndex] = (a shl 24) or (r shl 16) or (g shl 8) or b
+                                        }
+                                    }
+                                    // Restore view on the main thread (Filament requires it).
+                                    mainHandler.post {
+                                        view.renderTarget = previousTarget
+                                        view.viewport = previousViewport
+                                        updateCamera(previousViewport.width, previousViewport.height)
+                                        if (useMsaa) {
+                                            view.setSampleCount(1)
+                                            view.setPostProcessingEnabled(false)
+                                            view.setAntiAliasing(View.AntiAliasing.NONE)
+                                        }
+                                        engine.destroyRenderTarget(target)
+                                        engine.destroyTexture(depth)
+                                        engine.destroyTexture(color)
+                                        requestFrames(1)
+                                    }
+                                    // Bitmap creation + overlay compositing on background thread.
+                                    val sourceBitmap = Bitmap.createBitmap(argb, actualWidth, actualHeight, Bitmap.Config.ARGB_8888)
+                                    val bitmap = sourceBitmap.copy(Bitmap.Config.ARGB_8888, true)
+                                    sourceBitmap.recycle()
+                                    composeOverlay(bitmap)
+                                    mainHandler.post { continuation.resume(bitmap) }
+                                } catch (e: Exception) {
+                                    mainHandler.post { continuation.resume(null) }
                                 }
-                            }
-                            view.renderTarget = previousTarget
-                            view.viewport = previousViewport
-                            updateCamera(previousViewport.width, previousViewport.height)
-                            engine.destroyRenderTarget(target)
-                            engine.destroyTexture(depth)
-                            engine.destroyTexture(color)
-                            val sourceBitmap = Bitmap.createBitmap(argb, width, height, Bitmap.Config.ARGB_8888)
-                            val bitmap = sourceBitmap.copy(Bitmap.Config.ARGB_8888, true)
-                            sourceBitmap.recycle()
-                            composeOverlay(bitmap)
-                            requestFrames(1)
-                            continuation.resume(bitmap)
+                            }.start()
                         }
                     }
-                    renderer.readPixels(target, 0, 0, width, height, descriptor)
-                }.onFailure { continuation.resume(null) }
+                    renderer.readPixels(target, 0, 0, actualWidth, actualHeight, descriptor)
+                }.onFailure {
+                    if (useMsaa) {
+                        view.setSampleCount(1)
+                        view.setPostProcessingEnabled(false)
+                        view.setAntiAliasing(View.AntiAliasing.NONE)
+                    }
+                    continuation.resume(null)
+                }
             }
         }
     }
@@ -318,8 +353,11 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         // Per v0.6.5: theta (azimuth) around camera forward (+Z); phi (elevation) from viewing axis.
         val theta = light.azimuthDegrees / 180.0 * PI
         val phi = light.elevationDegrees / 180.0 * PI
-        val sinPhi = sin(phi)
-        val surfaceToLight = Vec3(sinPhi * cos(theta), sinPhi * sin(theta), cos(phi))
+        // Per v0.6.3: flip phi so 0-90° elevation means light moves closer to camera.
+        // Old: (sin(φ)·cos(θ), sin(φ)·sin(θ), cos(φ)) — 0°=at camera, 90°=at horizon
+        // New: (cos(φ)·cos(θ), cos(φ)·sin(θ), sin(φ)) — 0°=at horizon, 90°=at camera
+        val cosPhi = cos(phi)
+        val surfaceToLight = Vec3(cosPhi * cos(theta), cosPhi * sin(theta), -sin(phi))
         val travelDir = surfaceToLight * -1.0
         val worldDirection = interaction.session.camera.rotation.transposed() * travelDir
         val lightInstance = engine.lightManager.getInstance(lightEntity)
@@ -476,17 +514,19 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         val colors = intArrayOf(0xFFE57373.toInt(), 0xFF81C784.toInt(), 0xFF64B5F6.toInt())
         val originX = width * 0.08f + 28f * scale
         val originY = height * 0.08f + 40f * scale
-        val maxArrowLength = 150f * scale
+        val maxArrowLength = 75f * scale
         val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = 30f * scale
             setShadowLayer(4f * scale, scale, scale, Color.BLACK)
         }
-        directions.forEachIndexed { index, direction ->
+        // Pre-compute rotated directions for depth sorting.
+        val rotatedDirs = directions.mapIndexed { index, direction ->
             val rotated = interaction.session.camera.rotation * direction.normalized()
+            Triple(index, direction, rotated)
+        }
+        fun drawArrow(index: Int, direction: Vec3, rotated: Vec3) {
             val dx = rotated.x.toFloat()
             val dy = -rotated.y.toFloat()
-            // Per v0.6.3: arrow length varies with the projected direction — arrows pointing
-            // toward/away from the viewer shrink, arrows in the screen plane stay full length.
             val projectedLength = kotlin.math.sqrt(dx * dx + dy * dy)
             val visibleLength = maxArrowLength * projectedLength
             val ux = if (projectedLength > 0.0001f) dx / projectedLength else 0f
@@ -513,17 +553,27 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             labelPaint.color = colors[index]
             canvas.drawText(labels[index], tipX + 4f * scale, tipY - 4f * scale, labelPaint)
         }
+        // Draw back arrows (pointing away from viewer) first so the center sphere
+        // correctly occludes them.
+        rotatedDirs.filter { it.third.z <= 0.0 }.forEach { (index, direction, rotated) ->
+            drawArrow(index, direction, rotated)
+        }
         // Per v0.6.3: gray sphere at the origin (vertex of the three arrows).
         val light = scene.environment.worldLight
         val theta = light.azimuthDegrees / 180f * PI.toFloat()
         val phi = light.elevationDegrees / 180f * PI.toFloat()
-        val highlightX = originX + (sin(phi) * cos(theta) * 3f * scale)
-        val highlightY = originY - (sin(phi) * sin(theta) * 3f * scale)
+        val hubRadius = 12f * scale
+        val highlightX = originX + (cos(phi) * cos(theta) * hubRadius * 0.375f)
+        val highlightY = originY - (cos(phi) * sin(theta) * hubRadius * 0.375f)
         val centerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = RadialGradient(highlightX, highlightY, 8f * scale, intArrayOf(0xFFE0E0E0.toInt(), 0xFF68686F.toInt()), null, Shader.TileMode.CLAMP)
+            shader = RadialGradient(highlightX, highlightY, hubRadius, intArrayOf(0xFFE0E0E0.toInt(), 0xFF68686F.toInt()), null, Shader.TileMode.CLAMP)
         }
-        canvas.drawCircle(originX + scale, originY + scale, 9f * scale, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(128, 0, 0, 0) })
-        canvas.drawCircle(originX, originY, 8f * scale, centerPaint)
+        canvas.drawCircle(originX + scale, originY + scale, hubRadius + scale, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(128, 0, 0, 0) })
+        canvas.drawCircle(originX, originY, hubRadius, centerPaint)
+        // Draw front arrows (pointing toward the viewer) on top of the sphere.
+        rotatedDirs.filter { it.third.z > 0.0 }.forEach { (index, direction, rotated) ->
+            drawArrow(index, direction, rotated)
+        }
     }
 
     private fun Double.formatFract() = "%.4f".format(this)

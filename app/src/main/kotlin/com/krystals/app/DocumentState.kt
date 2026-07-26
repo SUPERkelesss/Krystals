@@ -147,8 +147,7 @@ class KrystalsViewModel : ViewModel() {
             isNew = isNew,
         ).also {
             it.appearance = defaultAppearance
-            // Per v0.2: when opening a CIF that already carries bond rules (e.g. other software's settings),
-            // import them verbatim and do not synthesize additional rules.
+            // Per v0.5.2b: always synthesize bond rules, ignoring any rules carried in the CIF.
             // Per v0.5.0: bond-rule synthesis (smart-ionic) can be heavy, so it is NOT done here.
             // Callers that need rules on a freshly opened tab should run addAsync / applyAutoBondRules.
         }
@@ -170,11 +169,8 @@ class KrystalsViewModel : ViewModel() {
     ) {
         val existing = uri?.let { target -> tabs.indexOfFirst { it.uri == target } } ?: -1
         if (existing >= 0) { selectedIndex = existing; return }
-        val result = if (parsed.bondConfiguration.rules.isEmpty()) {
-            onCompute(parsed.structure, parsed.bondConfiguration)
-        } else {
-            EditResult(parsed.structure, parsed.bondConfiguration)
-        }
+        // Per v0.5.2b: always synthesize bond rules, ignoring any rules carried in the CIF.
+        val result = onCompute(parsed.structure, parsed.bondConfiguration)
         tabs += DocumentTab(
             parsed = parsed,
             structure = result.structure,
@@ -194,7 +190,6 @@ class KrystalsViewModel : ViewModel() {
         tab: DocumentTab,
         onCompute: suspend (CrystalStructure, BondConfiguration) -> EditResult,
     ) {
-        if (tab.bondConfiguration.rules.isNotEmpty()) return
         val result = onCompute(tab.structure, tab.bondConfiguration)
         tab.structure = result.structure
         tab.bondConfiguration = result.bondConfiguration

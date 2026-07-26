@@ -12,6 +12,6 @@ import com.krystals.renderer.core.scene.RenderScene
 interface FilamentSceneRenderer : SceneRenderer, Picker {
     fun attach(surface: Surface)
     fun detach()
-    suspend fun renderToBitmap(width: Int, height: Int): Bitmap?
+    suspend fun renderToBitmap(width: Int = 0, height: Int = 0, useMsaa: Boolean = false): Bitmap?
     override fun close()
 }

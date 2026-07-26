@@ -15,6 +15,7 @@ import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
+import com.krystals.crystal.core.symmetry.SymmetryOperation
 import kotlin.math.abs
 
 sealed interface EditCommand {
@@ -117,9 +118,10 @@ object CrystalEditor {
         bondConfiguration: BondConfiguration,
         epsilon: Double = 0.45,
     ): EditResult {
-        val existingKeys = bondConfiguration.rules.map { it.key }.toSet()
         val generated = smartOrBondingRules(structure, bondConfiguration, epsilon)
-        return EditResult(structure, bondConfiguration.copy(rules = bondConfiguration.rules + generated.filterNot { it.key in existingKeys }))
+        // Per v0.6.3: create a fresh BondConfiguration with only the generated rules,
+        // consistent with fromSmartIonicAttempt and rebuildBondRules.
+        return EditResult(structure, BondConfiguration(generated))
     }
 
     fun fromSmartIonicAttempt(
@@ -128,7 +130,6 @@ object CrystalEditor {
         epsilon: Double,
         smartIonic: BondValence.SmartIonicResult?,
     ): EditResult {
-        val existingKeys = bondConfiguration.rules.map { it.key }.toSet()
         val sizeGuarded = SymmetryExpander.expand(structure).size > BondValence.SMART_IONIC_ATOM_LIMIT
         var timedOut = false
         val generated = if (!sizeGuarded && smartIonic != null && smartIonic.success) {
@@ -138,11 +139,9 @@ object CrystalEditor {
             bondingRules(structure, epsilon)
         }
         val warnings = if (timedOut) listOf(SMART_IONIC_TIMEOUT) else emptyList()
-        return EditResult(
-            structure,
-            bondConfiguration.copy(rules = bondConfiguration.rules + generated.filterNot { it.key in existingKeys }),
-            warnings,
-        )
+        // Per v0.6.3: create a fresh BondConfiguration with only the generated rules,
+        // matching rebuildBondRules so open and re-apply produce identical results.
+        return EditResult(structure, BondConfiguration(generated), warnings)
     }
 
     private fun smartOrBondingRules(
@@ -261,7 +260,15 @@ object CrystalEditor {
                 ).wrapped(),
             )
         }
-        val newStructure = structure.copy(lattice = Lattice.fromMatrix(newCellMatrix), sites = sites)
+        // Per v0.6.3: set symmetry operations to identity after conversion. The rhombohedral
+        // cell's symmetry elements are in different positions than the hexagonal cell's, so
+        // the hexagonal symmetry operations would generate atoms at wrong positions. The
+        // converted site coordinates are already complete, so no further expansion is needed.
+        val newStructure = structure.copy(
+            lattice = Lattice.fromMatrix(newCellMatrix),
+            sites = sites,
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+        )
         return ensureAutoBondRules(newStructure, BondConfiguration())
     }
 

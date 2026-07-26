@@ -486,6 +486,10 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
     var confirmSmartIonic by remember { mutableStateOf(false) }
     var voronoiWarningOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // Per v0.6.3: store the rebuild job and previous epsilon so back-button
+    // cancellation can undo the slider change.
+    var rebuildJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var previousEpsilon by remember { mutableStateOf<Double?>(null) }
     // Per v0.5.0: smart-ionic unavailable warning + ε hint. localized() is @Composable, so resolve
     // them here in the composable body and reuse inside non-composable lambdas below.
     val unavailableMessage = localized("智能离子规则在该晶体下不可用", "Smart ionic rules are unavailable for this crystal")
@@ -527,8 +531,9 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
             confirmSmartIonic = true
             return
         }
+        previousEpsilon = tab.bondEpsilon
         loading = true
-        scope.launch(Dispatchers.Default) {
+        rebuildJob = scope.launch(Dispatchers.Default) {
             val outcome = runCatching {
                 CrystalEditor.rebuildBondRules(
                     tab.structure,
@@ -539,6 +544,8 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
             }
             withContext(Dispatchers.Main) {
                 loading = false
+                rebuildJob = null
+                previousEpsilon = null
                 outcome.onSuccess { result ->
                     tab.lastRadiusSource = source
                     if (CrystalEditor.SMART_IONIC_UNAVAILABLE in result.warnings) onMessage(unavailableMessage)
@@ -597,10 +604,14 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
                 singleLine = true,
                 modifier = Modifier.width(88.dp),
             )
+            // Per v0.6.3: only trigger rebuild on finger release to prevent lag.
+            var sliderEpsilon by remember(tab.bondEpsilon) { mutableStateOf(tab.bondEpsilon.toFloat().coerceIn(0.1f, 0.6f)) }
             Slider(
-                value = tab.bondEpsilon.toFloat().coerceIn(0.1f, 0.6f),
-                onValueChange = { v ->
-                    tab.bondEpsilon = v.toDouble()
+                value = sliderEpsilon,
+                onValueChange = { v -> sliderEpsilon = v },
+                onValueChangeFinished = {
+                    tab.bondEpsilon = sliderEpsilon.toDouble()
+                    epsilonText = "%.2f".format(tab.bondEpsilon)
                     rebuildAsync(tab.lastRadiusSource, tab.bondEpsilon, skipConfirm = true)
                 },
                 valueRange = 0.1f..0.6f,
@@ -630,7 +641,14 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
         }
     }
     if (loading) {
-        BasicAlertDialog(onDismissRequest = {}) {
+        BasicAlertDialog(onDismissRequest = {
+            // Per v0.6.3: back button cancels computation and reverts epsilon.
+            rebuildJob?.cancel()
+            loading = false
+            rebuildJob = null
+            previousEpsilon?.let { tab.bondEpsilon = it }
+            previousEpsilon = null
+        }) {
             Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
                 Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     CircularProgressIndicator()
@@ -1056,8 +1074,8 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
             val gray = Color(0xFF747479).copy(alpha = opacity)
             val theta = appearance.lightAzimuth / 180f * PI.toFloat()
             val phi = appearance.lightElevation / 180f * PI.toFloat()
-            val sinPhi = sin(phi)
-            val lightOffset = radius * .95f * sinPhi
+            val cosPhi = cos(phi)
+            val lightOffset = radius * .95f * cosPhi
             val highlight = Offset(center.x + cos(theta) * lightOffset, center.y - sin(theta) * lightOffset)
             drawCircle(gray, radius, center)
             if (appearance.reflectionEnabled && opacity > 0.01f) {
@@ -1091,7 +1109,9 @@ private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier 
             val chartTop = size.height * 0.10f
             val chartBottom = size.height * 0.43f
             val atomY = size.height * 0.73f
-            val guideColor = Color.White.copy(alpha = 0.48f)
+            val isLight = (0.299f * bgCompose.red + 0.587f * bgCompose.green + 0.114f * bgCompose.blue) > 0.5f
+            val lineColor = if (isLight) Color.Black else Color.White
+            val guideColor = lineColor.copy(alpha = 0.48f)
             val dash = PathEffect.dashPathEffect(floatArrayOf(5f, 4f))
             drawLine(guideColor, Offset(xStart, chartTop), Offset(xEnd, chartTop), 1.2f, pathEffect = dash)
             drawLine(guideColor, Offset(xStart, chartBottom), Offset(xEnd, chartBottom), 1.2f, pathEffect = dash)
@@ -1108,18 +1128,18 @@ private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier 
                     if (i == 0) moveTo(x, y) else lineTo(x, y)
                 }
             }
-            drawPath(curve, Color.White, style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
+            drawPath(curve, lineColor, style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
 
             depths.forEachIndexed { index, depth ->
                 val fog = depthCueFog(depth, near, far)
                 val y = chartTop + fog * (chartBottom - chartTop)
-                drawCircle(Color.White, 2.4f, Offset(xPositions[index], y))
+                drawCircle(lineColor, 2.4f, Offset(xPositions[index], y))
                 drawPreviewSphere(Offset(xPositions[index], atomY), radius, appearance, fog, bgCompose)
             }
 
             val nc = drawContext.canvas.nativeCanvas
             val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                color = 0xCCFFFFFF.toInt()
+                color = if (isLight) 0xCC000000.toInt() else 0xCCFFFFFF.toInt()
                 textSize = radius * 0.72f
             }
             // Opacity axis labels (1 = top/full opacity, 0 = bottom/transparent).
@@ -1147,8 +1167,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
     if (appearance.reflectionEnabled) {
         val theta = appearance.lightAzimuth / 180f * PI.toFloat()
         val phi = appearance.lightElevation / 180f * PI.toFloat()
-        val sinPhi = sin(phi)
-        val highlight = Offset(c.x + cos(theta) * sinPhi * r * .95f, c.y - sin(theta) * sinPhi * r * .95f)
+        val cosPhi = cos(phi)
+        val highlight = Offset(c.x + cos(theta) * cosPhi * r * .95f, c.y - sin(theta) * cosPhi * r * .95f)
         val highlightBrush = Brush.radialGradient(
             listOf(Color.White.copy(alpha = appearance.lightIntensity.coerceIn(.05f, 1f) * (1f - fog)), Color.Transparent),
             center = highlight,

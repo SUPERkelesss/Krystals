@@ -4,21 +4,42 @@ material {
     blending : transparent,
     doubleSided : true,
     transparency : twoPassesTwoSides,
+    variables : [ worldNormal ],
     parameters : [
         { type : float4, name : baseColor },
         { type : float3, name : backgroundColor },
         { type : float2, name : depthRange },
-        { type : float, name : depthCueEnabled }
+        { type : float, name : depthCueEnabled },
+        { type : float, name : reflectionEnabled },
+        { type : float3, name : lightDirection },
+        { type : float, name : highlightIntensity },
+        { type : float, name : highlightRadius }
     ]
 }
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        vec4 color = materialParams.baseColor;
+        vec3 worldN = normalize(variable_worldNormal.xyz);
+        vec3 viewN = normalize(mat3(getViewFromWorldMatrix()) * worldN);
+        float edge = clamp(length(viewN.xy), 0.0, 1.0);
+        float edgeShade = 1.0 - materialParams.reflectionEnabled * edge * 0.15;
+        vec3 L = normalize(materialParams.lightDirection);
+        float NdotL = max(dot(viewN, L), 0.0);
+        float ambient = clamp(0.8 - 0.4 * materialParams.highlightIntensity, 0.4, 0.8);
+        float diffuseShade = ambient + (1.0 - ambient) * NdotL;
+        vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);
+        float shininess = max(2.0 / (materialParams.highlightRadius + 0.01), 2.0);
+        float specular = materialParams.reflectionEnabled * materialParams.highlightIntensity * pow(NdotL, shininess);
+        color.rgb = mix(color.rgb, vec3(1.0), specular * 0.6);
         float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
         float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
         color.rgb = mix(color.rgb, materialParams.backgroundColor, fog);
         material.baseColor = color;
+    }
+}
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.worldNormal = vec4(normalize(getWorldFromModelNormalMatrix() * getPosition().xyz), 0.0);
     }
 }

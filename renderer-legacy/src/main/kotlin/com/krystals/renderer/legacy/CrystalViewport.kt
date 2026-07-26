@@ -463,7 +463,7 @@ private fun LegacyCanvasViewport(
 
         val projected = snapshot.atoms.map { atom ->
             val v = rotated.getValue(atom)
-            val radius = (RenderPalette.defaultRadius(atom.species.symbol).toFloat() * scale).coerceIn(4.5f, 42f)
+            val radius = (RenderPalette.defaultRadius(atom.species.symbol).toFloat() * scale).coerceIn(9f, 84f)
             ProjectedAtom(atom, project(v), legacyCameraDepth(v), radius)
         }
         val byId = projected.associateBy { it.atom.id }
@@ -530,7 +530,7 @@ private fun LegacyCanvasViewport(
                     // Bond-line rendering: an external-shell bond only draws when its rule opts in via
                     // extendAcrossCell. Boundary-image bonds are drawn by default.
                     if (externalBond && !bond.rule.extendAcrossCell) return@forEach
-                    val width = (appearance.bondRadius * scale * 0.65f).coerceIn(1.5f, 16f)
+                    val width = (appearance.bondRadius * scale * 0.65f).coerceIn(3f, 32f)
                     addAll(splitBondRenderables(a, b, width))
                 }
             }
@@ -1075,7 +1075,7 @@ private fun DrawScope.drawAxes(
     }
     val colors = listOf(Color(0xFFE57373), Color(0xFF81C784), Color(0xFF64B5F6))
     val origin = Offset(size.width * 0.08f + 28f, size.height * 0.08f + 40f)
-    val arrowLen = 150f
+    val arrowLen = 75f
     val headLenBase = 14f
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         strokeWidth = 5f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
@@ -1083,8 +1083,11 @@ private fun DrawScope.drawAxes(
     val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.argb(122, 0, 0, 0); strokeWidth = 7f; strokeCap = Paint.Cap.ROUND
     }
-    directions.forEachIndexed { index, dir ->
+    val rotatedDirs = directions.mapIndexed { index, dir ->
         val rotated = (controller.rotation * dir).normalized()
+        Triple(index, dir, rotated)
+    }
+    fun drawArrow(index: Int, rotated: Vec3) {
         // Per v0.6.3: arrow length varies with projected direction (3D perspective).
         val dx = rotated.x.toFloat()
         val dy = -rotated.y.toFloat()
@@ -1112,8 +1115,12 @@ private fun DrawScope.drawAxes(
         paint.color = color.toArgb()
         drawContext.canvas.nativeCanvas.drawText(labels[index], tip.x + 4f, tip.y - 4f, paint)
     }
+    // Draw back arrows (pointing away from viewer) first.
+    rotatedDirs.filter { it.third.z <= 0.0 }.forEach { (index, _, rotated) ->
+        drawArrow(index, rotated)
+    }
     // Center hub with radial gradient (matching filament overlay).
-    val hubRadius = 8f
+    val hubRadius = 12f
     val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
     val highlightX = (origin.x + light.x * (-hubRadius * 0.375)).toFloat()
     val highlightY = (origin.y + light.y * (-hubRadius * 0.375)).toFloat()
@@ -1127,6 +1134,10 @@ private fun DrawScope.drawAxes(
         hubRadius,
         origin,
     )
+    // Draw front arrows (pointing toward viewer) on top of the sphere.
+    rotatedDirs.filter { it.third.z > 0.0 }.forEach { (index, _, rotated) ->
+        drawArrow(index, rotated)
+    }
 }
 
 private fun DrawScope.drawCellFrames(

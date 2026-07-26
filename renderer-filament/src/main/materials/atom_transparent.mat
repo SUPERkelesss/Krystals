@@ -29,7 +29,7 @@ fragment {
         // Per v0.6.3: use view-space normals for lighting (see atom_opaque.mat).
         vec3 L = normalize(materialParams.lightDirection);
         float NdotL = max(dot(viewN, L), 0.0);
-        float ambient = 0.32;
+        float ambient = clamp(0.8 - 0.4 * materialParams.highlightIntensity, 0.4, 0.8);
         float diffuseShade = ambient + (1.0 - ambient) * NdotL;
         vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);
         float shininess = max(2.0 / (materialParams.highlightRadius + 0.01), 2.0);

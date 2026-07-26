@@ -269,7 +269,7 @@ object CrystalImageExporter {
                 x,
                 y,
                 legacyCameraDepth(rotated),
-                (RenderPalette.defaultRadius(atom.species.symbol).toFloat() * scale).coerceIn(4.5f, 42f),
+                (RenderPalette.defaultRadius(atom.species.symbol).toFloat() * scale).coerceIn(9f, 84f),
                 atom.occupancy,
                 atom.fractionalCoordinate.toVec3(),
                 atom.cartesianCoordinate.toVec3(),
@@ -312,7 +312,7 @@ object CrystalImageExporter {
                     // Bond-line rendering: an external-shell bond draws only when its rule opts in via
                     // extendAcrossCell. Boundary-image bonds are drawn by default.
                     if (externalBond && !bond.rule.extendAcrossCell) return@forEach
-                    val width = (appearance.bondRadius * scale * 0.65f).coerceIn(1.5f, 16f)
+                    val width = (appearance.bondRadius * scale * 0.65f).coerceIn(3f, 32f)
                     addAll(splitBondPrimitives(a, b, width))
                 }
             }
@@ -695,7 +695,7 @@ object CrystalImageExporter {
         }
         val colors = listOf(0xFFE57373.toInt(), 0xFF81C784.toInt(), 0xFF64B5F6.toInt())
         val origin = PointF(width * 0.08f + 28f, height * 0.08f + 40f)
-        val arrowLen = 150f
+        val arrowLen = 75f
         val halfWidth = 3f
         val headLenBase = 14f
         val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)
@@ -704,8 +704,11 @@ object CrystalImageExporter {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             strokeWidth = 4f; strokeCap = Paint.Cap.ROUND; textSize = 30f; setShadowLayer(5f, 1f, 1f, Color.BLACK)
         }
-        directions.forEachIndexed { index, dir ->
+        val rotatedDirs = directions.mapIndexed { index, dir ->
             val rotated = (controller.rotation * dir).normalized()
+            Triple(index, dir, rotated)
+        }
+        fun drawArrow(index: Int, rotated: Vec3) {
             // Per v0.6.3: arrow length varies with projected direction (3D perspective).
             val dx = rotated.x.toFloat()
             val dy = -rotated.y.toFloat()
@@ -755,7 +758,11 @@ object CrystalImageExporter {
             paint.color = Color.WHITE
             canvas.drawText(labels[index], tipX + unitX * 8f - 6f, tipY + unitY * 8f + 10f, paint)
         }
-        val hubRadius = 7f
+        // Draw back arrows (pointing away from viewer) first.
+        rotatedDirs.filter { it.third.z <= 0.0 }.forEach { (index, _, rotated) ->
+            drawArrow(index, rotated)
+        }
+        val hubRadius = 12f
         val hubBase = 0xFF77777D.toInt()
         paint.style = Paint.Style.FILL
         paint.shader = RadialGradient(
@@ -795,6 +802,10 @@ object CrystalImageExporter {
         paint.color = Color.argb((0.28f * 255f).toInt(), 0, 0, 0)
         canvas.drawCircle(origin.x, origin.y, hubRadius, paint)
         paint.style = Paint.Style.FILL
+        // Draw front arrows (pointing toward viewer) on top of the sphere.
+        rotatedDirs.filter { it.third.z > 0.0 }.forEach { (index, _, rotated) ->
+            drawArrow(index, rotated)
+        }
     }
 
     private fun drawFrames(canvas: Canvas, snapshot: BondNetwork, appearance: ViewerAppearance, center: Vec3, controller: ViewerController, scale: Float, width: Int, height: Int) {

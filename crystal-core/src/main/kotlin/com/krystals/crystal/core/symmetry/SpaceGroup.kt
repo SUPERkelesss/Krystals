@@ -21,8 +21,10 @@ object SpaceGroupCatalog {
     }
 
     fun resolve(symbol: String, number: Int? = null): SpaceGroup {
+        // Per v0.6.3: normalize symbol by removing spaces (CIF files often write "F m -3 m").
+        val normalized = symbol.replace(" ", "")
         val catalog = number?.let { all.getOrNull(it - 1) } ?: find(symbol)
-        return if (catalog == null) SpaceGroup(symbol, number) else catalog.copy(symbol = symbol, number = number ?: catalog.number)
+        return if (catalog == null) SpaceGroup(normalized, number) else catalog.copy(symbol = normalized, number = number ?: catalog.number)
     }
 
     fun operations(name: String): List<SymmetryOperation> {

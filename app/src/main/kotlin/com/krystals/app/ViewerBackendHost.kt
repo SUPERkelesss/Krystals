@@ -242,18 +242,21 @@ private fun FilamentLegacyStyleOverlay(
             val labels = if (scene.environment.axes.mode == AxisMode.ABC) listOf("a", "b", "c") else listOf("X", "Y", "Z")
             val colors = listOf(Color(0xFFE57373), Color(0xFF81C784), Color(0xFF64B5F6))
             val origin = Offset(size.width * 0.08f + 28f, size.height * 0.08f + 40f)
-            val arrowLength = 150f
+            val arrowLength = 75f
             val headLengthBase = 14f
             val light = scene.environment.worldLight
             val theta = light.azimuthDegrees / 180f * PI.toFloat()
             val phi = light.elevationDegrees / 180f * PI.toFloat()
-            val lightOffset = Offset(cos(theta) * sin(phi), -sin(theta) * sin(phi))
+            val lightOffset = Offset(cos(theta) * cos(phi), -sin(theta) * cos(phi))
             val axisPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 textSize = 30f
                 setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
             }
-            directions.forEachIndexed { index, axis ->
+            val rotatedDirs = directions.mapIndexed { index, axis ->
                 val direction = (camera.rotation * axis).normalized()
+                Triple(index, axis, direction)
+            }
+            fun drawArrow(index: Int, axis: com.krystals.crystal.core.math.Vec3, direction: com.krystals.crystal.core.math.Vec3) {
                 val dx = direction.x.toFloat()
                 val dy = -direction.y.toFloat()
                 // Per v0.6.3: arrow length varies with projected direction (3D perspective).
@@ -309,16 +312,25 @@ private fun FilamentLegacyStyleOverlay(
                 axisPaint.color = color.toArgb()
                 drawContext.canvas.nativeCanvas.drawText(labels[index], end.x + 4f, end.y - 4f, axisPaint)
             }
-            drawCircle(Color.Black.copy(alpha = 0.5f), 9f, origin + Offset(1f, 1f))
+            // Draw back arrows (pointing away from viewer) first.
+            rotatedDirs.filter { it.third.z <= 0.0 }.forEach { (index, axis, direction) ->
+                drawArrow(index, axis, direction)
+            }
+            // Center sphere (radius 12f).
+            drawCircle(Color.Black.copy(alpha = 0.5f), 13f, origin + Offset(1f, 1f))
             drawCircle(
                 Brush.radialGradient(
                     listOf(Color(0xFFE0E0E0), Color(0xFF68686F)),
-                    center = origin + lightOffset * 3f,
-                    radius = 8f,
+                    center = origin + lightOffset * 4.5f,
+                    radius = 12f,
                 ),
-                8f,
+                12f,
                 origin,
             )
+            // Draw front arrows (pointing toward viewer) on top of the sphere.
+            rotatedDirs.filter { it.third.z > 0.0 }.forEach { (index, axis, direction) ->
+                drawArrow(index, axis, direction)
+            }
         }
 
         // P8: 2D selection rings (replaces 3D highlight spheres from GpuInstanceManager).
