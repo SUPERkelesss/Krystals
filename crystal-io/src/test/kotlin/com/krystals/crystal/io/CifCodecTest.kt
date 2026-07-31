@@ -115,4 +115,69 @@ class CifCodecTest {
         val source = simple.replace("'P -1'", "'Unknown group'")
         assertEquals("Unknown group", CifCodec.parseStructure(source).structure.spaceGroup.symbol)
     }
+
+    // ── Per v0.8.0: Materials Project returns conventional standard cells. ───────
+
+    @Test fun mpConventionalFeCellWithIdentityOpsIsNotConverted() {
+        // Simulates the CIF MaterialsProject.buildCif writes for a conventional bcc Fe cell.
+        val mpFe = """
+            data_Fe
+            _symmetry_space_group_name_H-M   Im-3m
+            _cell_length_a   2.86303550
+            _cell_length_b   2.86303550
+            _cell_length_c   2.86303550
+            _cell_angle_alpha   90.00000000
+            _cell_angle_beta   90.00000000
+            _cell_angle_gamma   90.00000000
+            _symmetry_Int_Tables_number   229
+            loop_
+             _symmetry_equiv_pos_site_id
+             _symmetry_equiv_pos_as_xyz
+              1  'x, y, z'
+            loop_
+             _atom_site_label
+             _atom_site_type_symbol
+             _atom_site_fract_x
+             _atom_site_fract_y
+             _atom_site_fract_z
+             _atom_site_occupancy
+             Fe1 Fe 0.00000000 0.00000000 0.00000000 1
+        """.trimIndent()
+        val parsed = CifCodec.parseStructure(mpFe)
+        assertEquals(2.86303550, parsed.structure.lattice.a, 1e-6, "lattice must stay conventional")
+        assertEquals(1, parsed.structure.sites.size, "ASU site must not be converted")
+        assertTrue(parsed.structure.isConventional)
+    }
+
+    @Test fun mpConventionalI2CellWithIdentityOpsIsNotConverted() {
+        // Simulates the CIF MaterialsProject.buildCif writes for a conventional Cmce I2 cell.
+        val mpI = """
+            data_I
+            _symmetry_space_group_name_H-M   Cmce
+            _cell_length_a   7.67919583
+            _cell_length_b   4.62909281
+            _cell_length_c   9.79618588
+            _cell_angle_alpha   90.00000000
+            _cell_angle_beta   90.00000000
+            _cell_angle_gamma   90.00000000
+            _symmetry_Int_Tables_number   64
+            loop_
+             _symmetry_equiv_pos_site_id
+             _symmetry_equiv_pos_as_xyz
+              1  'x, y, z'
+            loop_
+             _atom_site_label
+             _atom_site_type_symbol
+             _atom_site_fract_x
+             _atom_site_fract_y
+             _atom_site_fract_z
+             _atom_site_occupancy
+             I1 I 0.00000000 0.15908468 0.62002706 1
+        """.trimIndent()
+        val parsed = CifCodec.parseStructure(mpI)
+        assertEquals(7.67919583, parsed.structure.lattice.a, 1e-6, "lattice a must stay conventional")
+        assertEquals(4.62909281, parsed.structure.lattice.b, 1e-6, "lattice b must stay conventional")
+        assertEquals(1, parsed.structure.sites.size, "ASU site must not be converted")
+        assertTrue(parsed.structure.isConventional)
+    }
 }

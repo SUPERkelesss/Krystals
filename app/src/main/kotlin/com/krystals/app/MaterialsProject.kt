@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.ParsedStructure
+import com.krystals.crystal.analysis.editing.CrystalEditor
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
 import kotlinx.coroutines.Dispatchers
@@ -155,31 +156,51 @@ object MaterialsProject {
     }
 
     /**
-     * Per v0.8.0: Download uses only the new API. The primitive cell from the new API is
-     * converted to the conventional cell via primaryToConvention before being returned.
+     * Per v0.8.0: Download uses the new API. The next-gen `structure` field is the
+     * conventional standard cell, written here with identity symmetry operations so the
+     * CIF is self-consistent. After parsing, if the cell is already conventional (cubic
+     * metric for Im-3m, orthorhombic metric for Cmce, etc.), restore the full space-group
+     * operations so the saved CIF matches the original MP conventional cell. Otherwise
+     * CifCodec will convert a genuine primitive cell to conventional as usual.
      */
     suspend fun downloadCif(context: Context, materialId: String, target: File): Result<ParsedStructure> = withContext(Dispatchers.IO) {
         val key = getKey(context) ?: return@withContext Result.failure(IllegalStateException("API key not set"))
         runCatching {
-            // Fetch the primitive structure + real symmetry from the new API.
+            // Fetch the conventional structure + real symmetry from the new API.
             val item = fetchNextgenStructure(key, materialId)
             val symmetry = item.optJSONObject("symmetry")
             val realNumber = symmetry?.optInt("number", 0)?.takeIf { it > 0 }
             val realSymbol = symmetry?.optString("symbol")?.takeIf { it.isNotBlank() }
 
             // Build a CIF with the real space group and identity symmetry operations.
-            // The primitive cell atoms are all listed explicitly, so no expansion is needed.
+            // The cell atoms are all listed explicitly, so no expansion is needed at parse time.
             val cif = buildCif(materialId, item, realSymbol, realNumber)
             target.parentFile?.mkdirs()
             target.writeText(cif, Charsets.UTF_8)
-val parsed = CifCodec.parseStructure(cif)
-Log.d("MP", "downloadCif parsed (primitive): $materialId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroup.symbol}")
-// Per v0.6.5: Conversion from primitive to conventional is now handled universally in CifCodec.
-parsed
-}
+            val parsed = CifCodec.parseStructure(cif)
+
+            // Per v0.8.0: Avoid double-conventionalization. If CifCodec recognized the cell
+            // as already conventional (metric fallback), restore full symmetry operations so
+            // the saved file matches the MP conventional CIF. If it is a genuine primitive
+            // cell, CifCodec has already converted it and we leave its symmetry ops as-is.
+            val finalStructure = if (CrystalEditor.isConventionalCell(parsed.structure)) {
+                parsed.structure.copy(
+                    symmetryOperations = SpaceGroupCatalog.operations(parsed.structure.spaceGroup.symbol),
+                    isConventional = true,
+                )
+            } else {
+                parsed.structure
+            }
+            Log.d(
+                "MP",
+                "downloadCif ok: $materialId -> ${finalStructure.sites.size} sites, " +
+                    "sg=${finalStructure.spaceGroup.symbol}, conventional=${finalStructure.isConventional}",
+            )
+            parsed.copy(structure = finalStructure)
+        }
     }
 
-    /** Fetch a next-gen summary item including the primitive `structure` and `symmetry`. Throws on HTTP/parse error. */
+    /** Fetch a next-gen summary item including the conventional `structure` and `symmetry`. Throws on HTTP/parse error. */
     private fun fetchNextgenStructure(key: String, materialId: String): JSONObject {
         val url = summaryUrl("material_ids", materialId, "_fields", "material_id,structure,symmetry")
         client.newCall(apiRequest(key, url)).execute().use { response ->
@@ -197,9 +218,10 @@ parsed
 
     /**
      * Build a self-contained CIF from a summary-endpoint material object.
-     * Per v0.8.0: writes the real space group (not P1) so primaryToConvention can detect
-     * the Bravais lattice type. Symmetry operations are set to identity because the primitive
-     * cell has all atoms listed explicitly — no further expansion is wanted at this stage.
+     * Per v0.8.0: writes the real space group (not P1) so CifCodec can detect the Bravais
+     * lattice type. Symmetry operations are set to identity because the downloaded cell has
+     * all atoms listed explicitly — no expansion is wanted at this stage. downloadCif later
+     * restores full space-group operations when the cell is recognized as conventional.
      */
     private fun buildCif(materialId: String, item: JSONObject, realSymbol: String?, realNumber: Int?): String {
         val structure = item.optJSONObject("structure") ?: error("Material $materialId has no structure")
