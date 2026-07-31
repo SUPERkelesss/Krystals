@@ -535,6 +535,12 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         if (centering == BravaisLatticeData.CenteringType.PRIMITIVE) {
             return EditResult(structure, bondConfiguration)
         }
+        // Per v0.8.0: guard against double-conventionalization. If the structure is already
+        // conventional (centering ops present or lattice metric matches the crystal system),
+        // leave it unchanged rather than applying the prim→conv matrix again.
+        if (isConventionalCell(structure)) {
+            return EditResult(structure.copy(isConventional = true), bondConfiguration)
+        }
         val matrixRows = BravaisLatticeData.primitiveToConventionalMatrix(centering)
             ?: return EditResult(structure, bondConfiguration)
         // Per v0.7.1: fromRowsDouble stores the matrix as-is (no transpose); the lattice

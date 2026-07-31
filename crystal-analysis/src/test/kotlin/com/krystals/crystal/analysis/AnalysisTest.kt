@@ -335,4 +335,40 @@ class AnalysisTest {
             listOf(Site("O", "O1", Species("O"), FractionalCoordinate(0.2, 0.3, 0.4))),
         ),
     )
+
+    // ── Per v0.8.0: idempotency guard for already-conventional cells ───────────
+
+    @Test fun convertToConventionalIsIdempotentForConventionalCells() {
+        // Fe from MP: conventional Im-3m cell with the full operation set.
+        val conventional = centeredStructure(
+            "fe", "Im-3m", 229, Lattice(2.86303550, 2.86303550, 2.86303550, 90.0, 90.0, 90.0),
+            listOf(Site("Fe", "Fe1", Species("Fe"), FractionalCoordinate.ZERO)),
+        )
+        val first = CrystalEditor.convertToConventional(conventional, BondConfiguration()).structure
+        assertEquals(1, first.sites.size, "conventional bcc ASU is one site")
+        assertEquals(2.86303550, first.lattice.a, 1e-6, "lattice must not be rescaled")
+        assertTrue(first.isConventional)
+
+        val second = CrystalEditor.convertToConventional(first, BondConfiguration()).structure
+        assertEquals(first.sites.size, second.sites.size, "second conversion must not add sites")
+        assertEquals(first.lattice.a, second.lattice.a, 1e-6, "second conversion must not rescale lattice")
+        assertSameExpandedAtoms(conventional, second)
+    }
+
+    @Test fun convertToConventionalIsIdempotentForCCenteredConventionalCell() {
+        // I2 from MP: conventional Cmce cell with one asymmetric site.
+        val conventional = centeredStructure(
+            "i2", "Cmce", 64, Lattice(7.67919583, 4.62909281, 9.79618588, 90.0, 90.0, 90.0),
+            listOf(Site("I", "I1", Species("I"), FractionalCoordinate(0.0, 0.15908468, 0.62002706))),
+        )
+        val first = CrystalEditor.convertToConventional(conventional, BondConfiguration()).structure
+        assertEquals(1, first.sites.size, "conventional Cmce ASU is one site")
+        assertEquals(7.67919583, first.lattice.a, 1e-6, "lattice a must not be rescaled")
+        assertEquals(4.62909281, first.lattice.b, 1e-6, "lattice b must not be rescaled")
+        assertTrue(first.isConventional)
+
+        val second = CrystalEditor.convertToConventional(first, BondConfiguration()).structure
+        assertEquals(first.sites.size, second.sites.size)
+        assertSameExpandedAtoms(conventional, second)
+    }
 }
