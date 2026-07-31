@@ -41,7 +41,7 @@ class SampleCifTest {
     }
 
     @Test
-    fun customBondRulesSurviveCifWrite() {
+    fun customBondRulesAreNotReadFromCif() {
         val parsed = CifCodec.newDocument().let { base ->
             base.copy(structure = base.structure.copy(sites = listOf(
                 Site("c1", "C1", Species("C"), FractionalCoordinate.ZERO),
@@ -50,6 +50,8 @@ class SampleCifTest {
         val site = parsed.structure.sites.single()
         val configuration = BondConfiguration(listOf(BondRule(site.id, site.id, 0.8, 1.8)))
         val text = CifCodec.write(parsed, parsed.structure, configuration, parsed.displayMetadata)
-        assertEquals(1, CifCodec.parseStructure(text).bondConfiguration.rules.size)
+        // Per v0.7.1: bond rules are written to CIF for external tools but intentionally
+        // not read back, to prevent stale or incorrect rules from being loaded.
+        assertEquals(0, CifCodec.parseStructure(text).bondConfiguration.rules.size)
     }
 }

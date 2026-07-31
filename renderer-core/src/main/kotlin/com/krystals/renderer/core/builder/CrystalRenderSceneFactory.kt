@@ -16,6 +16,7 @@ object CrystalRenderSceneFactory {
         hiddenBondKeys: Set<String> = emptySet(),
         showBonds: Boolean = true,
         polyhedronSiteIds: Set<String> = emptySet(),
+        structuralExpansion: Boolean = false,
     ): RenderScene {
         val atoms = analysis.atoms
         val atomMaterials = atoms.associate { atom ->
@@ -61,6 +62,7 @@ object CrystalRenderSceneFactory {
                 bondRadius = appearance.bondRadius.toDouble(),
                 bondColorMode = appearance.bondColorMode,
                 environment = appearance.toEnvironment(),
+                structuralExpansion = structuralExpansion,
             ),
         )
     }

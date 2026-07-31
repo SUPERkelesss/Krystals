@@ -22,6 +22,8 @@ data class CrystalInfo(
     val volume: Double,
     val density: Double?,
     val composition: String,
+    val cellMass: Double,
+    val reducedFormula: String,
 )
 
 /** Chemistry-only access to the static data table. Display/color queries live in renderer. */

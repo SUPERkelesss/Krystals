@@ -3,13 +3,14 @@ material {
     shadingModel : unlit,
     blending : transparent,
     doubleSided : true,
-    variables : [ worldNormal ],
+    requires : [ tangents ],
+    variables : [ customNormal ],
     parameters : [ { type : float4, name : baseColor } ]
 }
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        vec3 viewNormal = normalize(mat3(getViewFromWorldMatrix()) * variable_worldNormal.xyz);
+        vec3 viewNormal = normalize(mat3(getViewFromWorldMatrix()) * variable_customNormal.xyz);
         // Draw a wide camera-facing rim ring around the sphere silhouette.
         float rim = 1.0 - abs(viewNormal.z);
         float inner = smoothstep(0.20, 0.40, rim);
@@ -21,6 +22,12 @@ fragment {
 }
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
-        material.worldNormal = vec4(normalize(getWorldFromModelNormalMatrix() * getPosition().xyz), 0.0);
+        vec4 q = mesh_tangents;
+        vec3 n = vec3(
+            2.0 * (q.x * q.z + q.w * q.y),
+            2.0 * (q.y * q.z - q.w * q.x),
+            1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+        );
+        material.customNormal = vec4(normalize(getWorldFromModelNormalMatrix() * n), 0.0);
     }
 }

@@ -11,6 +11,7 @@ object LegacyRenderSceneAdapter {
         appearance: ViewerAppearance,
         renderConfiguration: RenderConfiguration,
         visibility: ViewerVisibility,
+        structuralExpansion: Boolean = false,
     ): RenderScene {
         return CrystalRenderSceneFactory.build(
             analysis = analysis,
@@ -20,6 +21,7 @@ object LegacyRenderSceneAdapter {
             hiddenBondKeys = visibility.hiddenBondPairs,
             showBonds = visibility.showBonds,
             polyhedronSiteIds = visibility.polyhedronSites,
+            structuralExpansion = structuralExpansion,
         )
     }
 

@@ -1593,6 +1593,7 @@ object PeriodicTableData {
     "Gd/3" to listOf(Triple(6, false, 1.078f), Triple(7, false, 1.14f), Triple(8, false, 1.193f), Triple(9, false, 1.247f)),
     "Ge/2" to listOf(Triple(6, false, 0.87f)),
     "Ge/4" to listOf(Triple(4, false, 0.53f), Triple(6, false, 0.67f)),
+    "H/1" to listOf(Triple(1, false, 0.15f)),  // CR=0.15 → IR=0.01 (bare proton approximation)
     "Hf/4" to listOf(Triple(4, false, 0.72f), Triple(6, false, 0.85f), Triple(7, false, 0.9f), Triple(8, false, 0.97f)),
     "Hg/1" to listOf(Triple(3, false, 1.11f), Triple(6, false, 1.33f)),
     "Hg/2" to listOf(Triple(2, false, 0.83f), Triple(4, false, 1.1f), Triple(6, false, 1.16f), Triple(8, false, 1.28f)),

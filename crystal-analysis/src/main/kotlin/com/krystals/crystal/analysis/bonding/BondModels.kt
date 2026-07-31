@@ -10,13 +10,26 @@ data class BondRule(
     val minAngstrom: Double,
     val maxAngstrom: Double,
     val source: BondRuleSource = BondRuleSource.CUSTOM,
-    val extendAcrossCell: Boolean = false,
+    val extendAtoB: Boolean = false, // Per v0.6.5: show cross-cell bonds where siteA atom is inside, siteB atom is external
+    val extendBtoA: Boolean = false, // Per v0.6.5: show cross-cell bonds where siteB atom is inside, siteA atom is external
 ) {
     init {
         require(minAngstrom >= 0.0 && maxAngstrom >= minAngstrom)
     }
 
     val key: String get() = listOf(siteA, siteB).sorted().joinToString("\u0000")
+
+    /** True if this rule allows extending across the cell boundary when the atom of [insideSiteId]
+     *  is inside the unit cell and the other atom is an external shell. */
+    fun shouldExtendAcrossCell(insideSiteId: String, outsideAtomIsExternal: Boolean): Boolean {
+        if (!outsideAtomIsExternal) return true
+        return when {
+            siteA == siteB -> extendAtoB || extendBtoA
+            insideSiteId == siteA -> extendAtoB
+            insideSiteId == siteB -> extendBtoA
+            else -> false
+        }
+    }
 }
 
 data class Bond(

@@ -32,6 +32,7 @@ data class SceneBuildOptions(
     val bondRadius: Double = 0.15,
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val environment: RenderEnvironment = RenderEnvironment(),
+    val structuralExpansion: Boolean = false,
 ) {
     init {
         require(defaultAtomRadius > 0.0) { "default atom radius must be positive" }
@@ -48,11 +49,20 @@ class CrystalSceneBuilder {
         require(analysis.structure == structure) { "analysis result belongs to a different crystal structure" }
 
         val atomById = analysis.atoms.associateBy { it.id }
+        // Per v0.6.5: only make an external-shell atom visible if the bond's directional extend
+        // flag allows it. Previously used `extendAtoB || extendBtoA` which incorrectly showed
+        // external atoms from the non-extended direction (e.g. B→A external A atoms when only
+        // extendAtoB was set, even though the B→A bond itself was hidden).
         val externallyVisible = analysis.bonds.asSequence()
-            .filter { it.rule.extendAcrossCell && it.rule.key !in options.hiddenBondKeys }
-            .mapNotNull { atomById[it.atomB] }
-            .filter { it.isExternalShell && it.siteId !in options.hiddenSiteIds }
-            .map { it.id }
+            .filter { it.rule.key !in options.hiddenBondKeys }
+            .mapNotNull { bond ->
+                val start = atomById[bond.atomA] ?: return@mapNotNull null
+                val end = atomById[bond.atomB] ?: return@mapNotNull null
+                if (end.isExternalShell &&
+                    bond.rule.shouldExtendAcrossCell(start.siteId, true) &&
+                    end.siteId !in options.hiddenSiteIds
+                ) end.id else null
+            }
             .toSet()
 
         fun atomVisible(atom: AtomImage): Boolean = when {
@@ -80,12 +90,12 @@ class CrystalSceneBuilder {
             )
         }
 
-        analysis.bonds.forEachIndexed { index, bond ->
+            analysis.bonds.forEachIndexed { index, bond ->
             val start = atomById[bond.atomA]
                 ?: error("bond ${bond.atomA}-${bond.atomB} references missing atom ${bond.atomA}")
             val end = atomById[bond.atomB]
                 ?: error("bond ${bond.atomA}-${bond.atomB} references missing atom ${bond.atomB}")
-            val externalAllowed = !end.isExternalShell || bond.rule.extendAcrossCell
+            val externalAllowed = !end.isExternalShell || bond.rule.shouldExtendAcrossCell(start.siteId, end.isExternalShell)
             objects += BondInstance(
                 id = "bond:${bond.atomA}:${bond.atomB}:${bond.offsetB.x}:${bond.offsetB.y}:${bond.offsetB.z}:$index",
                 bond = bond,
@@ -134,6 +144,7 @@ class CrystalSceneBuilder {
             expansion = analysis.expansion,
             objects = objects.toList(),
             environment = options.environment,
+            structuralExpansion = options.structuralExpansion,
         )
     }
 

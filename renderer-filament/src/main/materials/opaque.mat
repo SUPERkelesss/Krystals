@@ -2,7 +2,8 @@ material {
     name : KrystalsOpaque,
     shadingModel : unlit,
     blending : opaque,
-    variables : [ worldNormal ],
+    requires : [ tangents ],
+    variables : [ customNormal ],
     parameters : [
         { type : float4, name : baseColor },
         { type : float3, name : backgroundColor },
@@ -17,7 +18,7 @@ material {
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        vec3 worldN = normalize(variable_worldNormal.xyz);
+        vec3 worldN = normalize(variable_customNormal.xyz);
         vec3 viewN = normalize(mat3(getViewFromWorldMatrix()) * worldN);
         float edge = clamp(length(viewN.xy), 0.0, 1.0);
         float edgeShade = 1.0 - materialParams.reflectionEnabled * edge * 0.15;
@@ -38,6 +39,12 @@ fragment {
 }
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
-        material.worldNormal = vec4(normalize(getWorldFromModelNormalMatrix() * getPosition().xyz), 0.0);
+        vec4 q = mesh_tangents;
+        vec3 n = vec3(
+            2.0 * (q.x * q.z + q.w * q.y),
+            2.0 * (q.y * q.z - q.w * q.x),
+            1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+        );
+        material.customNormal = vec4(normalize(getWorldFromModelNormalMatrix() * n), 0.0);
     }
 }

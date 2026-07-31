@@ -58,6 +58,8 @@ data class FrameStyle(
 data class AxisStyle(
     val visible: Boolean = true,
     val mode: AxisMode = AxisMode.ABC,
+    val offsetX: Float = 0.08f,
+    val offsetY: Float = 0.08f,
 )
 
 data class RenderEnvironment(
@@ -99,6 +101,8 @@ data class ViewerAppearance(
     val polyhedronReflectionEnabled: Boolean = true,
     val showAxes: Boolean = true,
     val axisMode: AxisMode = AxisMode.ABC,
+    val axisOffsetX: Float = 0.08f,
+    val axisOffsetY: Float = 0.08f,
     val depthOfFieldEnabled: Boolean = true,
     val dofNear: Float = -0.5f,
     val dofFar: Float = -4.5f,
@@ -117,7 +121,7 @@ data class ViewerAppearance(
         bonds = BondStyle(bondRadius, bondOpacity, bondColorMode, uniformBondArgb, bondReflectionEnabled),
         polyhedra = PolyhedronStyle(polyhedronEnabled, polyhedronOpacity, polyhedronReflectionEnabled),
         frame = FrameStyle(frameMode, lineStyle),
-        axes = AxisStyle(showAxes, axisMode),
+        axes = AxisStyle(showAxes, axisMode, axisOffsetX, axisOffsetY),
     )
 }
 

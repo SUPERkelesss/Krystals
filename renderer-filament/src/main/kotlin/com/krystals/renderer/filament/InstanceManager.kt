@@ -70,16 +70,16 @@ class InstanceManager {
                 endAtom?.takeIf { it.visible }?.radius,
             )
             val middle = (clippedStart + clippedEnd) * 0.5
-            val halves: List<Pair<String, Triple<Vec3, Vec3, Material>>> = listOf(
-                "${bond.id}:a" to Triple(clippedStart, middle, bond.startMaterial),
-                "${bond.id}:b" to Triple(middle, clippedEnd, bond.endMaterial),
-            )
-            halves.forEach { (id, half) ->
-                next[id] = InstanceRecord(
-                    id, pickId(bond.id), BatchKey(GeometryKind.CYLINDER, MaterialKey(half.third)),
-                    cylinderTransform(half.first, half.second, bond.radius),
+                val halves: List<Pair<String, Triple<Vec3, Vec3, Material>>> = listOf(
+                    "${bond.id}:a" to Triple(clippedStart, middle, bond.startMaterial),
+                    "${bond.id}:b" to Triple(middle, clippedEnd, bond.endMaterial),
                 )
-            }
+                halves.forEach { (id, half) ->
+                    next[id] = InstanceRecord(
+                        id, pickId(bond.id), BatchKey(GeometryKind.CYLINDER, MaterialKey(half.third)),
+                        cylinderTransform(half.first, half.second, bond.radius),
+                    )
+                }
         }
         scene.meshes.asSequence().filter(MeshInstance::visible).forEach { mesh ->
             next[mesh.id] = InstanceRecord(mesh.id, pickId(mesh.id), BatchKey(GeometryKind.POLYHEDRON, MaterialKey(mesh.material)), identity())

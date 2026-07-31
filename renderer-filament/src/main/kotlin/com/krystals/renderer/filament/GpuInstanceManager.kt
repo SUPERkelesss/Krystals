@@ -201,7 +201,7 @@ class GpuInstanceManager(
     }
 
     private fun addFrameAndAxes(snapshot: RenderScene) {
-        val edges = CellFrameGeometry.edges(snapshot.structure.lattice, snapshot.expansion, snapshot.environment.frame.mode)
+        val edges = CellFrameGeometry.edges(snapshot.structure.lattice, snapshot.expansion, snapshot.environment.frame.mode, snapshot.structuralExpansion)
         if (edges.isEmpty()) return
         // Scale the frame radius with the scene so its on-screen thickness stays comparable
         // to the legacy renderer's ~1.4 px stroke across different structures.

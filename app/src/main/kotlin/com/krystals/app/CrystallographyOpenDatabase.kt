@@ -44,10 +44,6 @@ object CrystallographyOpenDatabase {
     @Volatile
     private var selectedMirror: CodMirror = MIRRORS.first()
 
-    // Per v0.6.3: guard so the mirror is only tested once per process lifetime.
-    // On cold start this is false → test runs; subsequent COD page opens reuse the result.
-    private var mirrorTested = false
-
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -61,40 +57,39 @@ object CrystallographyOpenDatabase {
     enum class SearchMode { FORMULA, ELEMENT, TEXT }
 
     /**
-     * Per v0.6.3: test all mirrors concurrently; the FIRST successful response wins.
-     * Once a mirror is selected it persists for the process lifetime. Cold start (app
-     * reopen) resets everything so the test runs fresh on next COD search entry.
+     * Per v0.6.5: test all mirrors concurrently on EVERY call.
+     * The first successful response wins and is remembered for subsequent queries,
+     * but all mirrors are still pinged so that a previously-slow mirror can be
+     * re-selected if it becomes faster.
      */
     suspend fun testMirrors(): CodMirror? {
-        if (mirrorTested) return selectedMirror
+        val previous = selectedMirror
         return withContext(Dispatchers.IO) {
             coroutineScope {
-            val deferreds = MIRRORS.map { mirror ->
-                async {
-                    runCatching {
-                        val start = System.currentTimeMillis()
-                        val request = Request.Builder()
-                            .url(mirror.testUrl)
-                            .get()
-                            .header("User-Agent", "Krystals/${com.krystals.app.BuildConfig.VERSION_NAME}")
-                            .build()
-                        testClient.newCall(request).execute().use { response ->
-                            val elapsed = System.currentTimeMillis() - start
-                            Log.d("COD", "mirror ${mirror.testUrl} responded: HTTP ${response.code} in ${elapsed}ms")
-                            mirror
-                        }
-                    }.getOrNull()
+                val deferreds = MIRRORS.map { mirror ->
+                    async {
+                        runCatching {
+                            val start = System.currentTimeMillis()
+                            val request = Request.Builder()
+                                .url(mirror.testUrl)
+                                .get()
+                                .header("User-Agent", "Krystals/${com.krystals.app.BuildConfig.VERSION_NAME}")
+                                .build()
+                            testClient.newCall(request).execute().use { response ->
+                                val elapsed = System.currentTimeMillis() - start
+                                Log.d("COD", "mirror ${mirror.testUrl} responded: HTTP ${response.code} in ${elapsed}ms")
+                                mirror
+                            }
+                        }.getOrNull()
+                    }
                 }
+                // Wait for all to complete; pick the first non-null result.
+                // If none succeed, fall back to the previously selected mirror.
+                val all = deferreds.awaitAll()
+                all.firstOrNull { it != null } ?: previous
             }
-            kotlinx.coroutines.selects.select<CodMirror?> {
-                deferreds.forEach { d -> d.onAwait { it } }
-            }
-        }
-    }.also { winner ->
-            if (winner != null) {
-                selectedMirror = winner
-                mirrorTested = true
-            }
+        }.also { winner ->
+            selectedMirror = winner
         }
     }
 
@@ -110,28 +105,58 @@ object CrystallographyOpenDatabase {
         .build()
 
     /**
-     * COD's `formula` column stores Hill-ordered formulas space-separated (`- O2 Si -`), so the
-     * `formula` query parameter must also be Hill-ordered and space-separated. Per v0.3.3 we parse
-     * the input and reorder it to Hill convention rather than only inserting spaces:
-     *  - with carbon: C first, then H (if any), then the remaining elements alphabetically;
-     *  - without carbon: all elements alphabetically (H is not special).
-     * Stoichiometric counts follow their element (count 1 omitted), e.g. `SiO2` → `O2 Si`,
-     * `CH4O` → `C H4 O`, `CaCO3` → `C Ca O3`.
+     * Per v0.6.5: parse a chemical formula that may contain parentheses (), brackets [],
+     * and braces {} (possibly nested) into a flat list of (element, count) pairs.
+     * Examples: "Ca3(PO4)2" → Ca:3, P:2, O:8; "Mg2[SiO4]" → Mg:2, Si:1, O:4.
+     *
+     * Then convert to Hill-ordered, space-separated COD query string:
+     *  - with carbon: C first, then H, then remaining elements alphabetically;
+     *  - without carbon: all elements alphabetically.
      */
     private fun formulaToCodParam(formula: String): String {
-        val tokens = Regex("[A-Z][a-z]?\\d*").findAll(formula.trim())
-            .map { it.value }
-            .filter { it.isNotEmpty() }
-            .map { token ->
-                val match = Regex("([A-Z][a-z]?)(\\d*)").matchEntire(token) ?: return@map null
-                val element = match.groupValues[1]
-                val count = match.groupValues[2].ifBlank { "1" }
-                element to count
+        val s = formula.trim()
+        if (s.isEmpty()) return s
+
+        var pos = 0
+
+        fun parseCount(): Int {
+            val start = pos
+            while (pos < s.length && s[pos].isDigit()) pos++
+            return if (pos == start) 1 else s.substring(start, pos).toInt()
+        }
+
+        // Recursive descent: parseGroup returns a map of element→count for the
+        // current nesting level. When encountering an opening bracket, we recurse;
+        // on close, we read the optional multiplier and scale the inner map.
+        fun parseGroup(): Map<String, Int> {
+            val local = mutableMapOf<String, Int>()
+            while (pos < s.length) {
+                val c = s[pos]
+                when {
+                    c == '(' || c == '[' || c == '{' -> {
+                        pos++
+                        val inner = parseGroup()
+                        val mult = parseCount()
+                        inner.forEach { (e, n) -> local.merge(e, n * mult) { a, b -> a + b } }
+                    }
+                    c == ')' || c == ']' || c == '}' -> { pos++; return local }
+                    c.isUpperCase() -> {
+                        val elem = StringBuilder().append(s[pos++])
+                        while (pos < s.length && s[pos].isLowerCase()) elem.append(s[pos++])
+                        val count = parseCount()
+                        local.merge(elem.toString(), count) { a, b -> a + b }
+                    }
+                    c.isWhitespace() || c == '.' -> { pos++ }
+                    else -> { pos++ }
+                }
             }
-            .filterNotNull()
-            .filter { it.first.isNotEmpty() }
-            .toList()
-        if (tokens.isEmpty()) return formula.trim()
+            return local
+        }
+
+        val counts = parseGroup()
+        if (counts.isEmpty()) return s
+
+        val tokens = counts.entries.map { it.key to it.value }
         val hasCarbon = tokens.any { it.first == "C" }
         val sorted = if (hasCarbon) {
             val (carbons, rest) = tokens.partition { it.first == "C" }
@@ -141,9 +166,16 @@ object CrystallographyOpenDatabase {
             tokens.sortedBy { it.first }
         }
         return sorted.joinToString(" ") { (element, count) ->
-            if (count == "1") element else "$element$count"
+            if (count == 1) element else "$element$count"
         }
     }
+
+    /**
+     * Per v0.6.5: normalize a formula string for exact-match comparison.
+     * Strips spaces, dots, dashes and leading/trailing chars, then re-derives
+     * the Hill-ordered representation so user input can be compared to COD's formula column.
+     */
+    fun normalizeFormula(formula: String): String = formulaToCodParam(formula)
 
     /**
      * Split an element query like `Si O` or `Si,O` into individual element symbols for COD's
@@ -170,11 +202,6 @@ object CrystallographyOpenDatabase {
                 splitElements(trimmed).forEachIndexed { i, el ->
                     builder.addQueryParameter("el${i + 1}", el)
                 }
-                // Per v0.3.5: cap the number of distinct elements in returned structures via COD's
-                // `strictmin`/`strictmax` (SQL: `nel BETWEEN strictmin AND strictmax`). The previous
-                // code used `nel2`, but `nel1`/`nel2` are "NOT these elements" symbol slots, not a
-                // count, so `nel2=N` was silently ignored. strictmin/strictmax is always sent as a
-                // range so maxElements=N means "at most N elements".
                 val max = maxElements?.coerceIn(1, 8) ?: 8
                 builder.addQueryParameter("strictmin", "1")
                 builder.addQueryParameter("strictmax", max.toString())
@@ -189,10 +216,44 @@ object CrystallographyOpenDatabase {
                     Log.w("COD", "search failed: HTTP ${response.code} url=$url body=${body.take(300)}")
                     error("HTTP ${response.code}: ${body.take(200)}")
                 }
-                val results = parseCsv(body)
+                var results = parseCsv(body)
+                // Per v0.6.5: sort so exact matches come first.
+                results = sortExactMatchesFirst(results, trimmed, mode)
                 Log.d("COD", "search ok: ${results.size} items for '$trimmed' ($mode)")
                 results
             }
+        }
+    }
+
+    /**
+     * Per v0.6.5: sort results so exact matches are at the top.
+     * For FORMULA mode: compare normalized formula.
+     * For TEXT mode: compare mineral/chemical name (case-insensitive).
+     */
+    private fun sortExactMatchesFirst(results: List<CodSearchResult>, query: String, mode: SearchMode): List<CodSearchResult> {
+        val normalizedQuery = when (mode) {
+            SearchMode.FORMULA -> normalizeFormula(query).lowercase().replace(" ", "")
+            SearchMode.TEXT -> query.trim().lowercase()
+            else -> return results
+        }
+        val (exact, rest) = results.partition { result ->
+            when (mode) {
+                SearchMode.FORMULA -> normalizeFormula(result.formula).lowercase().replace(" ", "") == normalizedQuery
+                SearchMode.TEXT -> result.name.equals(query.trim(), ignoreCase = true)
+                else -> false
+            }
+        }
+        return exact + rest
+    }
+
+    /**
+     * Per v0.6.5: check if a result is an exact match for the query.
+     */
+    fun isExactMatch(result: CodSearchResult, query: String, mode: SearchMode): Boolean {
+        return when (mode) {
+            SearchMode.FORMULA -> normalizeFormula(result.formula).lowercase().replace(" ", "") == normalizeFormula(query).lowercase().replace(" ", "")
+            SearchMode.TEXT -> result.name.equals(query.trim(), ignoreCase = true)
+            else -> false
         }
     }
 

@@ -254,7 +254,7 @@ object BondDetector {
                         // Per v0.5.3b: BondRule.key sorts the two site ids and joins with NUL; reuse
                         // it so custom-rule + disabled-pair lookups match the rest of the engine (the
                         // legacy path built the same key inline — a plain-space join would miss rules).
-                        val key = if (c.siteId < q.siteId) "${c.siteId} ${q.siteId}" else "${q.siteId} ${c.siteId}"
+                        val key = if (c.siteId < q.siteId) "${c.siteId}\u0000${q.siteId}" else "${q.siteId}\u0000${c.siteId}"
                         if (key in disabledPairs) continue
                         val customRule = custom[key]
                         val isPeriodicSameSite = c.siteId == q.siteId &&
@@ -284,12 +284,14 @@ object BondDetector {
         }
 
         // Keep shell atoms referenced by a bond; discard the rest (same filtering as the legacy path).
+        // Per v0.6.5: boundary images must always be kept — they complete the visible cell structure
+        // (e.g. WC's corner W atoms at (1,0,0), (0,1,0), (1,1,0)) even when not referenced by any bond.
         val referencedShellIds = HashSet<Long>()
         for (bond in result) {
             referencedShellIds += bond.atomA
             referencedShellIds += bond.atomB
         }
-        val keptShell = (boundaryImages + shellAtoms).filter { it.isShell && it.id in referencedShellIds }
+        val keptShell = (boundaryImages + shellAtoms).filter { it.isShell && (it.isBoundaryImage || it.id in referencedShellIds) }
 
         val idMap = HashMap<Long, Long>()
         var finalId = 1L
@@ -316,7 +318,7 @@ object BondDetector {
      * Per v0.3.44: boundary-image centres bond over the same path as primary centres — this lets a
      * bond whose BOTH endpoints are boundary images (a bond lying in a cell face/edge plane, shared
      * by neighbouring cells) be generated. Same-site integer-translation pairs (periodic images of
-     * one atom, e.g. Cs–Cs) are still suppressed unless an explicit rule exists, so CsCl stays clean.
+     * one atom, e.g. Ni–Ni) are still suppressed unless an explicit rule exists, so CsCl stays clean.
      * Duplicates are avoided with an unordered id-pair set.
      */
     private fun inferPrimaryShellBonds(
@@ -343,7 +345,7 @@ object BondDetector {
                     // Deduplicate by unordered atom-id pair; each physical bond is emitted once.
                     val bondKey = if (a.id < b.id) a.id to b.id else b.id to a.id
                     if (!seenBonds.add(bondKey)) continue
-                    val key = listOf(a.siteId, b.siteId).sorted().joinToString(" ")
+                    val key = listOf(a.siteId, b.siteId).sorted().joinToString(" ")
                     // Per v0.2.3: a pair the user explicitly deleted is not redrawn via the fallback.
                     if (key in disabledPairs) continue
                     val customRule = custom[key]

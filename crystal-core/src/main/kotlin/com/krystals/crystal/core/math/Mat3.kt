@@ -46,6 +46,13 @@ data class Mat3(val a: Vec3, val b: Vec3, val c: Vec3) {
             Vec3(rows[0][1].toDouble(), rows[1][1].toDouble(), rows[2][1].toDouble()),
             Vec3(rows[0][2].toDouble(), rows[1][2].toDouble(), rows[2][2].toDouble()),
         )
+
+        /** Per v0.8.0: overload accepting Double rows for Bravais lattice transformations. */
+        fun fromRowsDouble(rows: List<List<Double>>) = Mat3(
+            Vec3(rows[0][0], rows[1][0], rows[2][0]),
+            Vec3(rows[0][1], rows[1][1], rows[2][1]),
+            Vec3(rows[0][2], rows[1][2], rows[2][2]),
+        )
     }
 }
 

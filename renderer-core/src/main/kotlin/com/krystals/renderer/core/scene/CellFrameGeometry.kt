@@ -14,12 +14,15 @@ import com.krystals.renderer.core.style.FrameMode
  * [FrameMode.ALL_CELLS].
  */
 object CellFrameGeometry {
-    fun edges(lattice: Lattice, expansion: Expansion, mode: FrameMode): List<Pair<Vec3, Vec3>> {
+    fun edges(lattice: Lattice, expansion: Expansion, mode: FrameMode, structuralExpansion: Boolean = false): List<Pair<Vec3, Vec3>> {
         if (mode == FrameMode.NONE) return emptyList()
 
-        val limitX = if (mode == FrameMode.ALL_CELLS) expansion.x else 1
-        val limitY = if (mode == FrameMode.ALL_CELLS) expansion.y else 1
-        val limitZ = if (mode == FrameMode.ALL_CELLS) expansion.z else 1
+        // Per v0.6.5: when the expansion comes from a 3×3 matrix transformation (structural),
+        // SINGLE_CELL should show the frame around the entire supercell, not just one cell.
+        val useExpansion = mode == FrameMode.ALL_CELLS || (mode == FrameMode.SINGLE_CELL && structuralExpansion)
+        val limitX = if (useExpansion) expansion.x else 1
+        val limitY = if (useExpansion) expansion.y else 1
+        val limitZ = if (useExpansion) expansion.z else 1
 
         val a = lattice.matrix.a
         val b = lattice.matrix.b

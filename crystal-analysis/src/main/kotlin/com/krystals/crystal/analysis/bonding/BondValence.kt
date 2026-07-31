@@ -5,9 +5,34 @@ import com.krystals.crystal.analysis.model.*
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.core.model.Site
+import com.krystals.crystal.data.PeriodicTableData
 
 import kotlin.math.abs
 import kotlin.math.exp
+
+/** Per v0.6.5: classify an element as metal (true) or non-metal (false). */
+private fun isMetal(symbol: String): Boolean = symbol !in setOf(
+    "H", "He", "B", "C", "N", "O", "F", "Ne",
+    "Si", "P", "S", "Cl", "Ar",
+    "Ge", "As", "Se", "Br", "Kr",
+    "Sb", "Te", "I", "Xe",
+    "At", "Rn", "Po",
+)
+
+/** Per v0.6.5: order a site pair so that metal comes first; if both same type, larger atomic number first. */
+private fun orderedSites(siteA: Site, siteB: Site): Pair<Site, Site> {
+    val aMetal = isMetal(siteA.species.symbol)
+    val bMetal = isMetal(siteB.species.symbol)
+    return when {
+        aMetal && !bMetal -> siteA to siteB
+        !aMetal && bMetal -> siteB to siteA
+        else -> {
+            val aNum = PeriodicTableData.symbols.indexOf(siteA.species.symbol)
+            val bNum = PeriodicTableData.symbols.indexOf(siteB.species.symbol)
+            if (aNum >= bNum) siteA to siteB else siteB to siteA
+        }
+    }
+}
 
 /**
  * Per v0.5.0: "smart ionic" (智能离子) bond-rule generation.
@@ -36,13 +61,16 @@ object BondValence {
         val radius: Double?,      // Shannon crystal radius; null → caller falls back to bonding radius
         val valence: Int?,        // cation: BVS-estimated; anion: fixed; null: unresolved
         val isAnion: Boolean,     // element has a fixed anion valence (O/S/F/Cl/…)
+        val isNeutral: Boolean = false, // Per v0.6.5: BVS ≈ 0, use bonding radius
     )
 
     /**
      * Generate per-site-pair bond rules from estimated Shannon crystal radii. [epsilon] is the bond
      * threshold added to rA+rB (max = rA + rB + epsilon). Anion–anion site pairs (e.g. O–O) are
      * skipped — in an ionic model anions don't bond each other, and their wide radius sum would
-     * otherwise flag non-bonding O–O distances as bonds.
+     * otherwise flag non-bonding O–O distances as bonds. Per v0.6.5: elements like P, N, As that
+     * have a fixed anion valence but are bonded to more electronegative elements are treated as
+     * cations (e.g. P in H3PO4 is P5+), so P–O is no longer skipped as anion–anion.
      *
      * Returns [SmartIonicResult.success] = false when no cation–anion pair could be analysed at all
      * (e.g. a pure metal or an all-covalent structure); the caller should fall back to BONDING.
@@ -52,7 +80,11 @@ object BondValence {
         bondConfiguration: BondConfiguration,
         epsilon: Double = 0.45,
     ): SmartIonicResult {
-        val analysis = analyze(structure)
+        val analysis = try {
+            analyze(structure)
+        } catch (_: VoronoiSearchLimitExceededException) {
+            return SmartIonicResult(emptyList(), success = false)
+        }
         if (analysis == null || !analysis.anyResolved) return SmartIonicResult(emptyList(), success = false)
 
         val rules = structure.sites.flatMapIndexed { i, siteA ->
@@ -62,9 +94,12 @@ object BondValence {
                     analysis.siteValence[siteB.id]?.isAnion == true) return@mapNotNull null
                 val rA = analysis.siteValence[siteA.id]?.radius ?: PeriodicTable.radius(siteA.species.symbol, RadiusSource.BONDING)
                 val rB = analysis.siteValence[siteB.id]?.radius ?: PeriodicTable.radius(siteB.species.symbol, RadiusSource.BONDING)
-                BondRule(siteA.id, siteB.id, 0.1, rA + rB + epsilon, BondRuleSource.CUSTOM)
+                // Per v0.6.5: order siteA/siteB — metal first, or larger atomic number first if same type.
+                val (orderedA, orderedB) = orderedSites(siteA, siteB)
+                BondRule(orderedA.id, orderedB.id, 0.1, rA + rB + epsilon, BondRuleSource.CUSTOM)
             }
         }
+
         return SmartIonicResult(rules, success = true)
     }
 
@@ -117,10 +152,14 @@ object BondValence {
         // Collapse per-atom BVS to per-site: average over the site's expanded atoms (they are
         // symmetry-equivalent and share the same environment, so this just picks a representative
         // value while tolerating any edge-case variation).
+        // Per v0.6.5: for anion sites, negate the BVS so the displayed s is negative.
         val bySite = HashMap<String, Double>()
         for ((siteId, siteAtoms) in analysis.atomsBySiteId) {
             val values = siteAtoms.mapNotNull { bvsByAtom[it.id] }
-            if (values.isNotEmpty()) bySite[siteId] = values.average()
+            if (values.isNotEmpty()) {
+                val avg = values.average()
+                bySite[siteId] = if (siteValence[siteId]?.isAnion == true) -avg else avg
+            }
         }
         return bySite
     }
@@ -140,12 +179,7 @@ object BondValence {
         if (atoms.size < 2) return null
         val atomById = atoms.associateBy { it.id }
         val atomsBySiteId = atoms.groupBy { it.siteId }
-        val neighbours = VoronoiNeighbours.find(structure, atoms).filterNot { (a, b, _) ->
-            val atomA = atomById[a] ?: return@filterNot false
-            val atomB = atomById[b] ?: return@filterNot false
-            PeriodicTable.anionValence(atomA.species.symbol) != null &&
-                PeriodicTable.anionValence(atomB.species.symbol) != null
-        }
+        val neighbours = VoronoiNeighbours.find(structure, atoms)
         if (neighbours.isEmpty()) return null
 
         val neighboursByAtomId = HashMap<Long, MutableList<Pair<Long, Double>>>()
@@ -206,8 +240,22 @@ object BondValence {
 
         val fixedAnionV = PeriodicTable.anionValence(site.species.symbol)
         if (fixedAnionV != null) {
-            val radius = PeriodicTable.shannonIonicRadius(site.species.symbol, fixedAnionV, cn)
-            return SiteValence(radius, fixedAnionV, isAnion = true)
+            // Per v0.6.5: elements like P, N, As have a fixed anion valence but can also be cations
+            // when bonded to more electronegative elements (e.g., P in H3PO4 is P5+ because O is
+            // more electronegative; but in Li3P, P is P3-). Check if any Voronoi neighbour is more
+            // electronegative; if so, fall through to the cation analysis path instead.
+            val representative = siteAtoms.first()
+            val hasMoreElectronegativeNeighbour = neighboursByAtomId[representative.id].orEmpty().any { (neighborId, _) ->
+                val neighbor = atomById[neighborId] ?: return@any false
+                neighbor.species.symbol != site.species.symbol &&
+                    PeriodicTable.electronegativityPublic(neighbor.species.symbol) >
+                    PeriodicTable.electronegativityPublic(site.species.symbol)
+            }
+            if (!hasMoreElectronegativeNeighbour) {
+                val radius = PeriodicTable.shannonIonicRadius(site.species.symbol, fixedAnionV, cn)
+                return SiteValence(radius, fixedAnionV, isAnion = true)
+            }
+            // Fall through to cation analysis: treat this site as a cation.
         }
 
         // BVS is a per-atom property. A site's expanded atoms are symmetry-equivalent, so use one

@@ -21,10 +21,18 @@ object SpaceGroupCatalog {
     }
 
     fun resolve(symbol: String, number: Int? = null): SpaceGroup {
-        // Per v0.6.3: normalize symbol by removing spaces (CIF files often write "F m -3 m").
-        val normalized = symbol.replace(" ", "")
-        val catalog = number?.let { all.getOrNull(it - 1) } ?: find(symbol)
-        return if (catalog == null) SpaceGroup(normalized, number) else catalog.copy(symbol = normalized, number = number ?: catalog.number)
+        // Per v0.6.5: strip COD hex/rhombohedral setting suffixes (:H, :R).
+        val noSuffix = symbol.let { s ->
+            if (s.endsWith(":H") || s.endsWith(":R") || s.endsWith(":h") || s.endsWith(":r")) s.dropLast(2) else s
+        }
+        val catalog = number?.let { all.getOrNull(it - 1) } ?: find(noSuffix)
+        return if (catalog == null) {
+            // Unknown group — preserve original symbol verbatim (without setting suffix).
+            SpaceGroup(noSuffix, number)
+        } else {
+            // Known group — normalize by removing spaces (CIF files often write "F m -3 m").
+            catalog.copy(symbol = noSuffix.replace(" ", ""), number = number ?: catalog.number)
+        }
     }
 
     fun operations(name: String): List<SymmetryOperation> {
@@ -37,7 +45,10 @@ object SpaceGroupCatalog {
 
     fun isRhombohedral(name: String): Boolean = find(name)?.number in RHOMBOHEDRAL_GROUPS
 
-    private fun normalize(value: String) = value.replace(" ", "").replace("_", "").lowercase()
+    private fun normalize(value: String) = value.replace(" ", "").replace("_", "").lowercase().let {
+        // Per v0.6.5: strip COD hex/rhombohedral setting suffixes (:H, :R).
+        if (it.endsWith(":h") || it.endsWith(":r")) it.dropLast(2) else it
+    }
 
     private fun crystalSystem(number: Int): String = when (number) {
         1, 2 -> "Triclinic"

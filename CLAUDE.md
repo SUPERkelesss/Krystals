@@ -47,6 +47,7 @@ The debug APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 
 - `PeriodicTableData.kt` owns element masses, covalent/bonding/van der Waals radii, colors, IUCr BVPARM parameters, Shannon crystal radii, fixed anion valences, and Pauling electronegativities.
 - `SpaceGroupData.kt` owns the 230 space-group symbols and their symmetry-operation strings.
+- `BravaisLatticeData.kt` owns the 14 Bravais lattice centering types and primitive↔conventional conversion matrices.
 - Keep this module behavior-free and independent of the other project modules.
 - No dependencies on other Krystals modules.
 
@@ -54,11 +55,11 @@ The debug APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 
 Depends on `crystal-data` (`implementation`).
 
-- `model`: pure `CrystalStructure`, `Site`, `Species`, and `AtomImage` values.
+- `model`: pure `CrystalStructure`, `Site`, `Species`, and `AtomImage` values. `CrystalStructure.isConventional` tracks whether the cell is conventional; non-conventional cells are auto-converted on CIF parse.
 - `lattice`: strongly typed `Lattice` matrices, volume, and coordinate conversion.
 - `coordinate`: `FractionalCoordinate` and `CartesianCoordinate` values with explicit `Vec3` conversion.
 - `symmetry`: `SpaceGroup`, `SpaceGroupCatalog`, `SymmetryOperation`, and fractional-number parsing.
-- `math`: `Vec3`, `Mat3`, measurements, rotations (via `eulerYX`), and safe expression parsing.
+- `math`: `Vec3`, `Mat3`, measurements, rotations (via `eulerYX`), and safe expression parsing. `Mat3` has `fromRows(Float)` and `fromRowsDouble(Double)` factory methods for row-major matrix construction (used in Bravais lattice transformations).
 - `periodic`: `Int3` cell offsets and periodic-boundary operations.
 
 ### `crystal-analysis`
@@ -72,7 +73,7 @@ Depends on `crystal-core` and `crystal-data` (both `api`).
 - `bonding/BondRuleMatching.kt`: efficient rule visibility checks.
 - `bonding/VoronoiNeighbours.kt`: periodic Voronoi neighbour search for smart-ionic bond-rule generation.
 - `coordination/CoordinationAnalyzer.kt`: builds bond adjacency while respecting `showBonds` and hidden-bond filters.
-- `editing/CrystalEditor.kt`: immutable `EditCommand` application and bond-rule regeneration.
+- `editing/CrystalEditor.kt`: immutable `EditCommand` application, bond-rule regeneration, `isConventionalCell()` heuristic, and `convertPrimitiveToConventional()`. Also owns metal/non-metal classification (`isMetal`). **`isMetal` is duplicated in `bonding/BondValence.kt` — changes must be kept in sync.**
 - `structure/StructureAnalyzer.kt`: composition, density, and crystal information.
 - `polyhedron/PolyhedronHull.kt`: polygonal convex-hull faces for coordination polyhedra.
 
@@ -80,7 +81,7 @@ Depends on `crystal-core` and `crystal-data` (both `api`).
 
 Depends on `crystal-analysis` (`api`).
 
-`CifCodec.kt` parses multi-block CIF 1.1 content into `CifDocument`/`ParsedStructure` and writes structural changes back while preserving unrelated content and comments. `ParsedStructure` separates the core structure, analysis bond configuration, and IO-only display metadata. It currently supports CIF only.
+`CifCodec.kt` parses multi-block CIF 1.1 content into `CifDocument`/`ParsedStructure` and writes structural changes back while preserving unrelated content and comments. `ParsedStructure` separates the core structure, analysis bond configuration, and IO-only display metadata. On parse, auto-detects non-conventional cells (e.g. rhombohedral :R) via `CrystalEditor.isConventionalCell()` and converts them to conventional via `convertPrimitiveToConventional()`. The `_krystals_is_conventional` custom CIF tag preserves this flag on write. It currently supports CIF only.
 
 ### `renderer-core`
 

@@ -205,6 +205,7 @@ object CrystalImageExporter {
         lockedMeasurements = lockedMeasurements,
         lockedInspectedAtomIds = lockedInspectedAtomIds,
         bondValenceBySite = bondValenceBySite,
+        structuralExpansion = scene.structuralExpansion,
     )
 
     private fun renderLegacy(
@@ -219,6 +220,7 @@ object CrystalImageExporter {
         lockedMeasurements: List<LockedMeasurement> = emptyList(),
         lockedInspectedAtomIds: List<Long> = emptyList(),
         bondValenceBySite: Map<String, Double> = emptyMap(),
+        structuralExpansion: Boolean = false,
     ): Bitmap {
         val width = controller.viewportWidth.coerceIn(512, 4096)
         val height = controller.viewportHeight.coerceIn(512, 4096)
@@ -232,8 +234,11 @@ object CrystalImageExporter {
         if (visibility.showBonds) {
             snapshot.bonds.forEach { bond ->
                 if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
+                val a = snapshot.atoms.firstOrNull { it.id == bond.atomA } ?: return@forEach
                 val b = snapshot.atoms.firstOrNull { it.id == bond.atomB } ?: return@forEach
-                if (b.isExternalShell && bond.rule.extendAcrossCell && b.siteId !in visibility.hiddenSites) {
+                // Per v0.6.5: use directional shouldExtendAcrossCell so only the correct
+                // direction's external atoms are shown.
+                if (b.isExternalShell && bond.rule.shouldExtendAcrossCell(a.siteId, true) && b.siteId !in visibility.hiddenSites) {
                     visibleExternalShellAtomIds += b.id
                 }
             }
@@ -254,7 +259,7 @@ object CrystalImageExporter {
         val scale = min(width / max(1.0, extentX), height / max(1.0, extentY)).toFloat() * 0.72f * controller.zoom
         fun screen(v: Vec3) = Pair(width / 2f + controller.panX + v.x.toFloat() * scale, height / 2f + controller.panY - v.y.toFloat() * scale)
 
-        drawFrames(canvas, snapshot, appearance, center, controller, scale, width, height)
+        drawFrames(canvas, snapshot, appearance, center, controller, scale, width, height, structuralExpansion)
         if (appearance.showAxes) drawAxes(canvas, snapshot, appearance, controller, width, height)
         // Per v0.3.0: project ALL atoms (so bonds/polyhedra survive hiding an atom); render only
         // visible atoms as AtomPrimitive.
@@ -306,12 +311,8 @@ object CrystalImageExporter {
                     val a = byId[bond.atomA] ?: return@forEach
                     val b = byId[bond.atomB] ?: return@forEach
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
-                    // Per v0.3.43: a bond to a boundary image draws by default; only a bond to a
-                    // genuine external shell atom is gated on extendAcrossCell.
                     val externalBond = b.isExternalShell
-                    // Bond-line rendering: an external-shell bond draws only when its rule opts in via
-                    // extendAcrossCell. Boundary-image bonds are drawn by default.
-                    if (externalBond && !bond.rule.extendAcrossCell) return@forEach
+                    if (externalBond && !bond.rule.shouldExtendAcrossCell(a.siteId, true)) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(3f, 32f)
                     addAll(splitBondPrimitives(a, b, width))
                 }
@@ -491,9 +492,9 @@ object CrystalImageExporter {
         paint.shader = null; paint.style = Paint.Style.STROKE; paint.strokeWidth = if (point.atomId in selectedAtomIds) 4f else 1f
         paint.color = if (point.atomId in selectedAtomIds) 0xFF9966CC.toInt() else 0x55000000
         canvas.drawCircle(point.x, point.y, point.radius + if (point.atomId in selectedAtomIds) 3f else 0f, paint)
-    }
+}
 
-    private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dofFog: (Double) -> Float, bgArgb: Int = 0xFF101014.toInt()) {
+private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dofFog: (Double) -> Float, bgArgb: Int = 0xFF101014.toInt()) {
         // Per v0.5.3a: depth cueing fades each half's COLOUR toward the background by its endpoint's
         // fog; opacity is unchanged (bondOpacity only). Split at midpoint → continuous fade.
         val opacity = appearance.bondOpacity.coerceIn(0f, 1f)
@@ -694,7 +695,7 @@ object CrystalImageExporter {
             AxisMode.XYZ -> listOf("X", "Y", "Z")
         }
         val colors = listOf(0xFFE57373.toInt(), 0xFF81C784.toInt(), 0xFF64B5F6.toInt())
-        val origin = PointF(width * 0.08f + 28f, height * 0.08f + 40f)
+        val origin = PointF(width * appearance.axisOffsetX + 28f, height * appearance.axisOffsetY + 40f - 75f)
         val arrowLen = 75f
         val halfWidth = 3f
         val headLenBase = 14f
@@ -808,11 +809,12 @@ object CrystalImageExporter {
         }
     }
 
-    private fun drawFrames(canvas: Canvas, snapshot: BondNetwork, appearance: ViewerAppearance, center: Vec3, controller: ViewerController, scale: Float, width: Int, height: Int) {
-        if (appearance.frameMode == FrameMode.NONE) return
-        val ex = if (appearance.frameMode == FrameMode.ALL_CELLS) snapshot.expansion.x else 1
-        val ey = if (appearance.frameMode == FrameMode.ALL_CELLS) snapshot.expansion.y else 1
-        val ez = if (appearance.frameMode == FrameMode.ALL_CELLS) snapshot.expansion.z else 1
+private fun drawFrames(canvas: Canvas, snapshot: BondNetwork, appearance: ViewerAppearance, center: Vec3, controller: ViewerController, scale: Float, width: Int, height: Int, structuralExpansion: Boolean = false) {
+if (appearance.frameMode == FrameMode.NONE) return
+val useExpansion = appearance.frameMode == FrameMode.ALL_CELLS || (appearance.frameMode == FrameMode.SINGLE_CELL && structuralExpansion)
+val ex = if (useExpansion) snapshot.expansion.x else 1
+val ey = if (useExpansion) snapshot.expansion.y else 1
+val ez = if (useExpansion) snapshot.expansion.z else 1
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb((0.72f * 255).toInt(), 128, 128, 128); strokeWidth = 1.4f; if (appearance.lineStyle == LineStyle.DASHED) pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f) }
         val edges = listOf(0 to 1, 0 to 2, 0 to 4, 1 to 3, 1 to 5, 2 to 3, 2 to 6, 3 to 7, 4 to 5, 4 to 6, 5 to 7, 6 to 7)
         for (ix in 0 until ex) for (iy in 0 until ey) for (iz in 0 until ez) {

@@ -367,6 +367,34 @@ private fun LegacyCanvasViewport(
     var lastTap by remember { mutableStateOf<TapEvent?>(null) }
     var measurementBoundsList by remember { mutableStateOf<List<Triple<Rect, Boolean, Int>>>(emptyList()) }
     var atomInfoBoundsList by remember { mutableStateOf<List<Triple<Rect, Boolean, Long>>>(emptyList()) }
+    // Per v0.7.1: cache rotation-independent data outside the Canvas draw lambda so it is
+    // NOT recomputed every frame during drag-rotation of large cells.
+    // — coordination neighbors: O(bonds) per frame → now O(1)
+    // — bounding center: O(atoms) per frame → now O(1)
+    // — atom-by-id lookup: O(atoms) per frame → now O(1)
+    val coordination = remember(snapshot, visibility.showBonds, visibility.hiddenBondPairs) {
+        CoordinationAnalyzer.neighbors(snapshot, visibility.showBonds, visibility.hiddenBondPairs)
+    }
+    val center = remember(snapshot) {
+        boundingCenter(snapshot.atoms.map { it.cartesianCoordinate.toVec3() })
+    }
+    val atomsById = remember(snapshot) { snapshot.atoms.associateBy { it.id } }
+    // Per v0.7.1: cache visibleExternalShellAtomIds — depends only on bonds/visibility, NOT rotation.
+    val visibleExternalShellAtomIds = remember(snapshot, visibility.showBonds, visibility.hiddenBondPairs, visibility.hiddenSites) {
+        val ids = mutableSetOf<Long>()
+        if (visibility.showBonds) {
+            val atomById = snapshot.atoms.associateBy { it.id }
+            snapshot.bonds.forEach { bond ->
+                if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
+                val a = atomById[bond.atomA] ?: return@forEach
+                val b = atomById[bond.atomB] ?: return@forEach
+                if (b.isExternalShell && bond.rule.shouldExtendAcrossCell(a.siteId, true) && b.siteId !in visibility.hiddenSites) {
+                    ids += b.id
+                }
+            }
+        }
+        ids
+    }
     Canvas(
         modifier = modifier
             .fillMaxSize()
@@ -387,12 +415,14 @@ private fun LegacyCanvasViewport(
                         if (movement > 2.0) {
                             moved = true
                         }
+                        var handled = false
                         if (!controller.locked) {
                             if (pressed.size == 1) {
                                 val delta = pressed.first().position - pressed.first().previousPosition
                                 if (delta.getDistance() > 0f) {
                                     controller.rotateByDrag(-delta.x, -delta.y)
                                     onViewMoved()
+                                    handled = true
                                 }
                             } else if (pressed.size >= 2) {
                                 val zoomDelta = event.calculateZoom()
@@ -400,9 +430,16 @@ private fun LegacyCanvasViewport(
                                 controller.zoomBy(zoomDelta)
                                 controller.panBy(pan.x, pan.y)
                                 if (abs(zoomDelta - 1f) > 0.001f || pan.getDistance() > 0.5f) onViewMoved()
+                                handled = true
                             }
                         }
-                        event.changes.forEach { it.consume() }
+                        // Per v0.7.1: only consume events we actually handled (rotation/zoom/pan).
+                        // Unconditionally consuming ALL events (including UP/CANCEL) breaks the
+                        // system velocity tracker on Huawei devices, triggering the
+                        // getSplineFlingDurationByReflection exception.
+                        if (handled) {
+                            event.changes.forEach { it.consume() }
+                        }
                         if (pressed.isEmpty()) {
                             if (!moved) {
                                 // Per v0.3.0: a tap on any measurement or info box triggers the
@@ -444,7 +481,7 @@ private fun LegacyCanvasViewport(
             return@Canvas
         }
 
-        val center = boundingCenter(snapshot.atoms.map { it.cartesianCoordinate.toVec3() })
+        // Per v0.7.1: center and coordination are now cached outside the draw lambda.
         // Per v0.3.0: project ALL atoms (not just visible) so bonds/polyhedra survive hiding an
         // atom — the bond endpoint / polyhedron vertex lookup (byId) needs the hidden atoms too.
         val rotated = snapshot.atoms.associateWith { controller.rotation * (it.cartesianCoordinate.toVec3() - center) }
@@ -458,7 +495,7 @@ private fun LegacyCanvasViewport(
             size.height / 2f + controller.panY - value.y.toFloat() * scale,
         )
 
-        drawCellFrames(snapshot, appearance, center, controller, scale, ::project)
+        drawCellFrames(snapshot, appearance, center, controller, scale, ::project, scene?.structuralExpansion ?: false)
         if (appearance.showAxes) drawAxes(snapshot, appearance, controller)
 
         val projected = snapshot.atoms.map { atom ->
@@ -468,19 +505,7 @@ private fun LegacyCanvasViewport(
         }
         val byId = projected.associateBy { it.atom.id }
 
-        // Per v0.3.41: boundary images (shell atoms on the primary box faces) are displayed by default
-        // to complete the visible cell; only genuine external shell atoms remain hidden unless a bond
-        // rule opts in to "extend across cell".
-        val visibleExternalShellAtomIds = mutableSetOf<Long>()
-        if (visibility.showBonds) {
-            snapshot.bonds.forEach { bond ->
-                if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
-                val b = byId[bond.atomB] ?: return@forEach
-                if (b.atom.isExternalShell && bond.rule.extendAcrossCell && b.atom.siteId !in visibility.hiddenSites) {
-                    visibleExternalShellAtomIds += b.atom.id
-                }
-            }
-        }
+        // Per v0.7.1: visibleExternalShellAtomIds is now cached outside the draw lambda.
         // Primary atoms and boundary images are always visible unless hidden by site; external shell
         // atoms are visible only when referenced by an extending cross-cell bond.
         val visibleProjected = projected.filter {
@@ -494,11 +519,9 @@ private fun LegacyCanvasViewport(
             controller.projectedAtoms = visibleProjected
         }
 
-        // Hidden bond strokes must not alter the actual coordination topology.
-        val coordination = CoordinationAnalyzer.neighbors(snapshot)
+        // Per v0.7.1: coordination and atomsById are now cached outside the draw lambda.
         val lockedHighlightIds = lockedMeasurements.flatMap { it.atomIds }.toSet() + lockedInspectedAtomIds
         val highlightedIds = selectedAtomIds.toSet() + lockedHighlightIds + listOfNotNull(inspectedAtomId)
-        val atomsById = snapshot.atoms.associateBy { it.id }
         val dihedralSelections = lockedMeasurements.filter { it.mode == MeasurementMode.DIHEDRAL } +
             if (measurementMode == MeasurementMode.DIHEDRAL && selectedAtomIds.size >= 4) {
                 listOf(LockedMeasurement(selectedAtomIds.takeLast(4), MeasurementMode.DIHEDRAL))
@@ -523,13 +546,8 @@ private fun LegacyCanvasViewport(
                     val a = byId[bond.atomA] ?: return@forEach
                     val b = byId[bond.atomB] ?: return@forEach
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
-                    // Per v0.3.43: a bond to a boundary image is drawn by default (it completes the
-                    // visible cell edges/faces); only a bond to a genuine external shell atom is gated
-                    // on extendAcrossCell.
                     val externalBond = b.atom.isExternalShell
-                    // Bond-line rendering: an external-shell bond only draws when its rule opts in via
-                    // extendAcrossCell. Boundary-image bonds are drawn by default.
-                    if (externalBond && !bond.rule.extendAcrossCell) return@forEach
+                    if (externalBond && !bond.rule.shouldExtendAcrossCell(a.atom.siteId, true)) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(3f, 32f)
                     addAll(splitBondRenderables(a, b, width))
                 }
@@ -1074,7 +1092,7 @@ private fun DrawScope.drawAxes(
         AxisMode.XYZ -> listOf("X", "Y", "Z")
     }
     val colors = listOf(Color(0xFFE57373), Color(0xFF81C784), Color(0xFF64B5F6))
-    val origin = Offset(size.width * 0.08f + 28f, size.height * 0.08f + 40f)
+    val origin = Offset(size.width * appearance.axisOffsetX + 28f, size.height * appearance.axisOffsetY + 40f - 75f)
     val arrowLen = 75f
     val headLenBase = 14f
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1147,10 +1165,11 @@ private fun DrawScope.drawCellFrames(
     controller: ViewerController,
     scale: Float,
     project: (Vec3) -> Offset,
+    structuralExpansion: Boolean = false,
 ) {
     if (appearance.frameMode == FrameMode.NONE) return
     val effect = if (appearance.lineStyle == LineStyle.DASHED) PathEffect.dashPathEffect(floatArrayOf(10f, 8f)) else null
-    val edges = CellFrameGeometry.edges(snapshot.structure.lattice, snapshot.expansion, appearance.frameMode)
+    val edges = CellFrameGeometry.edges(snapshot.structure.lattice, snapshot.expansion, appearance.frameMode, structuralExpansion)
     edges.forEach { (start, end) ->
         val a = project(controller.rotation * (start - center))
         val b = project(controller.rotation * (end - center))

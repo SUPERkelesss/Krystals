@@ -26,7 +26,7 @@ class CrystalSceneBuilderTest {
     @Test
     fun buildsDeterministicAtomBondAndPolyhedronInstances() {
         val structure = structure()
-        val rule = BondRule("Cs", "Cl", 0.1, 4.0, extendAcrossCell = true)
+        val rule = BondRule("Cs", "Cl", 0.1, 4.0, extendAtoB = true, extendBtoA = true)
         val analysis = BondDetector.buildNetwork(
             structure,
             BondConfiguration(listOf(rule)),
@@ -66,7 +66,7 @@ class CrystalSceneBuilderTest {
     @Test
     fun hiddenBondStrokesAndLegacyAppearanceFlagDoNotRemovePolyhedra() {
         val structure = structure()
-        val rule = BondRule("Cs", "Cl", 0.1, 4.0, extendAcrossCell = true)
+        val rule = BondRule("Cs", "Cl", 0.1, 4.0, extendAtoB = true, extendBtoA = true)
         val analysis = BondDetector.buildNetwork(
             structure,
             BondConfiguration(listOf(rule)),

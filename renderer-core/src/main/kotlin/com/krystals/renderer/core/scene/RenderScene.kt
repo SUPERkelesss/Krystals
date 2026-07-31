@@ -16,6 +16,10 @@ data class RenderScene(
     val camera: Camera = Camera(),
     val projection: Projection = Projection.Orthographic(),
     val environment: RenderEnvironment = RenderEnvironment(),
+    // Per v0.6.5: true when the expansion is structural (from a 3×3 matrix transform), not a
+    // display-only supercell. In SINGLE_CELL frame mode, structural expansion draws the frame
+    // around the entire supercell; display expansion draws just one cell.
+    val structuralExpansion: Boolean = false,
 ) {
     val atoms: List<AtomInstance> = objects.filterIsInstance<AtomInstance>()
     val bonds: List<BondInstance> = objects.filterIsInstance<BondInstance>()

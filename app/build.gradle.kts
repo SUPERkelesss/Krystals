@@ -41,8 +41,8 @@ android {
         applicationId = "com.krystals.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.6.4"
+versionCode = 7
+versionName = "0.6.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
         // Paid-module activation: salt + SHA-256 hashes of the 1000 valid 16-char codes.
@@ -114,6 +114,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("org.junit.jupiter:junit-jupiter:5.13.1")
+    testImplementation("org.junit.platform:junit-platform-launcher:1.13.1")
     testImplementation(kotlin("test"))
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

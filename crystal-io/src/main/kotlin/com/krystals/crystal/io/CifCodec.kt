@@ -3,6 +3,7 @@ package com.krystals.crystal.io
 import com.krystals.crystal.analysis.bonding.BondConfiguration
 import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondRuleSource
+import com.krystals.crystal.analysis.editing.CrystalEditor
 import com.krystals.crystal.analysis.model.PeriodicTable
 import com.krystals.crystal.core.coordinate.CartesianCoordinate
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
@@ -89,9 +90,9 @@ private data class ParsedBlock(
 )
 
 object CifCodec {
-    private val replacementPrefixes = listOf(
-        "_cell_", "_atom_site_", "_symmetry_equiv_pos_", "_space_group_symop_", "_krystals_bond_rule_", "_krystals_element_color_",
-    )
+private val replacementPrefixes = listOf(
+"_cell_", "_atom_site_", "_symmetry_equiv_pos_", "_space_group_symop_", "_krystals_bond_rule_", "_krystals_element_color_", "_krystals_is_conventional",
+)
     private val replacementTags = setOf(
         "_symmetry_space_group_name_h-m", "_space_group_name_h-m_alt", "_symmetry_int_tables_number",
         "_space_group_it_number",
@@ -129,10 +130,25 @@ object CifCodec {
         val selected = blockIndex ?: candidates.first()
         require(selected in candidates) { "Selected data block is not a crystal structure" }
         val parsedBlock = toStructure(document.blocks[selected])
+        // Per v0.6.5: If toStructure detected a non-conventional cell (e.g. :R suffix or explicit
+        // flag = 0), trust it. Otherwise, use the heuristic for cells without explicit flags.
+        val hasExplicitFlag = document.blocks[selected].scalar("_krystals_is_conventional") != null
+        val isConventional = if (!parsedBlock.structure.isConventional) {
+            false
+        } else if (hasExplicitFlag) {
+            true
+        } else {
+            CrystalEditor.isConventionalCell(parsedBlock.structure)
+        }
+        val structure = if (isConventional) {
+            parsedBlock.structure.copy(isConventional = true)
+        } else {
+            convertPrimitiveToConventional(parsedBlock.structure, parsedBlock.bondConfiguration)
+        }
         return ParsedStructure(
             document,
             selected,
-            parsedBlock.structure,
+            structure,
             parsedBlock.bondConfiguration,
             parsedBlock.displayMetadata,
         )
@@ -152,7 +168,20 @@ object CifCodec {
     private fun parseStructureAllowEmpty(source: String): ParsedStructure {
         val document = parse(source)
         val parsedBlock = toStructure(document.blocks[0])
-        return ParsedStructure(document, 0, parsedBlock.structure, parsedBlock.bondConfiguration, parsedBlock.displayMetadata)
+        val hasExplicitFlag = document.blocks[0].scalar("_krystals_is_conventional") != null
+        val isConventional = if (!parsedBlock.structure.isConventional) {
+            false
+        } else if (hasExplicitFlag) {
+            true
+        } else {
+            CrystalEditor.isConventionalCell(parsedBlock.structure)
+        }
+        val structure = if (isConventional) {
+            parsedBlock.structure.copy(isConventional = true)
+        } else {
+            convertPrimitiveToConventional(parsedBlock.structure, parsedBlock.bondConfiguration)
+        }
+        return ParsedStructure(document, 0, structure, parsedBlock.bondConfiguration, parsedBlock.displayMetadata)
     }
 
     fun write(
@@ -202,7 +231,16 @@ object CifCodec {
             numeric(block.scalar("_cell_angle_beta")) ?: 90.0,
             numeric(block.scalar("_cell_angle_gamma")) ?: 90.0,
         )
-        val groupName = block.scalar("_space_group_name_h-m_alt", "_symmetry_space_group_name_h-m") ?: "P1"
+        val rawGroupName = block.scalar("_space_group_name_h-m_alt", "_symmetry_space_group_name_h-m") ?: "P1"
+        // Per v0.6.5: detect COD hex/rhombohedral setting suffixes (:H, :R).
+        // :H = hexagonal (conventional), :R = rhombohedral (primitive).
+        val isRhombohedralSetting = rawGroupName.replace(" ", "").let { s ->
+            s.endsWith(":R") || s.endsWith(":r")
+        }
+        val isHexSetting = rawGroupName.replace(" ", "").let { s ->
+            s.endsWith(":H") || s.endsWith(":h")
+        }
+        val groupName = rawGroupName
         val groupNumber = numeric(block.scalar("_space_group_it_number", "_symmetry_int_tables_number"))?.toInt()
             ?: SpaceGroupCatalog.find(groupName)?.number
 
@@ -254,8 +292,13 @@ object CifCodec {
             val siteB = sites.firstOrNull { it.label == labelB }?.id ?: labelB
             val min = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_min_distance")) ?: return@mapNotNull null
             val max = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_max_distance")) ?: return@mapNotNull null
-            val extend = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_extend"))?.let { it >= 0.5 } ?: false
-            runCatching { BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extend) }.getOrNull()
+val extendAtoB = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_extend_a_to_b"))?.let { it >= 0.5 }
+    ?: numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_extend"))?.let { it >= 0.5 } // backward compat
+    ?: false
+val extendBtoA = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_extend_b_to_a"))?.let { it >= 0.5 }
+    ?: numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_extend"))?.let { it >= 0.5 } // backward compat
+    ?: false
+runCatching { BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extendAtoB, extendBtoA) }.getOrNull()
         }
         val vestaRules = if (vestaLoop == null) emptyList() else (0 until vestaLoop.rowCount).mapNotNull { row ->
             val labelA = vestaLoop.firstValue(row, "_vesta_bond_site_a") ?: return@mapNotNull null
@@ -285,6 +328,14 @@ object CifCodec {
             PeriodicTable.normalizeElement(symbol) to argb
         }.toMap()
 
+        // Per v0.6.5: determine isConventional from CIF flag, COD setting suffix, or default.
+        val isConventional = numeric(block.scalar("_krystals_is_conventional"))?.let { it >= 0.5 }
+            ?: when {
+                isRhombohedralSetting -> false
+                isHexSetting -> true
+                else -> true
+            }
+
         return ParsedBlock(
             structure = CrystalStructure(
                 block.name,
@@ -292,10 +343,11 @@ object CifCodec {
                 SpaceGroupCatalog.resolve(groupName, groupNumber),
                 operations,
                 sites,
+                isConventional = isConventional,
             ),
-            // Per v0.6.3: temporarily disable importing bond rules from CIF — always start
-            // with an empty configuration so smart-ionic / bonding-radius rules are freshly
-            // computed. To re-enable, replace with: BondConfiguration(krystalsRules + vestaRules + geomRules)
+            // Per v0.7.1: completely disable reading bond rules from CIF. Bond rules are always
+            // regenerated via smart-ionic/bonding radii after parsing. This prevents stale or
+            // incorrect rules (e.g. Cr-Cr in Cr2O3) from being loaded from CIF files.
             bondConfiguration = BondConfiguration(),
             displayMetadata = CifDisplayMetadata(colorOverrides),
         )
@@ -316,6 +368,7 @@ object CifCodec {
         append("_cell_angle_alpha   ${format(structure.lattice.alpha)}\n")
         append("_cell_angle_beta   ${format(structure.lattice.beta)}\n")
         append("_cell_angle_gamma   ${format(structure.lattice.gamma)}\n")
+        append("_krystals_is_conventional   ${if (structure.isConventional) 1 else 0}\n")
         append("loop_\n _space_group_symop_id\n _space_group_symop_operation_xyz\n")
         structure.effectiveSymmetryOperations.forEachIndexed { index, operation ->
             append(" ${index + 1} '${operation.source}'\n")
@@ -325,11 +378,11 @@ object CifCodec {
             append(" ${quoteIfNeeded(site.label)} ${quoteIfNeeded(site.species.symbol)} ${format(site.fractionalCoordinate.x)} ${format(site.fractionalCoordinate.y)} ${format(site.fractionalCoordinate.z)} ${format(site.occupancy)}\n")
         }
         if (rules.isNotEmpty()) {
-            append("loop_\n _krystals_bond_rule_site_a\n _krystals_bond_rule_site_b\n _krystals_bond_rule_min_distance\n _krystals_bond_rule_max_distance\n _krystals_bond_rule_extend\n")
+            append("loop_\n _krystals_bond_rule_site_a\n _krystals_bond_rule_site_b\n _krystals_bond_rule_min_distance\n _krystals_bond_rule_max_distance\n _krystals_bond_rule_extend_a_to_b\n _krystals_bond_rule_extend_b_to_a\n")
             rules.sortedBy { it.key }.forEach { rule ->
                 val labelA = structure.sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
                 val labelB = structure.sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
-                append(" ${quoteIfNeeded(labelA)} ${quoteIfNeeded(labelB)} ${format(rule.minAngstrom)} ${format(rule.maxAngstrom)} ${if (rule.extendAcrossCell) 1 else 0}\n")
+                append(" ${quoteIfNeeded(labelA)} ${quoteIfNeeded(labelB)} ${format(rule.minAngstrom)} ${format(rule.maxAngstrom)} ${if (rule.extendAtoB) 1 else 0} ${if (rule.extendBtoA) 1 else 0}\n")
             }
         }
         if (displayMetadata.elementArgbOverrides.isNotEmpty()) {
@@ -446,6 +499,18 @@ object CifCodec {
     private fun sanitizeBlockName(name: String) = name.ifBlank { "untitled" }.replace(Regex("\\s+"), "_")
     private fun format(value: Double): String = "%.8f".format(java.util.Locale.US, value).trimEnd('0').trimEnd('.').ifBlank { "0" }
     private fun quoteIfNeeded(value: String) = if (value.any { it.isWhitespace() } || value.isEmpty()) "'${value.replace("'", "")}'" else value
+
+    /**
+     * Per v0.6.5: Convert a primitive cell to conventional using CrystalEditor,
+     * then apply lattice parameter adjustment for the crystal system.
+     */
+    private fun convertPrimitiveToConventional(
+        structure: CrystalStructure,
+        bondConfiguration: BondConfiguration,
+    ): CrystalStructure {
+        val result = CrystalEditor.convertToConventional(structure, bondConfiguration)
+        return result.structure
+    }
 }
 
 private fun unquote(value: String): String {

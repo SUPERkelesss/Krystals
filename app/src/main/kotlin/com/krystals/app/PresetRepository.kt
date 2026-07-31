@@ -64,12 +64,15 @@ object PresetRepository {
         bondConfiguration: BondConfiguration,
         displayMetadata: CifDisplayMetadata,
         name: String,
+        comments: String = "",
     ): File {
         val userDir = File(context.filesDir, USER_DIR).apply { if (!exists()) mkdirs() }
         val safeName = name.ifBlank { "structure.cif" }.let { if (it.endsWith(".cif", true)) it else "$it.cif" }
         val target = File(userDir, safeName)
         val content = CifCodec.write(parsed, structure, bondConfiguration, displayMetadata)
-        target.writeText(content, Charsets.UTF_8)
+        // Per v0.7.0: inject user comments into CIF before saving to preset.
+        val contentWithComments = CifComments.inject(content, comments)
+        target.writeText(contentWithComments, Charsets.UTF_8)
         return target
     }
 

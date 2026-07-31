@@ -1,0 +1,91 @@
+#------------------------------------------------------------------------------
+#$Date: 2016-02-20 02:53:41 +0200 (Sat, 20 Feb 2016) $
+#$Revision: 176768 $
+#$URL: file:///home/coder/svn-repositories/_RELOADED_COD/cod-reloaded/cif/2/10/11/2101165.cif $
+#------------------------------------------------------------------------------
+#
+# This file is available in the Crystallography Open Database (COD),
+# http://www.crystallography.net/. The original data for this entry
+# were provided by IUCr Journals, http://journals.iucr.org/.
+#
+# The file may be used within the scientific community so long as
+# proper attribution is given to the journal article from which the
+# data were obtained.
+#
+data_2101165
+loop_
+_publ_author_name
+'B\"uttner, H. G.'
+'Kearley, G. J.'
+'Howard, C. J.'
+'Fillaux, F.'
+_publ_section_title
+;
+ Structure of the Hofmann clathrates Ni(NH~3~)~2~Ni(CN)~4~.2C~6~D~6~
+ and Zn(NH~3~)~2~Ni(CN)~4~.2C~6~H~6~
+;
+_journal_issue                   4
+_journal_name_full               'Acta Crystallographica Section B'
+_journal_page_first              431
+_journal_page_last               435
+_journal_paper_doi               10.1107/S0108768193013539
+_journal_volume                  50
+_journal_year                    1994
+_chemical_formula_sum            'C16 H18 N6 Ni Zn'
+_chemical_formula_weight         418
+_symmetry_cell_setting           tetragonal
+_symmetry_space_group_name_Hall  '-P 4'
+_symmetry_space_group_name_H-M   'P 4/m'
+_cell_angle_alpha                90.0
+_cell_angle_beta                 90.0
+_cell_angle_gamma                90.0
+_cell_formula_units_Z            1
+_cell_length_a                   7.3294(3)
+_cell_length_b                   7.3294(3)
+_cell_length_c                   8.0722(4)
+_cell_volume                     433.64(3)
+_diffrn_radiation_probe          neutron
+_diffrn_radiation_type           Neutron
+_diffrn_radiation_wavelength     1.884
+_cod_data_source_file            al0564.cif
+_cod_data_source_block           al0564c
+_cod_original_cell_volume        434
+_cod_database_code               2101165
+loop_
+_atom_site_label
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_U_iso_or_equiv
+Zn .00000 .00000 .00000 .0032(12)
+Ni .50000 .50000 .00000 .0032(12)
+N(1) .2088(10) .2076(10) .00000 .0032(12)
+N(2) .00000 .00000 .2659(10) .0032(12)
+C(1) .3220(14) .3237(14) .00000 .0032(12)
+C(2) .00000 .50000 .3290(10) .0063(19)
+C(3) .1475(10) .4304(10) .4145(7) .0081(16)
+H(2) .00000 .50000 .195(2) .032(4)
+H(3) .263(2) .3758(18) .3473(19) .027(4)
+H(4) .116(3) .0672(16) .312(3) .038(9)
+H(5) .0672(16) .116(2) .312(3) .038(9)
+H(6) .00000 .134(3) .312(3) .038(9)
+loop_
+_geom_angle_atom_site_label_1
+_geom_angle_atom_site_label_2
+_geom_angle_atom_site_label_3
+_geom_angle
+C(2) C(3) H(2) 120
+Ni N(1) C(1) 179.2(7)
+Ni N(2) H(4) 110.7(12)
+Zn C(1) N(1) 179.0(9)
+loop_
+_geom_bond_atom_site_label_1
+_geom_bond_atom_site_label_2
+_geom_bond_distance
+Zn N(1) 2.158(7)
+Zn N(2) 2.146(8)
+N(1) C(1) 1.188(13)
+C(1) Ni 1.836(10)
+N(2) H(4) 1.052(19)
+C(2) C(3) 1.380(8)
+C(2) H(2) 1.085(19)

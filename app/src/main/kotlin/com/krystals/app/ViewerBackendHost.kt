@@ -88,18 +88,29 @@ internal fun Modifier.filamentViewerGestures(
                 (it.position - it.previousPosition).getDistance().toDouble()
             }
             if (movement > 2.0) moved = true
+            var handled = false
             if (!isLocked()) {
                 if (pressed.size == 1) {
                     val delta = pressed.first().position - pressed.first().previousPosition
-                    if (delta.getDistance() > 0f) onCommand(ViewerCommand.Orbit(-delta.x, -delta.y))
+                    if (delta.getDistance() > 0f) {
+                        onCommand(ViewerCommand.Orbit(-delta.x, -delta.y))
+                        handled = true
+                    }
                 } else if (pressed.size >= 2) {
                     val zoom = event.calculateZoom()
                     val pan = event.calculatePan()
                     if (abs(zoom - 1f) > 0.001f) onCommand(ViewerCommand.Zoom(zoom))
                     if (pan.getDistance() > 0.5f) onCommand(ViewerCommand.Pan(pan.x, pan.y))
+                    handled = true
                 }
             }
-            event.changes.forEach { it.consume() }
+            // Per v0.7.1: only consume events we actually handled (rotation/zoom/pan).
+            // Unconditionally consuming ALL events (including UP/CANCEL) breaks the
+            // system velocity tracker on Huawei devices, triggering the
+            // getSplineFlingDurationByReflection exception.
+            if (handled) {
+                event.changes.forEach { it.consume() }
+            }
             if (pressed.isEmpty()) {
                 if (!moved) onTap(down)
                 break
@@ -187,6 +198,11 @@ fun FilamentViewport(
                         }
 
                         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+                            // Per v0.7.0: update the viewport + camera immediately to prevent the
+                            // aspect-ratio distortion that occurs when the surface size changes
+                            // (e.g. screen rotation) but the old viewport dimensions linger for
+                            // one or more frames until the state pipeline processes SetViewport.
+                            renderer.onSurfaceChanged(width, height)
                             onCommand(ViewerCommand.SetViewport(width, height))
                         }
 
@@ -241,7 +257,7 @@ private fun FilamentLegacyStyleOverlay(
             }
             val labels = if (scene.environment.axes.mode == AxisMode.ABC) listOf("a", "b", "c") else listOf("X", "Y", "Z")
             val colors = listOf(Color(0xFFE57373), Color(0xFF81C784), Color(0xFF64B5F6))
-            val origin = Offset(size.width * 0.08f + 28f, size.height * 0.08f + 40f)
+            val origin = Offset(size.width * scene.environment.axes.offsetX + 28f, size.height * scene.environment.axes.offsetY + 40f - 75f)
             val arrowLength = 75f
             val headLengthBase = 14f
             val light = scene.environment.worldLight

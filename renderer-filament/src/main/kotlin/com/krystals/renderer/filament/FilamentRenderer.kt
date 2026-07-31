@@ -155,6 +155,21 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         requestFrames(3)
     }
 
+    /**
+     * Called immediately from [SurfaceHolder.Callback.surfaceChanged] to update the viewport
+     * and camera projection without waiting for the state pipeline (which takes at least one
+     * frame to process [ViewerCommand.SetViewport]). This prevents the brief but persistent
+     * aspect-ratio distortion that occurs when the surface size changes (e.g. screen rotation)
+     * but [view.viewport] still holds the old dimensions.
+     */
+    fun onSurfaceChanged(width: Int, height: Int) {
+        if (closed.get()) return
+        val w = width.coerceAtLeast(1)
+        val h = height.coerceAtLeast(1)
+        updateCamera(w, h)
+        requestFrames(1)
+    }
+
     override fun updateInteraction(state: InteractionState) {
         checkOpen()
         if (interaction == state) return
@@ -397,7 +412,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             return px.toFloat() to py.toFloat()
         }
         val canvas = Canvas(bitmap)
-        val scale = (bitmap.width / 1080f).coerceAtLeast(0.5f)
+        val scale = (bitmap.width / 1080f).coerceIn(0.5f, 1.0f)
         val measurementPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             textSize = 48f * scale
@@ -463,28 +478,41 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             setShadowLayer(5f * scale, scale, scale, Color.BLACK)
         }
         inspectionIds.forEach { id ->
-            val atom = atoms[id]?.atom ?: return@forEach
+            val atomInstance = atoms[id] ?: return@forEach
+            val atom = atomInstance.atom
             val anchor = project(id) ?: return@forEach
             val locked = id in state.inspection.lockedInspectedAtomIds
-            val bvs = bondValenceBySite[atom.siteId]?.let { "  s = %.2f".format(it) }.orEmpty()
-            val fractional = atom.fractionalCoordinate
-            val lines = listOf(
-                "${atom.species.symbol}  ${atom.siteLabel}  occ ${atom.occupancy}$bvs",
-                "(${fractional.x.formatFract()}, ${fractional.y.formatFract()}, ${fractional.z.formatFract()})",
-            )
+            // Per v0.6.5: find co-located atoms (same fractional coordinate) and display them stacked.
+            val coLocated = scene.atoms.filter { it.atom.id != atom.id && it.atom.fractionalCoordinate == atom.fractionalCoordinate }
+            val allAtoms = listOf(atom) + coLocated.map { it.atom }
+            val atomBlocks = allAtoms.map { a ->
+                val bvs = bondValenceBySite[a.siteId]?.let { "  s = %.2f".format(it) }.orEmpty()
+                val fractional = a.fractionalCoordinate
+                listOf(
+                    "${a.species.symbol}  ${a.siteLabel}  occ ${a.occupancy}$bvs",
+                    "(${fractional.x.formatFract()}, ${fractional.y.formatFract()}, ${fractional.z.formatFract()})",
+                )
+            }
+            val allLines = atomBlocks.flatMapIndexed { i, block ->
+                if (i > 0) listOf("---") + block else block
+            }
             val lineHeight = infoPaint.fontMetrics.run { descent - ascent }
-            val maxWidth = lines.maxOf(infoPaint::measureText)
+            val dividerHeight = lineHeight * 0.3f
+            val maxWidth = allLines.maxOf(infoPaint::measureText)
             val pad = 16f * scale
-            val atomRadius = projection.screenRadius(atoms.getValue(id).radius).toFloat()
+            val atomRadius = projection.screenRadius(atomInstance.radius).toFloat()
+            val totalHeight = allLines.size * lineHeight + (atomBlocks.size - 1) * dividerHeight
             val left = anchor.first + atomRadius + 14f * scale
-            val top = anchor.second - atomRadius - 14f * scale - lines.size * lineHeight - pad
+            val top = anchor.second - atomRadius - 14f * scale - totalHeight - pad
             val bottom = anchor.second - atomRadius - 14f * scale + pad
             val panel = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = if (locked) Color.argb(209, 153, 102, 204) else Color.argb(166, 0, 0, 0)
             }
             canvas.drawRoundRect(left, top, left + maxWidth + pad * 2f, bottom, 14f * scale, 14f * scale, panel)
-            lines.forEachIndexed { index, line ->
-                canvas.drawText(line, left + pad, top + pad + (index + 1) * lineHeight - infoPaint.fontMetrics.descent, infoPaint)
+            var currentY = top + pad + lineHeight - infoPaint.fontMetrics.descent
+            allLines.forEach { line ->
+                canvas.drawText(line, left + pad, currentY, infoPaint)
+                currentY += if (line == "---") dividerHeight + lineHeight else lineHeight
             }
         }
         // Selection rings follow Filament's visual sphere radius (world radius × screen scale)
@@ -512,12 +540,12 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         }
         val labels = if (scene.environment.axes.mode == AxisMode.ABC) listOf("a", "b", "c") else listOf("X", "Y", "Z")
         val colors = intArrayOf(0xFFE57373.toInt(), 0xFF81C784.toInt(), 0xFF64B5F6.toInt())
-        val originX = width * 0.08f + 28f * scale
-        val originY = height * 0.08f + 40f * scale
+    val originX = width * scene.environment.axes.offsetX + 28f * scale
+    val originY = height * scene.environment.axes.offsetY + 40f * scale - 75f * scale
         val maxArrowLength = 75f * scale
         val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = 30f * scale
-            setShadowLayer(4f * scale, scale, scale, Color.BLACK)
+            clearShadowLayer()
         }
         // Pre-compute rotated directions for depth sorting.
         val rotatedDirs = directions.mapIndexed { index, direction ->
@@ -531,15 +559,17 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             val visibleLength = maxArrowLength * projectedLength
             val ux = if (projectedLength > 0.0001f) dx / projectedLength else 0f
             val uy = if (projectedLength > 0.0001f) dy / projectedLength else 0f
-            val tipX = originX + ux * visibleLength
-            val tipY = originY + uy * visibleLength
+            // Arrow starts 12f from center along the arrow direction.
+            val hubR = 12f * scale
+            val startX = originX + ux * hubR
+            val startY = originY + uy * hubR
+            val tipX = originX + ux * (hubR + visibleLength)
+            val tipY = originY + uy * (hubR + visibleLength)
             val headLength = 14f * scale
             val baseX = tipX - ux * headLength
             val baseY = tipY - uy * headLength
-            val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(122, 0, 0, 0); strokeWidth = 7f * scale; strokeCap = Paint.Cap.ROUND }
             val shaft = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colors[index]; strokeWidth = 5f * scale; strokeCap = Paint.Cap.ROUND }
-            canvas.drawLine(originX, originY, baseX, baseY, shadow)
-            canvas.drawLine(originX, originY, baseX, baseY, shaft)
+            canvas.drawLine(startX, startY, baseX, baseY, shaft)
             val perpendicularX = -uy
             val perpendicularY = ux
             val halfHead = headLength * 0.6f
@@ -568,7 +598,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         val centerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = RadialGradient(highlightX, highlightY, hubRadius, intArrayOf(0xFFE0E0E0.toInt(), 0xFF68686F.toInt()), null, Shader.TileMode.CLAMP)
         }
-        canvas.drawCircle(originX + scale, originY + scale, hubRadius + scale, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(128, 0, 0, 0) })
         canvas.drawCircle(originX, originY, hubRadius, centerPaint)
         // Draw front arrows (pointing toward the viewer) on top of the sphere.
         rotatedDirs.filter { it.third.z > 0.0 }.forEach { (index, direction, rotated) ->

@@ -19,11 +19,17 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -45,12 +51,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -64,13 +72,16 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.material.icons.filled.ControlCamera
 import androidx.compose.material.icons.filled.BrightnessAuto
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
@@ -82,6 +93,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Palette
@@ -89,6 +101,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Straighten
@@ -123,8 +136,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -134,6 +149,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.layout.ContentScale
@@ -150,9 +166,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.krystals.app.ui.KrystalsTheme
 import com.krystals.app.ui.ThemeMode
 import com.krystals.crystal.analysis.bonding.BondDetector
+import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.analysis.bonding.BondGrid
 import com.krystals.crystal.analysis.bonding.BondNetwork
 import com.krystals.crystal.analysis.bonding.BondRule
+import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.bonding.BondRuleMatching
 import com.krystals.crystal.analysis.bonding.BondValence
 import com.krystals.crystal.analysis.bonding.VoronoiSearchLimitExceededException
@@ -186,6 +204,90 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 private data class PendingOpen(val uri: Uri, val name: String, val text: String, val candidates: List<Int>)
+
+/** Per v0.6.5: filter state for search result filtering. */
+private data class SearchFilterState(
+    val elementCount: Int? = null,
+    val crystalSystem: String? = null,
+    val pointGroup: String? = null,
+    val spaceGroup: String? = null,
+) {
+    val isActive: Boolean get() = elementCount != null || crystalSystem != null || pointGroup != null || spaceGroup != null
+}
+
+/** Per v0.6.5: metadata extracted from a search result for filtering. */
+private data class SearchResultMeta(
+    val elementCount: Int,
+    val crystalSystem: String?,
+    val pointGroup: String?,
+    val spaceGroup: String?,
+)
+
+/** Per v0.6.5: extract distinct element count from a formula string like "SiO2" or "Ca3(PO4)2". */
+private fun countElementsInFormula(formula: String): Int {
+    val regex = Regex("[A-Z][a-z]?")
+    return regex.findAll(formula).map { it.value }.distinct().count()
+}
+
+/** Per v0.6.5: resolve crystal system and point group from a space group symbol or number. */
+private fun resolveSpaceGroupMeta(sgSymbol: String, sgNumber: String? = null): Pair<String?, String?> {
+    val catalog = if (!sgNumber.isNullOrBlank()) {
+        sgNumber.toIntOrNull()?.let { SpaceGroupCatalog.all.getOrNull(it - 1) }
+    } else null
+        ?: SpaceGroupCatalog.find(sgSymbol)
+    return catalog?.crystalSystem to catalog?.pointGroup
+}
+
+/** Per v0.6.5: extract metadata from MP search results. */
+private fun MpSearchResult.meta(): SearchResultMeta {
+    val (cs, pg) = resolveSpaceGroupMeta(spaceGroup)
+    return SearchResultMeta(
+        elementCount = countElementsInFormula(formula),
+        crystalSystem = cs ?: crystalSystem.takeIf { it != "N/A" },
+        pointGroup = pg,
+        spaceGroup = spaceGroup.takeIf { it != "N/A" },
+    )
+}
+
+/** Per v0.6.5: extract metadata from COD search results. */
+private fun CodSearchResult.meta(): SearchResultMeta {
+    val (cs, pg) = resolveSpaceGroupMeta(spaceGroup, sgNumber)
+    return SearchResultMeta(
+        elementCount = nel,
+        crystalSystem = cs,
+        pointGroup = pg,
+        spaceGroup = spaceGroup.takeIf { it.isNotBlank() },
+    )
+}
+
+/** Per v0.6.5: build the available options from a list of metadata. */
+private fun buildFilterOptions(metas: List<SearchResultMeta>): SearchFilterOptions {
+    val elementCounts = metas.map { it.elementCount }.distinct().sorted()
+    val crystalSystems = metas.mapNotNull { it.crystalSystem }.distinct().sorted()
+    val pointGroups = metas.mapNotNull { it.pointGroup }.distinct().sorted()
+    val spaceGroups = metas.mapNotNull { it.spaceGroup }.distinct().sorted()
+    return SearchFilterOptions(elementCounts, crystalSystems, pointGroups, spaceGroups)
+}
+
+private data class SearchFilterOptions(
+    val elementCounts: List<Int>,
+    val crystalSystems: List<String>,
+    val pointGroups: List<String>,
+    val spaceGroups: List<String>,
+)
+
+private fun normalizeSgSymbol(s: String) = s.replace(" ", "").replace("_", "").lowercase()
+
+/** Per v0.6.5: cascade-link crystal system → point group → space group using SpaceGroupCatalog. */
+private fun pointGroupsForCrystalSystem(cs: String?): List<String> {
+    if (cs == null) return SpaceGroupCatalog.all.mapNotNull { it.pointGroup }.distinct().sorted()
+    return SpaceGroupCatalog.all.filter { it.crystalSystem == cs }.mapNotNull { it.pointGroup }.distinct().sorted()
+}
+
+private fun spaceGroupsForPointGroup(pg: String?): List<String> {
+    if (pg == null) return SpaceGroupCatalog.all.map { it.symbol }.distinct().sorted()
+    return SpaceGroupCatalog.all.filter { it.pointGroup == pg }.map { it.symbol }.distinct().sorted()
+}
 
 /** Per v0.5.3b: holds an open request whose expanded atom count exceeds the warn threshold until
  *  the user confirms or cancels. */
@@ -256,10 +358,21 @@ fun KrystalsRoot(
         viewModel.applyAppearance(ap)
         preferences.edit().putString(AppearanceStore.KEY, AppearanceStore.run { ap.toJson() }).apply()
     }
+    // Per v0.7.1: easter egg — rapid theme switching (>10 in 5s) unlocks secret MSAA export.
+    // Declared before applyTheme so the function can reference them.
+    var themeSwitchTimestamps by remember { mutableStateOf<List<Long>>(emptyList()) }
+    var secretUnlockTrigger by remember { mutableStateOf(0) }
     fun applyTheme(mode: ThemeMode) {
         themeMode = mode
         preferences.edit().putString("theme", mode.name).apply()
         applyViewerBackground(mode == ThemeMode.DARK || mode == ThemeMode.SYSTEM && systemDark)
+        // Per v0.7.1: easter egg — track rapid theme switches (>10 in 5s unlocks secret export).
+        val now = System.currentTimeMillis()
+        themeSwitchTimestamps = (themeSwitchTimestamps + now).filter { it > now - 5000 }
+        if (themeSwitchTimestamps.size > 10) {
+            secretUnlockTrigger++
+            themeSwitchTimestamps = emptyList()
+        }
     }
     LaunchedEffect(themeMode, systemDark) {
         if (themeMode == ThemeMode.SYSTEM) applyViewerBackground(systemDark)
@@ -279,8 +392,16 @@ fun KrystalsRoot(
     var pendingExportBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var helpOpen by remember { mutableStateOf(false) }
     var sponsorOpen by remember { mutableStateOf(false) }
+    // Per v0.6.5: unified confirmation dialog for help/feedback/sponsor links.
+    var linkConfirmUrl by remember { mutableStateOf<String?>(null) }
     var sponsorLaunchCount by remember { mutableStateOf(0) }
     var aboutOpen by remember { mutableStateOf(false) }
+    // Per v0.6.5: automatic update check on startup.
+    var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+    var updateDialogOpen by remember { mutableStateOf(false) }
+    var updateChecking by remember { mutableStateOf(false) }
+    var updateDownloadProgress by remember { mutableStateOf<Float?>(null) } // null = not downloading
+    val updateScope = rememberCoroutineScope()
     // Per v0.2.2: prompt for sponsorship on the 5th, 20th, 50th, and every 50th launch thereafter.
     // Per v0.4.0: once the device holds a valid activation code the automatic prompt is suppressed.
     LaunchedEffect(Unit) {
@@ -288,6 +409,19 @@ fun KrystalsRoot(
         preferences.edit().putInt("launch_count", count).apply()
         val prompt = count == 5 || count == 20 || count == 50 || (count > 50 && count % 50 == 0)
         if (prompt && !ActivationManager.isActivated(activity)) { sponsorLaunchCount = count; sponsorOpen = true }
+    }
+    // Per v0.6.5: check for updates on startup.
+    LaunchedEffect(Unit) {
+        updateScope.launch {
+            val info = fetchUpdateInfo()
+            if (info != null && info.versionCode > com.krystals.app.BuildConfig.VERSION_CODE) {
+                val skipped = preferences.getInt("skipped_version_code", -1)
+                if (info.versionCode > skipped) {
+                    updateInfo = info
+                    updateDialogOpen = true
+                }
+            }
+        }
     }
     var presetOpen by remember { mutableStateOf(false) }
     var mpSearchOpen by remember { mutableStateOf(false) }
@@ -380,9 +514,9 @@ fun KrystalsRoot(
                         if (expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
                             CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null)
                         } else {
-                            val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
-                                BondValence.smartIonicRules(structure, bondConfiguration, epsilon)
-                            }
+                        val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                            runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon) }.getOrNull()
+                        }
                             CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
                         }
                     }
@@ -430,6 +564,8 @@ fun KrystalsRoot(
     fun doOpenParsed(parsed: ParsedStructure, name: String, uri: Uri?, expandedEstimate: Int) {
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
+        // Per v0.7.0: extract user comments from CIF source.
+        tab.comments = CifComments.extract(parsed.document.source)
         openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
     }
 
@@ -452,7 +588,7 @@ fun KrystalsRoot(
 
     fun loadUri(uri: Uri) {
         scope.launch {
-            runCatching {
+            val result = runCatching {
                 withContext(Dispatchers.IO) {
                     val resolver = activity.contentResolver
                     runCatching { resolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
@@ -463,15 +599,22 @@ fun KrystalsRoot(
                     require(candidates.isNotEmpty()) { "No crystal structure found" }
                     PendingOpen(uri, FileRepository.displayName(resolver, uri), text, candidates)
                 }
-            }.onSuccess { result ->
-                if (result.candidates.size == 1) {
-                    val parsed = CifCodec.parseStructure(result.text, result.candidates.first())
-                    openParsed(parsed, result.name, result.uri)
-                } else pendingOpen = result
-            }.onFailure { if (it !is CancellationException) {
-                if (it is com.krystals.crystal.core.CifParseException) cifWarningOpen = true
-                else showMessage(it.message ?: "Unable to open CIF")
-            } }
+            }
+            val pending = result.getOrNull()
+            if (pending != null) {
+                if (pending.candidates.size == 1) {
+                    // Per v0.6.4: parseStructure can be heavy (resolves space groups, creates
+                    // symmetry operations) — run on Dispatchers.Default to avoid blocking the UI.
+                    val parsed = withContext(Dispatchers.Default) { CifCodec.parseStructure(pending.text, pending.candidates.first()) }
+                    openParsed(parsed, pending.name, pending.uri)
+                } else pendingOpen = pending
+            } else {
+                val error = result.exceptionOrNull()
+                if (error != null && error !is CancellationException) {
+                    if (error is com.krystals.crystal.core.CifParseException) cifWarningOpen = true
+                    else showMessage(error.message ?: "Unable to open CIF")
+                }
+            }
         }
     }
 
@@ -488,9 +631,11 @@ fun KrystalsRoot(
                         tab.bondConfiguration,
                         tab.renderConfiguration.toCifDisplayMetadata(),
                     )
-                    withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, content) }
+                    // Per v0.7.0: inject user comments into CIF before writing.
+                    val contentWithComments = CifComments.inject(content, tab.comments)
+                    withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, contentWithComments) }
                     tab.uri = uri; tab.isNew = false; tab.dirty = false; tab.savedName = tab.name
-                    tab.parsed = CifCodec.parseStructure(content, tab.parsed.blockIndex)
+                    tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex)
                 }.onSuccess {
                     showMessage("Saved ${tab.name}")
                 }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
@@ -513,8 +658,10 @@ fun KrystalsRoot(
                     tab.bondConfiguration,
                     tab.renderConfiguration.toCifDisplayMetadata(),
                 )
-                withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, content) }
-                tab.parsed = CifCodec.parseStructure(content, tab.parsed.blockIndex)
+                // Per v0.7.0: inject user comments into CIF before writing.
+                val contentWithComments = CifComments.inject(content, tab.comments)
+                withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, contentWithComments) }
+                tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex)
                 tab.dirty = false
             }.onSuccess { showMessage("Saved ${tab.name}"); afterSave() }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
         }
@@ -578,8 +725,16 @@ fun KrystalsRoot(
         LocalConfiguration provides localizedConfiguration,
     ) {
     KrystalsTheme(themeMode) {
-        Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { outerPadding ->
-            Box(Modifier.fillMaxSize().padding(outerPadding)) {
+        // Per v0.7.0: set contentWindowInsets to zero so overlay panels (EditorPanel,
+        // DisplayPanel) get full-screen space. The TopAppBar handles statusBars padding;
+        // navigationBars padding is applied per-screen where needed. This avoids the
+        // double-padding (Scaffold contentWindowInsets + TopAppBar windowInsets) that
+        // compressed dialog/panel heights on edge-to-edge devices.
+        Scaffold(
+            snackbarHost = { SnackbarHost(snackbar, Modifier.windowInsetsPadding(WindowInsets.navigationBars)) },
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        ) { _ ->
+            Box(Modifier.fillMaxSize()) {
                 if (viewModel.tabs.isEmpty()) {
                     HomeScreen(
                         onOpen = { openLauncher.launch(arrayOf("chemical/x-cif", "text/plain", "application/octet-stream")) },
@@ -588,7 +743,7 @@ fun KrystalsRoot(
                         onOnlineSource = { onlineSourceOpen = true },
                         themeMode = themeMode, onTheme = ::applyTheme, language = language,
                         onLanguage = ::applyLanguage,
-                        onHelp = { helpOpen = true }, onAbout = { aboutOpen = true }, onSponsor = { sponsorOpen = true }, onFeedback = { openUrl("https://github.com/SUPERkelesss/Krystals/issues") }, onExit = ::requestExit,
+                        onHelp = { linkConfirmUrl = "https://www.kelesss.art/refs/software/krystals.html" }, onAbout = { aboutOpen = true }, onSponsor = { linkConfirmUrl = "https://ifdian.net/a/krystals/plan" }, onFeedback = { linkConfirmUrl = "https://github.com/SUPERkelesss/Krystals/issues" }, onExit = ::requestExit,
                     )
                 } else {
                     ViewerScreen(
@@ -607,6 +762,7 @@ fun KrystalsRoot(
                                     tab.bondConfiguration,
                                     tab.renderConfiguration.toCifDisplayMetadata(),
                                     tab.name,
+                                    tab.comments,
                                 )
                                 showMessage("Saved to presets")
                             }.onFailure { showMessage(it.message ?: "Save failed") }
@@ -642,14 +798,15 @@ fun KrystalsRoot(
                         language = language,
                         onLanguage = ::applyLanguage,
                         onMessage = ::showMessage,
-                        onHelp = { helpOpen = true },
+                        onHelp = { linkConfirmUrl = "https://www.kelesss.art/refs/software/krystals.html" },
                         onAbout = { aboutOpen = true },
-                        onSponsor = { sponsorOpen = true },
-                        onFeedback = { openUrl("https://github.com/SUPERkelesss/Krystals/issues") },
+                        onSponsor = { linkConfirmUrl = "https://ifdian.net/a/krystals/plan" },
+                        onFeedback = { linkConfirmUrl = "https://github.com/SUPERkelesss/Krystals/issues" },
                         onRunBondComputation = ::runWithBondComputation,
                         onApplyAppearance = ::applyViewerAppearance,
                         backgroundFollowTheme = backgroundFollowTheme,
                         onBackgroundFollowThemeChange = ::applyBackgroundFollowTheme,
+                        secretUnlockTrigger = secretUnlockTrigger,
                     )
                 }
             }
@@ -661,6 +818,8 @@ fun KrystalsRoot(
                 computationJob?.cancel()
                 computing = false
                 computationJob = null
+                // Per v0.7.1: undo the modification that triggered the computation.
+                viewModel.current?.undo()
             }) {
                 androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
                     Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -745,8 +904,27 @@ fun KrystalsRoot(
             onDismissRequest = { closeRequest = null },
             title = { Text(localized("保存修改？", "Save changes?")) },
             text = { Text(tab.name) },
-            confirmButton = { TextButton(onClick = { save(tab) { viewModel.close(index); closeRequest = null } }) { Text(stringResource(R.string.save)) } },
-            dismissButton = { Row { TextButton(onClick = { viewModel.close(index); closeRequest = null }) { Text(stringResource(R.string.discard)) }; TextButton(onClick = { closeRequest = null }) { Text(stringResource(R.string.cancel)) } } },
+            confirmButton = {
+                // Per v0.7.0: two-row layout — Row 1: Save | Save to Presets; Row 2: Discard | Cancel.
+                Column(horizontalAlignment = Alignment.End) {
+                    Row {
+                        TextButton(onClick = { save(tab) { viewModel.close(index); closeRequest = null } }) { Text(stringResource(R.string.save)) }
+                        TextButton(onClick = {
+                            runCatching {
+                                PresetRepository.saveToPreset(
+                                    activity, tab.parsed, tab.structure, tab.bondConfiguration,
+                                    tab.renderConfiguration.toCifDisplayMetadata(), tab.name, tab.comments,
+                                )
+                            }.onSuccess { showMessage("Saved to presets"); viewModel.close(index); closeRequest = null }
+                             .onFailure { showMessage(it.message ?: "Save failed") }
+                        }) { Text(stringResource(R.string.save_to_presets)) }
+                    }
+                    Row {
+                        TextButton(onClick = { viewModel.close(index); closeRequest = null }) { Text(stringResource(R.string.discard)) }
+                        TextButton(onClick = { closeRequest = null }) { Text(stringResource(R.string.cancel)) }
+                    }
+                }
+            },
         ) else closeRequest = null
     }
 
@@ -758,12 +936,104 @@ fun KrystalsRoot(
         dismissButton = { Row { TextButton(onClick = { activity.finishAndRemoveTask() }) { Text(stringResource(R.string.discard)) }; TextButton(onClick = { exitRequest = false }) { Text(stringResource(R.string.cancel)) } } },
     )
 
-    if (helpOpen) HelpDialog(
-        onDismiss = { helpOpen = false },
-        onConfirm = { helpOpen = false; openUrl("https://www.kelesss.art") },
-    )
-    if (sponsorOpen) SponsorDialog(onDismiss = { sponsorOpen = false }, launchCount = sponsorLaunchCount, onSponsor = { openUrl("https://ifdian.net/a/krystals/plan"); sponsorOpen = false }, onAlreadySponsored = { sponsorOpen = false; activationOpen = true })
-    if (aboutOpen) AboutScreen(onBack = { aboutOpen = false })
+    // Per v0.6.5: unified link-confirmation dialog for help/feedback/sponsor.
+    if (linkConfirmUrl != null) {
+        val url = linkConfirmUrl!!
+        AlertDialog(
+            onDismissRequest = { linkConfirmUrl = null },
+            title = { Text(localized("注意", "Caution")) },
+            text = { Text(localized("将在浏览器中打开链接页面：", "This will open the following link in your browser:") + "\n" + url) },
+            confirmButton = {
+                Button(
+                    onClick = { val u = url; linkConfirmUrl = null; openUrl(u) },
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text(localized("前往", "Go")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { linkConfirmUrl = null }) { Text(stringResource(R.string.cancel)) }
+            },
+        )
+    }
+    // Per v0.6.5: resolve localized strings for update dialogs in composable context.
+    val msgSkipped = localized("已跳过该版本", "This version has been skipped")
+    val msgLatest = localized("当前版本已是最新版", "Current version is up to date")
+    val msgFailed = localized("无法连接至服务器", "Unable to connect to server")
+    val msgStartDownload = localized("开始下载新版本...", "Starting download...")
+    val msgDownloadFail = localized("下载失败", "Download failed")
+    if (aboutOpen) {
+        AboutScreen(
+            onBack = { aboutOpen = false },
+            onCheckUpdates = {
+                updateChecking = true
+                updateScope.launch {
+                    val info = fetchUpdateInfo()
+                    updateChecking = false
+                    if (info != null && info.versionCode > com.krystals.app.BuildConfig.VERSION_CODE) {
+                        val skipped = preferences.getInt("skipped_version_code", -1)
+                        if (info.versionCode > skipped) {
+                            updateInfo = info
+                            updateDialogOpen = true
+                        } else {
+                            showMessage(msgSkipped)
+                        }
+                    } else if (info != null) {
+                        showMessage(msgLatest)
+                    } else {
+                        showMessage(msgFailed)
+                    }
+                }
+            },
+            isCheckingUpdates = updateChecking,
+        )
+    }
+    // Per v0.6.5: version update dialog.
+    if (updateDialogOpen && updateInfo != null) {
+        val info = updateInfo!!
+        AlertDialog(
+            onDismissRequest = { updateDialogOpen = false },
+            title = { Text(localized("版本更新", "Version Update")) },
+            text = {
+                Column {
+                    Text(localized("检测到有新版本: v${info.versionName}。是否更新？", "A new version is available: v${info.versionName}. Update now?"))
+                    if (updateDownloadProgress != null) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(localized("下载中... ${(updateDownloadProgress!! * 100).toInt()}%", "Downloading... ${(updateDownloadProgress!! * 100).toInt()}%"))
+                    }
+                }
+            },
+            confirmButton = {
+                if (updateDownloadProgress == null) {
+                    Button(
+                        onClick = {
+                            updateScope.launch {
+                                updateDownloadProgress = 0f
+                                showMessage(msgStartDownload)
+                                val success = downloadAndInstallApk(activity, info.packageName) { progress ->
+                                    updateDownloadProgress = progress
+                                }
+                                if (!success) {
+                                    showMessage(msgDownloadFail)
+                                    updateDownloadProgress = null
+                                }
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                    ) { Text(localized("立即更新", "Update Now")) }
+                }
+            },
+            dismissButton = {
+                if (updateDownloadProgress == null) {
+                    Row {
+                        TextButton(onClick = {
+                            preferences.edit().putInt("skipped_version_code", info.versionCode).apply()
+                            updateDialogOpen = false
+                        }) { Text(localized("跳过该版本", "Skip This Version")) }
+                        TextButton(onClick = { updateDialogOpen = false }) { Text(localized("暂不更新", "Update Later")) }
+                    }
+                }
+            },
+        )
+    }
     if (presetOpen) PresetLibraryDialog(
         context = activity,
         viewModel = viewModel,
@@ -845,7 +1115,7 @@ private fun HomeScreen(
     onExit: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
         Box(Modifier.align(Alignment.TopStart)) {
             IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.Menu, null) }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -853,19 +1123,20 @@ private fun HomeScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.open_preset_library)) }, leadingIcon = { Icon(Icons.Default.Inventory2, null) }, onClick = { menuOpen = false; onOpenPreset() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.Science, null) }, onClick = { menuOpen = false; onOnlineSource() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
+                HorizontalDivider()
                 LanguageMenuItem(language, onLanguage)
                 ThemeMenuItem(themeMode, onTheme)
                 HorizontalDivider()
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Text(stringResource(R.string.feedback), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
+                    TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    TextButton(onClick = { menuOpen = false; onAbout() }) { Text(stringResource(R.string.about), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Text(stringResource(R.string.sponsor), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
+                    TextButton(onClick = { menuOpen = false; onAbout() }) { Text(stringResource(R.string.about), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 HorizontalDivider()
-                DropdownMenuItem(text = { Text(stringResource(R.string.exit)) }, onClick = { menuOpen = false; onExit() })
+                DropdownMenuItem(text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) }, onClick = { menuOpen = false; onExit() })
             }
         }
         // Per v0.4.3: in landscape the four import buttons span the full (very wide) screen and
@@ -921,14 +1192,25 @@ private fun ViewerScreen(
     onApplyAppearance: (ViewerAppearance) -> Unit,
     backgroundFollowTheme: Boolean,
     onBackgroundFollowThemeChange: (Boolean) -> Unit,
+    secretUnlockTrigger: Int = 0,
 ) {
     val tab = viewModel.current ?: return
     val scope = rememberCoroutineScope()
     // Per v0.6.3: export-image loading dialog with back-button cancel.
     var exporting by remember { mutableStateOf(false) }
     var exportJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    // Secret: long-press the exit button for 5s to unlock the broken-export easter egg.
+    // Secret: retained for renderer MSAA export path; entry point removed per user request.
     var secretUnlocked by remember { mutableStateOf(false) }
+    // Per v0.7.1: easter egg — secretUnlockTrigger increments when user switches theme >10 times in 5s.
+    LaunchedEffect(secretUnlockTrigger) {
+        if (secretUnlockTrigger > 0) secretUnlocked = true
+    }
+    // Per v0.7.1: gradual highlight animation for the export-image menu item when secret is unlocked.
+    val secretHighlightAlpha by animateFloatAsState(
+        targetValue = if (secretUnlocked) 1f else 0f,
+        animationSpec = tween(800, easing = FastOutSlowInEasing),
+        label = "secretHighlight",
+    )
     val exportingMessage = localized("导出图片中...", "Exporting image...")
     // Per v0.6.3: pre-resolve composable values for use in non-composable onClick lambdas.
     val shareLabel = localized("分享到…", "Share to…")
@@ -954,6 +1236,8 @@ private fun ViewerScreen(
     var displayOpen by remember { mutableStateOf(false) }
     var infoOpen by remember { mutableStateOf(false) }
     var appearanceOpen by remember { mutableStateOf(false) }
+    // Per v0.7.1: persistent overlay message shown during atom-edit / bond-draw flows.
+    var persistentMessage by remember { mutableStateOf<String?>(null) }
     BackHandler(enabled = true) {
         when {
             appearanceOpen -> appearanceOpen = false
@@ -963,7 +1247,17 @@ private fun ViewerScreen(
             alignOpen -> alignOpen = false
             menuOpen -> menuOpen = false
             toolOpen -> toolOpen = false
+            tab.commentsOpen -> tab.commentsOpen = false
             tab.editorOpen -> tab.editorOpen = false
+            // Per v0.7.1: cancel bond-draw / atom-edit persistent message on back press.
+            tab.bondDrawMode != BondDrawMode.NONE || persistentMessage != null -> {
+                tab.bondDrawMode = BondDrawMode.NONE
+                tab.bondDrawFirstSiteId = null
+                tab.bondDrawFirstCartesian = null
+                tab.selectedAtomIds = emptyList()
+                tab.atomEditMode = AtomEditMode.NONE
+                persistentMessage = null
+            }
             else -> onBackCloseCurrent()
         }
     }
@@ -1036,6 +1330,9 @@ private fun ViewerScreen(
         "构建场景原子数过多，回退回前列场景。",
         "Too many atoms in scene, reverting to previous scene.",
     )
+    // Per v0.7.1: scene rebuild loading dialog — shows after 300ms delay to avoid flicker
+    // on fast rebuilds. Back button undoes the last change.
+    var sceneRebuilding by remember(tab.id) { mutableStateOf(false) }
     LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility) {
         // Per v0.6.3: removed currentOrientation key + delay — the Filament viewport already
         // handles size changes via onSizeChanged → SetViewport, so rebuilding the entire scene on
@@ -1045,6 +1342,11 @@ private fun ViewerScreen(
         // (thrown when the effect is cancelled due to a key change) is rethrown, not stored
         // as a failure. Previously runCatching swallowed it, briefly showing "the coroutine
         // scope … was cancelled" in the error Text below whenever tab.structure changed.
+        // Per v0.7.1: delayed dialog — only show if rebuild takes > 300ms.
+        val dialogJob = kotlinx.coroutines.GlobalScope.launch {
+            kotlinx.coroutines.delay(300)
+            sceneRebuilding = true
+        }
         sceneResult = try {
             val scene = withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
                 withContext(Dispatchers.Default) {
@@ -1057,9 +1359,12 @@ private fun ViewerScreen(
                         hiddenBondKeys = tab.visibility.hiddenBondPairs,
                         showBonds = tab.visibility.showBonds,
                         polyhedronSiteIds = tab.visibility.polyhedronSites,
+                        structuralExpansion = tab.structuralExpansion,
                     )
                 }
             }
+            dialogJob.cancel()
+            sceneRebuilding = false
             if (scene != null) Result.success(scene)
             else {
                 // Per v0.6.3: scene build timed out — show dialog and undo.
@@ -1067,18 +1372,27 @@ private fun ViewerScreen(
                 Result.failure(IllegalStateException(sceneTimeoutMessage))
             }
         } catch (ce: CancellationException) {
+            dialogJob.cancel()
+            sceneRebuilding = false
             throw ce
         } catch (e: Throwable) {
+            dialogJob.cancel()
+            sceneRebuilding = false
             // Per v0.6.3: scene build failed — show dialog and undo.
             sceneBuildError = e.message ?: sceneTimeoutMessage
             Result.failure(e)
         }
     }
-    // Per v0.5.0: per-site bond-valence sums for the atom-info window (s = X.XX). Recomputed when
-    // the structure changes; cheap relative to scene build.
-    val bondValenceBySite = remember(tab.structure, tab.bondConfiguration, tab.bondEpsilon) {
-        BondValence.bondValenceSums(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
+    // Per v0.5.0: per-site bond-valence sums for the atom-info window (s = X.XX).
+    // Per v0.6.4: moved to produceState + Dispatchers.Default because SymmetryExpander.expand()
+    // (called inside bondValenceSums) blocks the main thread for structures with many symmetry
+    // operations (e.g. Fm-3m = 192 ops), causing 576-frame skips when opening CIF files.
+    val bondValenceBySiteState = produceState<Map<String, Double>>(emptyMap(), tab.structure, tab.bondConfiguration, tab.bondEpsilon) {
+        value = withContext(Dispatchers.Default) {
+            BondValence.bondValenceSums(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
+        }
     }
+    val bondValenceBySite = bondValenceBySiteState.value
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
@@ -1091,7 +1405,7 @@ private fun ViewerScreen(
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text(stringResource(R.string.save)) }, leadingIcon = { Icon(Icons.Default.Save, null) }, onClick = { menuOpen = false; onSave(tab) })
                 DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = { menuOpen = false; onSaveToPreset() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.export_image), color = if (secretUnlocked) Color.Red else Color.Unspecified) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
+                DropdownMenuItem(text = { Text(stringResource(R.string.export_image), color = if (secretHighlightAlpha > 0f) MaterialTheme.colorScheme.primary.copy(alpha = secretHighlightAlpha) else androidx.compose.ui.graphics.Color.Unspecified) }, leadingIcon = { val defaultTint = androidx.compose.material3.LocalContentColor.current; Icon(Icons.Default.Photo, null, tint = if (secretHighlightAlpha > 0f) MaterialTheme.colorScheme.primary.copy(alpha = secretHighlightAlpha) else defaultTint) }, onClick = {
                     menuOpen = false
                     val useMsaa = secretUnlocked
                     secretUnlocked = false
@@ -1132,7 +1446,7 @@ private fun ViewerScreen(
                                 val tempFile = File(shareContext.cacheDir, "${tab.name.ensureCifExtension()}")
                                 tempFile.writeText(cifContent, Charsets.UTF_8)
                                 val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                    type = "chemical/x-cif"
+                                    type = "text/plain"
                                     putExtra(android.content.Intent.EXTRA_STREAM, androidx.core.content.FileProvider.getUriForFile(shareContext, "${shareContext.packageName}.fileprovider", tempFile))
                                     addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
@@ -1158,23 +1472,7 @@ private fun ViewerScreen(
                     TextButton(onClick = { menuOpen = false; onSponsor() }) { Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 HorizontalDivider()
-                DropdownMenuItem(
-                    text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) },
-                    onClick = { menuOpen = false; onExit() },
-                    modifier = Modifier.pointerInput(Unit) {
-                        awaitEachGesture {
-                            awaitFirstDown()
-                            val job = scope.launch {
-                                delay(5000)
-                                secretUnlocked = true
-                            }
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                if (event.changes.all { !it.pressed }) { job.cancel(); break }
-                            }
-                        }
-                    },
-                )
+                DropdownMenuItem(text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) }, onClick = { menuOpen = false; onExit() })
             } } },
             actions = {
                 IconButton(onClick = { tab.undo() }, enabled = tab.history.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, localized("撤回", "Undo")) }
@@ -1198,7 +1496,7 @@ private fun ViewerScreen(
             },
         )
         DocumentTabs(viewModel, onClose)
-        Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
             val current = sceneResult
             when {
                 current == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1206,24 +1504,93 @@ private fun ViewerScreen(
                 }
                 current.isSuccess -> {
                     val scene = current.getOrThrow()
+                    val noBondMessage = localized("所选原子间没有成键", "No bond between the selected atoms")
                     val handleAtomTap: (com.krystals.crystal.core.model.AtomImage) -> Boolean = { atom ->
-                            when (tab.atomEditMode) {
-                                AtomEditMode.DELETE_NEXT -> {
-                                    tab.atomEditMode = AtomEditMode.NONE
-                                    val deleted = runCatching {
-                                        CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.DeleteAtom(atom.siteId))
-                                    }.getOrNull()
-                                    if (deleted != null) onRunBondComputation {
-                                        CrystalEditor.ensureAutoBondRules(deleted.structure, deleted.bondConfiguration)
-                                    }
-                                    true
+                        when {
+                            // Per v0.7.1: bond draw mode — first tap selects atom A (with highlight),
+                            // second tap calculates distance and opens BondRuleDialog with preset values.
+                            tab.bondDrawMode == BondDrawMode.DRAWING -> {
+                                if (tab.bondDrawFirstSiteId == null) {
+                                    tab.bondDrawFirstSiteId = atom.siteId
+                                    tab.bondDrawFirstCartesian = atom.cartesianCoordinate.toVec3()
+                                    // Per v0.7.1: highlight the first selected atom.
+                                    tab.selectedAtomIds = listOf(atom.id)
+                                } else {
+                                    val firstCartesian = tab.bondDrawFirstCartesian!!
+                                    val dist = (atom.cartesianCoordinate.toVec3() - firstCartesian).length()
+                                    tab.pendingBondDrawRule = BondRule(
+                                        tab.bondDrawFirstSiteId!!, atom.siteId,
+                                        0.1, dist + 0.1,
+                                        BondRuleSource.CUSTOM,
+                                    )
+                                    tab.bondDrawMode = BondDrawMode.NONE
+                                    tab.bondDrawFirstSiteId = null
+                                    tab.bondDrawFirstCartesian = null
+                                    tab.selectedAtomIds = emptyList()
+                                    persistentMessage = null
+                                    // Per v0.7.1: auto-navigate to the bonds tab.
+                                    tab.pendingEditorTab = "bonds"
+                                    tab.editorOpen = true
                                 }
-                                AtomEditMode.MODIFY_NEXT -> {
-                                    tab.editingSiteId = atom.siteId; tab.atomEditMode = AtomEditMode.NONE; tab.editorOpen = true
-                                    true
-                                }
-                                AtomEditMode.NONE -> false
+                                true
                             }
+                            // Per v0.7.1: bond delete mode — first tap selects atom A (with highlight),
+                            // second tap checks if a bond rule exists between the two atoms.
+                            tab.bondDrawMode == BondDrawMode.DELETING -> {
+                                if (tab.bondDrawFirstSiteId == null) {
+                                    tab.bondDrawFirstSiteId = atom.siteId
+                                    // Per v0.7.1: highlight the first selected atom.
+                                    tab.selectedAtomIds = listOf(atom.id)
+                                } else {
+                                    val siteA = tab.bondDrawFirstSiteId!!
+                                    val siteB = atom.siteId
+                                    val key = listOf(siteA, siteB).sorted().joinToString("\u0000")
+                                    val matchingRule = tab.bondConfiguration.rules.firstOrNull { it.key == key }
+                                    if (matchingRule != null) {
+                                        tab.recordHistory()
+                                        val result = CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.RemoveBondRule(key))
+                                        tab.structure = result.structure
+                                        tab.bondConfiguration = result.bondConfiguration
+                                        tab.dirty = true
+                                    } else {
+                                        onMessage(noBondMessage)
+                                    }
+                                    tab.bondDrawMode = BondDrawMode.NONE
+                                    tab.bondDrawFirstSiteId = null
+                                    tab.bondDrawFirstCartesian = null
+                                    tab.selectedAtomIds = emptyList()
+                                    persistentMessage = null
+                                    // Per v0.7.1: auto-navigate to the bonds tab.
+                                    tab.pendingEditorTab = "bonds"
+                                    tab.editorOpen = true
+                                }
+                                true
+                            }
+                            tab.atomEditMode == AtomEditMode.DELETE_NEXT -> {
+                                tab.atomEditMode = AtomEditMode.NONE
+                                persistentMessage = null
+                                val deleted = runCatching {
+                                    CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.DeleteAtom(atom.siteId))
+                                }.getOrNull()
+                                // Per v0.7.1: deleting an atom no longer regenerates all bond rules.
+                                if (deleted != null) {
+                                    tab.recordHistory()
+                                    tab.structure = deleted.structure
+                                    tab.bondConfiguration = deleted.bondConfiguration
+                                    tab.dirty = true
+                                    tab.selectedAtomIds = emptyList()
+                                    // Per v0.7.1: return to the atom editor page after deletion.
+                                    tab.pendingEditorTab = "atoms"
+                                    tab.editorOpen = true
+                                }
+                                true
+                            }
+                            tab.atomEditMode == AtomEditMode.MODIFY_NEXT -> {
+                                tab.editingSiteId = atom.siteId; tab.atomEditMode = AtomEditMode.NONE; persistentMessage = null; tab.editorOpen = true
+                                true
+                            }
+                            else -> false
+                        }
                     }
                     val context = LocalContext.current
                     val onFilamentFailure: (Throwable) -> Unit = {
@@ -1269,8 +1636,59 @@ private fun ViewerScreen(
                 }
             }
 
-            // Per v0.6.3: scene build timeout/failure dialog — undo to previous state.
-            sceneBuildError?.let { message ->
+            // Per v0.7.0: lock button at viewer top-right.
+            // Per v0.8.1: inactive = 50% opacity; active = solid circular background + hollow icon.
+            // Per v0.6.5: icon size matched (36dp outer + 24dp icon in both states).
+            IconButton(
+                onClick = { dispatchViewerCommand(ViewerCommand.ToggleLock) },
+                modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+            ) {
+                if (tab.interactionState.session.locked) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.onSurface),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Outlined.LockOpen,
+                            null,
+                            tint = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier.size(36.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Lock,
+                            null,
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
+                }
+            }
+
+// Per v0.7.1: scene rebuild loading dialog — blocks user interaction during rebuild.
+if (sceneRebuilding) {
+    androidx.compose.material3.BasicAlertDialog(onDismissRequest = {
+        sceneRebuilding = false
+        tab.undo()
+    }) {
+        androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
+            Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                androidx.compose.material3.CircularProgressIndicator()
+                Text(localized("计算中...", "Computing..."))
+            }
+        }
+    }
+}
+// Per v0.6.3: scene build timeout/failure dialog — undo to previous state.
+sceneBuildError?.let { message ->
                 AlertDialog(
                     onDismissRequest = {
                         sceneBuildError = null
@@ -1328,8 +1746,26 @@ private fun ViewerScreen(
                 entries = legendEntries,
                 expanded = legendExpanded,
                 onToggle = { legendExpanded = !legendExpanded },
+                onExpand = { legendExpanded = true },
                 modifier = Modifier.align(Alignment.BottomStart).padding(14.dp),
             )
+
+            // Per v0.7.1: persistent overlay message for atom-edit / bond-draw flows.
+            persistentMessage?.let { msg ->
+                Surface(
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    tonalElevation = 6.dp,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                ) {
+                    Text(
+                        msg,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
 
             val floatingAlpha by animateFloatAsState(targetValue = if (toolOpen) 1f else 0.45f, label = "floatingAlpha")
             // Per v0.2.2: floating-ball palette uses the project's two purples (deep 0xFF7542A5 /
@@ -1355,11 +1791,9 @@ private fun ViewerScreen(
                 // measurement mode is active; the Lock button does the same while the view is locked.
                 data class Tool(val icon: androidx.compose.ui.graphics.vector.ImageVector, val active: Boolean, val action: () -> Unit)
                 val tools = listOf(
-                    Tool(Icons.Default.FitScreen, active = false) { alignOpen = true },
+                    Tool(Icons.Default.ControlCamera, active = false) { alignOpen = true },
                     Tool(Icons.Default.Straighten, active = tab.measurementMode != MeasurementMode.NONE) { measureOpen = true },
-                    Tool(if (tab.interactionState.session.locked) Icons.Default.LockOpen else Icons.Default.Lock, active = tab.interactionState.session.locked) {
-                        dispatchViewerCommand(ViewerCommand.ToggleLock)
-                    },
+                    Tool(Icons.AutoMirrored.Filled.Comment, active = false) { tab.commentsOpen = true },
                     Tool(Icons.Default.Info, active = false) { infoOpen = true },
                     Tool(Icons.Default.Edit, active = false) { tab.editorOpen = true },
                     Tool(Icons.Default.Visibility, active = false) { displayOpen = true },
@@ -1484,10 +1918,13 @@ private fun ViewerScreen(
                         },
                 ) { AssetImage("icon_trans_release.png", Modifier.size(50.dp), ContentScale.Fit) }
             }
-            if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateAnalysis(tab, it) }, onMessage = onMessage, onRunBondComputation = onRunBondComputation)
         }
     }
 
+    // Per v0.7.0: EditorPanel moved outside Column so it gets full-screen space
+    // (not constrained by TopAppBar/DocumentTabs height or navigationBars padding).
+    if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateAnalysis(tab, it) }, onMessage = onMessage, onRunBondComputation = onRunBondComputation, onPersistentMessage = { persistentMessage = it })
+    if (tab.commentsOpen) CommentsPanel(tab, onDismiss = { tab.commentsOpen = false })
     if (alignOpen) AlignDialog(
         onDismiss = { alignOpen = false },
         onChoice = { choice ->
@@ -1542,27 +1979,82 @@ private fun ViewerScreen(
 private fun DocumentTabs(viewModel: KrystalsViewModel, onClose: (Int) -> Unit) {
     val singleTab = viewModel.tabs.size == 1
     val tabBackground = if (singleTab) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant
-    LazyRow(Modifier.fillMaxWidth().height(46.dp).background(tabBackground)) {
-        itemsIndexed(viewModel.tabs, key = { _, tab -> tab.id }) { index, tab ->
-            var drag by remember { mutableFloatStateOf(0f) }
-            val tabColor = if (singleTab) MaterialTheme.colorScheme.surfaceVariant else if (index == viewModel.selectedIndex) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
-            Surface(
-                color = tabColor,
-                modifier = Modifier.fillMaxHeight().pointerInput(tab.id, index) {
-                    detectDragGesturesAfterLongPress(
-                        onDragEnd = { drag = 0f },
-                        onDragCancel = { drag = 0f },
-                        onDrag = { change, amount ->
-                            change.consume(); drag += amount.x
-                            if (drag > 70f && index < viewModel.tabs.lastIndex) { viewModel.move(index, index + 1); drag = 0f }
-                            if (drag < -70f && index > 0) { viewModel.move(index, index - 1); drag = 0f }
-                        },
-                    )
-                }.clickable { viewModel.select(index) },
+    // Per v0.7.0: expand button on the left that opens a dropdown listing all tabs.
+    var tabsExpanded by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    // Per v0.6.5: auto-scroll to the selected tab so newly opened files are visible.
+    LaunchedEffect(viewModel.tabs.size, viewModel.selectedIndex) {
+        if (viewModel.tabs.isNotEmpty()) {
+            listState.animateScrollToItem(viewModel.selectedIndex)
+        }
+    }
+    val expandRotation by animateFloatAsState(
+        targetValue = if (tabsExpanded) 180f else 0f,
+        animationSpec = tween(150, easing = FastOutSlowInEasing),
+        label = "tabsExpandRotation",
+    )
+    Row(Modifier.fillMaxWidth().height(46.dp)) {
+        Box {
+            IconButton(
+                onClick = { tabsExpanded = !tabsExpanded },
+                modifier = Modifier.fillMaxHeight(),
             ) {
-                Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(tab.name + if (tab.dirty) " •" else "", maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(145.dp))
-                    IconButton(onClick = { onClose(index) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp)) }
+                Icon(
+                    Icons.Default.ExpandMore,
+                    null,
+                    modifier = Modifier.graphicsLayer { rotationZ = expandRotation },
+                )
+            }
+            DropdownMenu(
+                expanded = tabsExpanded,
+                onDismissRequest = { tabsExpanded = false },
+            ) {
+            viewModel.tabs.forEachIndexed { index, tab ->
+                        val isCurrent = index == viewModel.selectedIndex
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (isCurrent) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
+                                .clickable { viewModel.select(index); tabsExpanded = false }
+                                .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                tab.name + if (tab.dirty) " •" else "",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                modifier = Modifier.width(180.dp),
+                            )
+IconButton(onClick = { onClose(index) }, modifier = Modifier.size(32.dp)) {
+Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
+}
+}
+}
+            }
+        }
+        LazyRow(Modifier.weight(1f).background(tabBackground), state = listState) {
+            itemsIndexed(viewModel.tabs, key = { _, tab -> tab.id }) { index, tab ->
+                var drag by remember { mutableFloatStateOf(0f) }
+                val tabColor = if (singleTab) MaterialTheme.colorScheme.surfaceVariant else if (index == viewModel.selectedIndex) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+                Surface(
+                    color = tabColor,
+                    modifier = Modifier.fillMaxHeight().pointerInput(tab.id, index) {
+                        detectDragGesturesAfterLongPress(
+                            onDragEnd = { drag = 0f },
+                            onDragCancel = { drag = 0f },
+                            onDrag = { change, amount ->
+                                change.consume(); drag += amount.x
+                                if (drag > 70f && index < viewModel.tabs.lastIndex) { viewModel.move(index, index + 1); drag = 0f }
+                                if (drag < -70f && index > 0) { viewModel.move(index, index - 1); drag = 0f }
+                            },
+                        )
+                    }.clickable { viewModel.select(index) },
+                ) {
+                    Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(tab.name + if (tab.dirty) " •" else "", maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(145.dp))
+                        IconButton(onClick = { onClose(index) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp)) }
+                    }
                 }
             }
         }
@@ -1605,28 +2097,70 @@ private fun ThemeMenuItem(mode: ThemeMode, onTheme: (ThemeMode) -> Unit) {
 private data class LegendEntry(val label: String, val argb: Long)
 
 @Composable
-private fun ElementLegend(entries: List<LegendEntry>, expanded: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
-    var legendHeight by remember { mutableStateOf(220.dp) }
+private fun ElementLegend(entries: List<LegendEntry>, expanded: Boolean, onToggle: () -> Unit, onExpand: () -> Unit, modifier: Modifier = Modifier) {
+    val defaultHeight = 220.dp
+    var legendHeight by remember { mutableStateOf(defaultHeight) }
+    // Per v0.7.1: track whether the legend was hidden by dragging — if so, next expand uses default height.
+    var hiddenByDrag by remember { mutableStateOf(false) }
     val density = LocalDensity.current
+    // Per v0.7.1: track latest values for gesture callback without restarting pointerInput.
+    val expandedLatest by rememberUpdatedState(expanded)
+    val onExpandLatest by rememberUpdatedState(onExpand)
+    val onToggleLatest by rememberUpdatedState(onToggle)
+    // Per v0.7.1: when expanding via click after being hidden by drag, restore to default height.
+    LaunchedEffect(expanded) {
+        if (expanded && hiddenByDrag) {
+            legendHeight = defaultHeight
+            hiddenByDrag = false
+        }
+    }
+    // Per v0.7.0: smooth icon rotation (0° → 180°) over 150ms.
+    val legendRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(150, easing = FastOutSlowInEasing),
+        label = "legendRotation",
+    )
     Surface(modifier.alpha(0.84f), shape = RoundedCornerShape(14.dp), tonalElevation = 5.dp) {
-        Column(Modifier.width(if (expanded) 130.dp else 140.dp)) {
+        Column(Modifier.width(130.dp)) {
             Row(
                 Modifier.fillMaxWidth()
                     .pointerInput(Unit) {
-                        detectDragGestures { change, amount ->
+                        detectDragGestures(
+                            onDragStart = {
+                                // Per v0.7.1: press-and-swipe-up expands from collapsed state.
+                                if (!expandedLatest) {
+                                    legendHeight = defaultHeight
+                                    hiddenByDrag = false
+                                    onExpandLatest()
+                                }
+                            },
+                        ) { change, amount ->
                             change.consume()
-                            legendHeight = (legendHeight - with(density) { amount.y.toDp() }).coerceIn(80.dp, 600.dp)
+                            // Per v0.7.1: no minimum height limit — allow dragging to 0 to hide.
+                            val newHeight = (legendHeight - with(density) { amount.y.toDp() }).coerceIn(0.dp, 600.dp)
+                            legendHeight = newHeight
+                            // Per v0.7.1: increased threshold from 10.dp to 40.dp for collapsing.
+                            // When dragged below threshold, collapse the legend and mark as hiddenByDrag.
+                            if (newHeight <= 40.dp && expandedLatest) {
+                                hiddenByDrag = true
+                                onToggleLatest()
+                            }
                         }
                     }
                     .clickable(onClick = onToggle)
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Default.Palette, null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Category, null, modifier = Modifier.size(18.dp))
                 Text(localized("图例", "Legend"), modifier = Modifier.weight(1f).padding(start = 6.dp), style = MaterialTheme.typography.labelLarge)
-                Icon(if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp, null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.ExpandMore, null, modifier = Modifier.size(18.dp).graphicsLayer { rotationZ = legendRotation })
             }
-            if (expanded) {
+            // Per v0.7.0: smooth expand/collapse animation (150ms).
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(animationSpec = tween(150, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
+                exit = shrinkVertically(animationSpec = tween(150, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
+            ) {
                 Column(Modifier.fillMaxWidth().height(legendHeight).verticalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp)) {
                     entries.forEach { entry ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1634,6 +2168,122 @@ private fun ElementLegend(entries: List<LegendEntry>, expanded: Boolean, onToggl
                             Text(entry.label, modifier = Modifier.padding(start = 9.dp), fontWeight = FontWeight.Medium)
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommentsPanel(tab: DocumentTab, onDismiss: () -> Unit) {
+    // Per v0.7.0: adjustable comments panel with debounce auto-save.
+    var text by remember(tab.id) { mutableStateOf(tab.comments) }
+    LaunchedEffect(text) {
+        if (text != tab.comments) {
+            delay(500)
+            tab.comments = text
+            tab.dirty = true
+        }
+    }
+    // Per v0.7.0: slide-in animation state.
+    var visible by remember { mutableStateOf(false) }
+    var dismissed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { visible = true }
+    val slideProgress by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(150, easing = FastOutSlowInEasing),
+        label = "commentsSlide",
+    )
+    LaunchedEffect(visible) {
+        if (!visible && dismissed) { delay(150); onDismiss() }
+    }
+    fun doDismiss() { dismissed = true; visible = false }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val landscape = maxWidth > maxHeight
+        val panelPrefs = LocalContext.current.getSharedPreferences("panel_sizes", android.content.Context.MODE_PRIVATE)
+        val prefKey = "comments_panel_ratio_${if (landscape) "landscape" else "portrait"}"
+        var panelRatio by remember(landscape) { mutableStateOf(panelPrefs.getFloat(prefKey, 0.5f)) }
+        val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
+        val heightPx = with(LocalDensity.current) { maxHeight.toPx() }
+        Box(
+            Modifier.fillMaxSize().graphicsLayer { alpha = slideProgress }.background(Color.Black.copy(alpha = 0.22f)).clickable(
+                interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = ::doDismiss,
+            ),
+        )
+        val panelModifier = if (landscape) {
+            Modifier.fillMaxHeight().fillMaxWidth(panelRatio).align(Alignment.CenterEnd)
+                .graphicsLayer { translationX = (1f - slideProgress) * widthPx }
+        } else {
+            Modifier.fillMaxWidth().fillMaxHeight(panelRatio).align(Alignment.BottomCenter)
+                .graphicsLayer { translationY = (1f - slideProgress) * heightPx }
+        }
+        Surface(
+            tonalElevation = 8.dp,
+            modifier = panelModifier,
+        ) {
+            val handleModifier = if (landscape) {
+                Modifier.fillMaxHeight().width(12.dp)
+            } else {
+                Modifier.fillMaxWidth().height(12.dp)
+            }
+            val handle = @Composable {
+                Box(
+                    Modifier
+                        .pointerInput(landscape) {
+                            detectDragGestures { change, amount ->
+                                change.consume()
+                                if (landscape) {
+                                    panelRatio = (panelRatio - amount.x / widthPx).coerceIn(0.2f, 0.95f)
+                                } else {
+                                    panelRatio = (panelRatio - amount.y / heightPx).coerceIn(0.2f, 0.95f)
+                                }
+                                panelPrefs.edit().putFloat(prefKey, panelRatio).apply()
+                            }
+                        }
+                        .then(handleModifier)
+                        .background(MaterialTheme.colorScheme.outlineVariant),
+                )
+            }
+            val content = @Composable {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+                        .padding(16.dp),
+                ) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            localized("添加晶体备注", "Add Crystal Comments"),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        IconButton(onClick = { doDismiss() }) { Icon(Icons.Default.Close, null) }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+value = text,
+onValueChange = { text = it },
+modifier = Modifier.fillMaxWidth().weight(1f),
+placeholder = { Text(localized("在此输入备注…", "Type comments here…")) },
+)
+Spacer(Modifier.height(4.dp))
+Text(
+localized("Krystals 备注将在保存时写入文件中", "Krystals comments will be written to the file when saved"),
+style = MaterialTheme.typography.labelSmall,
+color = MaterialTheme.colorScheme.onSurfaceVariant,
+)
+                }
+            }
+            if (landscape) {
+                Row(Modifier.fillMaxSize()) {
+                    handle()
+                    Box(Modifier.weight(1f).fillMaxHeight()) { content() }
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    handle()
+                    content()
                 }
             }
         }
@@ -1664,23 +2314,41 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
     // element (ATOMS/POLYHEDRA) or element-pair (BONDS). A group is expanded when its key is absent
     // (default expanded); toggling inserts/removes the key.
     val collapsedGroups = remember { mutableStateMapOf<String, Boolean>() }
+    // Per v0.7.0: slide-in animation state.
+    var visible by remember { mutableStateOf(false) }
+    var dismissed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { visible = true }
+    val slideProgress by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(150, easing = FastOutSlowInEasing),
+        label = "displaySlide",
+    )
+    LaunchedEffect(visible) {
+        if (!visible && dismissed) { delay(150); onDismiss() }
+    }
+    fun doDismiss() { dismissed = true; visible = false }
     // Per v0.2.3: resizable panel — drag the handle to change how much of the screen the panel
     // occupies. Portrait: bottom sheet height fraction; landscape: right sheet width fraction.
     // Per v0.3.43: default area raised to 0.4.
-    var panelRatio by remember { mutableStateOf(0.40f) }
+    // Per v0.7.0: persist panel ratio per orientation (portrait/landscape).
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
+        val panelPrefs = LocalContext.current.getSharedPreferences("panel_sizes", android.content.Context.MODE_PRIVATE)
+        val prefKey = "display_panel_ratio_${if (landscape) "landscape" else "portrait"}"
+        var panelRatio by remember(landscape) { mutableStateOf(panelPrefs.getFloat(prefKey, 0.40f)) }
         val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
         val heightPx = with(LocalDensity.current) { maxHeight.toPx() }
         Box(
-            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f)).clickable(
-                interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss,
+            Modifier.fillMaxSize().graphicsLayer { alpha = slideProgress }.background(Color.Black.copy(alpha = 0.22f)).clickable(
+                interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = ::doDismiss,
             ),
         )
         val panelModifier = if (landscape) {
             Modifier.fillMaxHeight().fillMaxWidth(panelRatio).align(Alignment.CenterEnd)
+                .graphicsLayer { translationX = (1f - slideProgress) * widthPx }
         } else {
             Modifier.fillMaxWidth().fillMaxHeight(panelRatio).align(Alignment.BottomCenter)
+                .graphicsLayer { translationY = (1f - slideProgress) * heightPx }
         }
         Surface(
             tonalElevation = 8.dp,
@@ -1706,6 +2374,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                 } else {
                                     panelRatio = (panelRatio - amount.y / heightPx).coerceIn(0.2f, 0.95f)
                                 }
+                                panelPrefs.edit().putFloat(prefKey, panelRatio).apply()
                             }
                         }
                         .then(handleModifier)
@@ -1720,7 +2389,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                             DisplayTab.BONDS to localized("化学键", "Bonds"),
                             DisplayTab.POLYHEDRA to localized("多面体", "Polyhedra"),
                         ).forEach { (kind, label) -> FilterChip(selected == kind, onClick = { selected = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
-                        Spacer(Modifier.weight(1f)); IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null) }
+                        Spacer(Modifier.weight(1f)); IconButton(onClick = { doDismiss() }) { Icon(Icons.Default.Close, null) }
                     }
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
                         when (selected) {
@@ -1798,10 +2467,8 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                     )
                                 }.distinctBy { it.key } // Per v0.5.4b: see EditorPanels — duplicate
                                 // site-pair keys crash the LazyColumn with "Key was already used".
-                                val allExtend = visibleRules.isNotEmpty() && visibleRules.all { it.extendAcrossCell }
-                                // Per v0.3.43: display select-all/invert and extend select-all/invert on one
-                                // row, mirroring the ATOMS/POLYHEDRA style (Checkbox + 全选 + 反选), placed
-                                // side by side.
+                                // Per v0.6.5: removed top-level "extend across cell" checkbox;
+                                // directional extend controls are now per-rule and per-group.
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(allBondsVisible, onCheckedChange = { checked ->
                                         tab.recordHistory()
@@ -1817,35 +2484,18 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                         tab.recordHistory()
                                         tab.visibility = tab.visibility.copy(showBonds = true, hiddenBondPairs = allKeys - tab.visibility.hiddenBondPairs)
                                     }) { Text(localized("反选", "Invert")) }
-                                    if (visibleRules.isNotEmpty()) {
-                                        Spacer(Modifier.width(12.dp))
-                                        Checkbox(allExtend, onCheckedChange = { checked ->
-                                            var working = tab.bondConfiguration
-                                            visibleRules.forEach { rule ->
-                                                if (rule.extendAcrossCell != checked) {
-                                                    working = CrystalEditor.apply(
-                                                        tab.structure,
-                                                        working,
-                                                        EditCommand.SetBondRule(rule.copy(extendAcrossCell = checked)),
-                                                    ).bondConfiguration
-                                                }
-                                            }
-                                            viewModel.updateAnalysis(tab, EditResult(tab.structure, working))
-                                        })
-                                        Text(stringResource(R.string.extend_across_cell), style = MaterialTheme.typography.bodySmall)
-                                        Spacer(Modifier.width(4.dp))
-                                        TextButton(onClick = {
-                                            var working = tab.bondConfiguration
-                                            visibleRules.forEach { rule ->
-                                                working = CrystalEditor.apply(
-                                                    tab.structure,
-                                                    working,
-                                                    EditCommand.SetBondRule(rule.copy(extendAcrossCell = !rule.extendAcrossCell)),
-                                                ).bondConfiguration
-                                            }
-                                            viewModel.updateAnalysis(tab, EditResult(tab.structure, working))
-                                        }) { Text(localized("反选", "Invert")) }
-                                    }
+                                    Spacer(Modifier.weight(1f))
+                                    // Per v0.6.5: "Extend outside cell" checkbox — toggles all bond rules' extend flags.
+                                    val allExtended = visibleRules.isNotEmpty() && visibleRules.all { it.extendAtoB && it.extendBtoA }
+                                    Checkbox(allExtended, onCheckedChange = { checked ->
+                                        var working = tab.bondConfiguration
+                                        visibleRules.forEach { rule ->
+                                            val updated = rule.copy(extendAtoB = checked, extendBtoA = checked)
+                                            working = CrystalEditor.apply(tab.structure, working, EditCommand.SetBondRule(updated)).bondConfiguration
+                                        }
+                                        viewModel.updateAnalysis(tab, EditResult(tab.structure, working))
+                                    })
+                                    Text(localized("扩展到晶胞外", "Extend Outside Cell"), style = MaterialTheme.typography.bodySmall)
                                 }
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                                 if (visibleRules.isEmpty()) {
@@ -1864,6 +2514,22 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                     groupedRules.forEach { (pairLabel, groupRules) ->
                                         val expanded = collapsedGroups["B:$pairLabel"] != true
                                         val allGroupVisible = groupRules.all { it.key !in tab.visibility.hiddenBondPairs }
+                                        // Per v0.6.5: directional extend checkboxes on the group header.
+                                        val groupElements = pairLabel.split("—")
+                                        val gElem1 = groupElements.getOrNull(0) ?: "?"
+                                        val gElem2 = groupElements.getOrNull(1) ?: "?"
+                                        val groupSameElement = gElem1 == gElem2
+                                        // elem1→elem2 flag for each rule (elem1 is the smaller element).
+                                        fun ruleExtend1(r: com.krystals.crystal.analysis.bonding.BondRule): Boolean {
+                                            val aElem = elementOf[r.siteA] ?: "?"
+                                            return if (aElem == gElem1) r.extendAtoB else r.extendBtoA
+                                        }
+                                        fun ruleExtend2(r: com.krystals.crystal.analysis.bonding.BondRule): Boolean {
+                                            val aElem = elementOf[r.siteA] ?: "?"
+                                            return if (aElem == gElem1) r.extendBtoA else r.extendAtoB
+                                        }
+                                        val allGroupExtend1 = groupRules.all { ruleExtend1(it) }
+                                        val allGroupExtend2 = if (groupSameElement) allGroupExtend1 else groupRules.all { ruleExtend2(it) }
                                         CollapsibleGroupHeader(
                                             title = "$pairLabel (${groupRules.size})",
                                             expanded = expanded,
@@ -1877,12 +2543,49 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                                     else tab.visibility.hiddenBondPairs + groupRules.map { it.key }.toSet(),
                                                 )
                                             },
-                                        ) { Spacer(Modifier.width(22.dp)) }
+                                        ) {
+                                            if (groupSameElement) {
+                                                Checkbox(allGroupExtend1, onCheckedChange = { checked ->
+                                                    var working = tab.bondConfiguration
+                                                    groupRules.forEach { rule ->
+                                                        val updated = rule.copy(extendAtoB = checked, extendBtoA = checked)
+                                                        working = CrystalEditor.apply(tab.structure, working, EditCommand.SetBondRule(updated)).bondConfiguration
+                                                    }
+                                                    viewModel.updateAnalysis(tab, EditResult(tab.structure, working))
+                                                })
+                                                Text("$gElem1", style = MaterialTheme.typography.bodySmall)
+                                            } else {
+                                                Checkbox(allGroupExtend1, onCheckedChange = { checked ->
+                                                    var working = tab.bondConfiguration
+                                                    groupRules.forEach { rule ->
+                                                        val aElem = elementOf[rule.siteA] ?: "?"
+                                                        val updated = if (aElem == gElem1) rule.copy(extendAtoB = checked) else rule.copy(extendBtoA = checked)
+                                                        working = CrystalEditor.apply(tab.structure, working, EditCommand.SetBondRule(updated)).bondConfiguration
+                                                    }
+                                                    viewModel.updateAnalysis(tab, EditResult(tab.structure, working))
+                                                })
+                                                Text("$gElem1", style = MaterialTheme.typography.bodySmall)
+                                                Spacer(Modifier.width(4.dp))
+                                                Checkbox(allGroupExtend2, onCheckedChange = { checked ->
+                                                    var working = tab.bondConfiguration
+                                                    groupRules.forEach { rule ->
+                                                        val aElem = elementOf[rule.siteA] ?: "?"
+                                                        val updated = if (aElem == gElem1) rule.copy(extendBtoA = checked) else rule.copy(extendAtoB = checked)
+                                                        working = CrystalEditor.apply(tab.structure, working, EditCommand.SetBondRule(updated)).bondConfiguration
+                                                    }
+                                                    viewModel.updateAnalysis(tab, EditResult(tab.structure, working))
+                                                })
+                                                Text("$gElem2", style = MaterialTheme.typography.bodySmall)
+                                            }
+                                        }
                                         if (expanded) {
                                             groupRules.forEach { rule ->
                                                 val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
                                                 val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
                                                 val label = "$labelA—$labelB"
+                                                val elemA = elementOf[rule.siteA] ?: "?"
+                                                val elemB = elementOf[rule.siteB] ?: "?"
+                                                val sameRuleElement = elemA == elemB
                                                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(start = 28.dp)) {
                                                     val visible = tab.visibility.showBonds && rule.key !in tab.visibility.hiddenBondPairs
                                                     Checkbox(visible, onCheckedChange = { checked ->
@@ -1893,19 +2596,34 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                                         )
                                                     })
                                                     Text(label, modifier = Modifier.weight(1f))
-                                                    Text(stringResource(R.string.extend_across_cell), style = MaterialTheme.typography.bodySmall)
-                                                    Spacer(Modifier.width(4.dp))
-                                                    Checkbox(rule.extendAcrossCell, onCheckedChange = { extend ->
-                                                        val updated = rule.copy(extendAcrossCell = extend)
-                                                        viewModel.updateAnalysis(
-                                                            tab,
-                                                            CrystalEditor.apply(
-                                                                tab.structure,
-                                                                tab.bondConfiguration,
-                                                                EditCommand.SetBondRule(updated),
-                                                            ),
-                                                        )
-                                                    })
+                                                    if (sameRuleElement) {
+                                                        Checkbox(rule.extendAtoB || rule.extendBtoA, onCheckedChange = { checked ->
+                                                            val updated = rule.copy(extendAtoB = checked, extendBtoA = checked)
+                                                            viewModel.updateAnalysis(
+                                                                tab,
+                                                                CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(updated)),
+                                                            )
+                                                        })
+                                                        Text("$elemA", style = MaterialTheme.typography.bodySmall)
+                                                    } else {
+                                                        Checkbox(rule.extendAtoB, onCheckedChange = { checked ->
+                                                            val updated = rule.copy(extendAtoB = checked)
+                                                            viewModel.updateAnalysis(
+                                                                tab,
+                                                                CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(updated)),
+                                                            )
+                                                        })
+                                                        Text("$labelA", style = MaterialTheme.typography.bodySmall)
+                                                        Spacer(Modifier.width(4.dp))
+                                                        Checkbox(rule.extendBtoA, onCheckedChange = { checked ->
+                                                            val updated = rule.copy(extendBtoA = checked)
+                                                            viewModel.updateAnalysis(
+                                                                tab,
+                                                                CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(updated)),
+                                                            )
+                                                        })
+                                                        Text("$labelB", style = MaterialTheme.typography.bodySmall)
+                                                    }
                                                 }
                                             }
                                         }
@@ -2052,6 +2770,7 @@ private fun InfoDialog(tab: DocumentTab, onDismiss: () -> Unit) {
         text = {
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                 InfoSection(title = localized("化学组成", "Composition"), value = info.composition, valueStyle = MaterialTheme.typography.headlineSmall)
+                Text("≈ ${info.reducedFormula}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
                 InfoSection(title = localized("空间群", "Space group"), value = info.spaceGroup, valueStyle = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(16.dp))
@@ -2069,9 +2788,10 @@ private fun InfoDialog(tab: DocumentTab, onDismiss: () -> Unit) {
                     InfoCell(label = "γ", value = "%.4f°".format(info.lattice.gamma), Modifier.weight(1f))
                 }
                 Spacer(Modifier.height(16.dp))
-                InfoRow(label = localized("体积", "Volume"), value = "%.5f Å³".format(info.volume))
-                InfoRow(label = localized("密度", "Density"), value = info.density?.let { "%.5f g/cm³".format(it) } ?: "N/A")
                 InfoRow(label = localized("原子数", "Atoms"), value = info.atomCount.toString())
+                InfoRow(label = localized("晶胞质量", "Cell mass"), value = "%.2f g/mol".format(info.cellMass))
+                InfoRow(label = localized("晶胞体积", "Volume"), value = "%.5f Å³".format(info.volume))
+                InfoRow(label = localized("理论密度", "Density"), value = info.density?.let { "%.5f g/cm³".format(it) } ?: "N/A")
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.confirm)) } },
@@ -2108,15 +2828,15 @@ private fun AlignDialog(onDismiss: () -> Unit, onChoice: (String) -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text(localized("对齐", "Align")) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(localized("空间直角坐标系", "Cartesian"), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 6.dp))
-                LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.height(104.dp)) {
-                    items(listOf("X", "Y", "Z")) { ChoiceTile(it, onChoice, textStyle = MaterialTheme.typography.titleLarge) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("X", "Y", "Z").forEach { ChoiceTile(it, onChoice, textStyle = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f)) }
                 }
                 Spacer(Modifier.height(14.dp))
                 Text(localized("晶胞轴", "Cell axes"), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 6.dp))
-                LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.height(104.dp)) {
-                    items(listOf("a", "b", "c")) { ChoiceTile(it, onChoice, textStyle = MaterialTheme.typography.titleLarge) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("a", "b", "c").forEach { ChoiceTile(it, onChoice, textStyle = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f)) }
                 }
             }
         },
@@ -2139,9 +2859,16 @@ private fun MeasureDialog(
         onDismissRequest = onDismiss,
         title = { Text(localized("测量", "Measure")) },
         text = {
-            LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.height(156.dp)) {
-                items(listOf(length, angle, dihedral, off)) { label ->
-                    ChoiceTile(label, onChoice, aspect = 1.8f, active = label == activeMode && activeMode != off)
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(length, angle).forEach { label ->
+                        ChoiceTile(label, onChoice, tileHeight = 72.dp, active = label == activeMode && activeMode != off, modifier = Modifier.weight(1f))
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(dihedral, off).forEach { label ->
+                        ChoiceTile(label, onChoice, tileHeight = 72.dp, active = label == activeMode && activeMode != off, modifier = Modifier.weight(1f))
+                    }
                 }
             }
         },
@@ -2154,17 +2881,18 @@ private fun MeasureDialog(
 private fun ChoiceTile(
     label: String,
     onClick: (String) -> Unit,
-    aspect: Float = 1f,
+    tileHeight: androidx.compose.ui.unit.Dp = 80.dp,
     active: Boolean = false,
     textStyle: androidx.compose.ui.text.TextStyle? = null,
+    modifier: Modifier = Modifier,
 ) {
     // Per v0.6.2: in dark mode use light purple (0xFFCFA7F5) for highlights; deep purple in light mode.
     val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val activeColor = if (dark) Color(0xFFCFA7F5) else Color(0xFF7542A5)
-    val resolvedStyle = textStyle ?: if (aspect == 1f) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleMedium
+    val resolvedStyle = textStyle ?: if (tileHeight >= 76.dp) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleMedium
     Card(
         onClick = { onClick(label) },
-        modifier = Modifier.padding(4.dp).aspectRatio(aspect),
+        modifier = modifier.padding(4.dp).height(tileHeight).fillMaxWidth(),
         colors = if (active) CardDefaults.cardColors(containerColor = activeColor.copy(alpha = 0.15f)) else CardDefaults.cardColors(),
         border = if (active) androidx.compose.foundation.BorderStroke(2.dp, activeColor) else null,
     ) {
@@ -2185,6 +2913,7 @@ private fun PresetLibraryDialog(
 ) {
     var presets by remember { mutableStateOf(PresetRepository.listPresets(context)) }
     var pendingDelete by remember { mutableStateOf<PresetEntry?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
     fun refresh() { presets = PresetRepository.listPresets(context) }
     // Per v0.2.3: collapsible category sections, default all collapsed (user group expanded).
     // Expansion state persists across opens via SharedPreferences.
@@ -2199,32 +2928,47 @@ private fun PresetLibraryDialog(
             preferences.edit().putString(EXPANDED_KEY, it.joinToString(",")).apply()
         }
     }
+    // Per v0.6.5: search box filters presets by file name (case-insensitive).
+    val filteredPresets = if (searchQuery.isBlank()) presets else presets.filter { it.name.contains(searchQuery, ignoreCase = true) }
     // Group by category; user presets (__user__) first, then bundled categories in directory order.
-    val grouped = presets.groupBy { it.category ?: "__user__" }
+    val grouped = filteredPresets.groupBy { it.category ?: "__user__" }
     val userGroup = grouped["__user__"].orEmpty()
     val bundledGroups = grouped.filterKeys { it != "__user__" }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.preset_library)) },
         text = {
-            LazyColumn(Modifier.fillMaxWidth().height(420.dp)) {
-                if (userGroup.isNotEmpty()) {
-                    item(key = "header___user__") {
-                        Row(Modifier.fillMaxWidth().clickable { toggle("__user__") }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(if ("__user__" in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
-                            Text(localized("我的预设", "My presets"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
-                        }
+            Column(Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    placeholder = { Text(localized("搜索文件名...", "Search by name...")) },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                )
+                LazyColumn(Modifier.fillMaxWidth().height(420.dp)) {
+                    if (filteredPresets.isEmpty()) {
+                        item { Text(localized("无匹配结果", "No matching results"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
                     }
-                    if ("__user__" in expanded) items(userGroup, key = { "u_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
-                }
-                bundledGroups.forEach { (category, entries) ->
-                    item(key = "header_$category") {
-                        Row(Modifier.fillMaxWidth().clickable { toggle(category) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(if (category in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
-                            Text(category, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
+                    if (userGroup.isNotEmpty()) {
+                        item(key = "header___user__") {
+                            Row(Modifier.fillMaxWidth().clickable { toggle("__user__") }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(if ("__user__" in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
+                                Text(localized("我的预设", "My presets"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
+                            }
                         }
+                        if ("__user__" in expanded) items(userGroup, key = { "u_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
                     }
-                    if (category in expanded) items(entries, key = { category + "_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
+                    bundledGroups.forEach { (category, entries) ->
+                        item(key = "header_$category") {
+                            Row(Modifier.fillMaxWidth().clickable { toggle(category) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(if (category in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
+                                Text(category, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
+                            }
+                        }
+                        if (category in expanded) items(entries, key = { category + "_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
+                    }
                 }
             }
         },
@@ -2277,6 +3021,192 @@ private fun PresetRow(
         }
     }
     HorizontalDivider()
+}
+
+/** Per v0.6.5: apply filters to MP search results. */
+private fun filterMpResults(results: List<MpSearchResult>, filter: SearchFilterState): List<MpSearchResult> {
+    if (!filter.isActive) return results
+    return results.filter { item ->
+        val meta = item.meta()
+        (filter.elementCount == null || meta.elementCount == filter.elementCount) &&
+        (filter.crystalSystem == null || meta.crystalSystem == filter.crystalSystem) &&
+        (filter.pointGroup == null || meta.pointGroup == filter.pointGroup) &&
+        (filter.spaceGroup == null || meta.spaceGroup == filter.spaceGroup)
+    }
+}
+
+/** Per v0.6.5: apply filters to COD search results. */
+private fun filterCodResults(results: List<CodSearchResult>, filter: SearchFilterState): List<CodSearchResult> {
+    if (!filter.isActive) return results
+    return results.filter { item ->
+        val meta = item.meta()
+        (filter.elementCount == null || meta.elementCount == filter.elementCount) &&
+        (filter.crystalSystem == null || meta.crystalSystem == filter.crystalSystem) &&
+        (filter.pointGroup == null || meta.pointGroup == filter.pointGroup) &&
+        (filter.spaceGroup == null || meta.spaceGroup == filter.spaceGroup)
+    }
+}
+
+/** Per v0.6.5: a single dropdown-chip for filtering. */
+@Composable
+private fun FilterDropdownChip(
+    label: String,
+    selectedValue: String?,
+    options: List<String>,
+    onSelect: (String?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val displayValue = selectedValue ?: label
+    Box {
+        FilterChip(
+            selected = selectedValue != null,
+            onClick = { expanded = true },
+            label = { Text(displayValue, maxLines = 1) },
+            modifier = Modifier.padding(horizontal = 2.dp),
+            trailingIcon = if (selectedValue != null) {
+                {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clickable { onSelect(null) },
+                    )
+                }
+            } else null,
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option) },
+                    onClick = { onSelect(option); expanded = false },
+                )
+            }
+        }
+    }
+}
+
+/** Per v0.6.5: a dropdown-chip for integer-based filtering (element count). */
+@Composable
+private fun IntFilterDropdownChip(
+    label: String,
+    selectedValue: Int?,
+    options: List<Int>,
+    onSelect: (Int?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val displayValue = selectedValue?.toString() ?: label
+    Box {
+        FilterChip(
+            selected = selectedValue != null,
+            onClick = { expanded = true },
+            label = { Text(displayValue, maxLines = 1) },
+            modifier = Modifier.padding(horizontal = 2.dp),
+            trailingIcon = if (selectedValue != null) {
+                {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clickable { onSelect(null) },
+                    )
+                }
+            } else null,
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.toString()) },
+                    onClick = { onSelect(option); expanded = false },
+                )
+            }
+        }
+    }
+}
+
+/** Per v0.6.5: horizontal filter bar for search results with cascading crystal system → point group → space group. */
+@Composable
+private fun SearchFilterBar(
+    options: SearchFilterOptions,
+    filterState: SearchFilterState,
+    onFilterChange: (SearchFilterState) -> Unit,
+) {
+    val elemCountLabel = localized("元素数量", "Elements")
+    val crystalSystemLabel = localized("晶系", "Crystal sys.")
+    val pointGroupLabel = localized("点群", "Point group")
+    val spaceGroupLabel = localized("空间群", "Space group")
+
+    val availablePointGroups = if (filterState.crystalSystem != null) {
+        pointGroupsForCrystalSystem(filterState.crystalSystem).filter { it in options.pointGroups }
+    } else {
+        options.pointGroups
+    }
+    val availableSpaceGroups = if (filterState.pointGroup != null) {
+        // Per v0.6.5: use normalized comparison to handle format differences
+        // (e.g. catalog "P 1" vs search result "P1")
+        val catalogSymbols = spaceGroupsForPointGroup(filterState.pointGroup).map(::normalizeSgSymbol).toSet()
+        options.spaceGroups.filter { normalizeSgSymbol(it) in catalogSymbols }
+    } else {
+        options.spaceGroups
+    }
+
+    Surface(
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            item {
+                IntFilterDropdownChip(
+                    label = elemCountLabel,
+                    selectedValue = filterState.elementCount,
+                    options = options.elementCounts,
+                    onSelect = { v -> onFilterChange(filterState.copy(elementCount = v)) },
+                )
+            }
+            item {
+                FilterDropdownChip(
+                    label = crystalSystemLabel,
+                    selectedValue = filterState.crystalSystem,
+                    options = options.crystalSystems,
+                    onSelect = { v ->
+                        // Cascade: reset point group and space group when crystal system changes
+                        onFilterChange(filterState.copy(crystalSystem = v, pointGroup = null, spaceGroup = null))
+                    },
+                )
+            }
+            item {
+                FilterDropdownChip(
+                    label = pointGroupLabel,
+                    selectedValue = filterState.pointGroup,
+                    options = availablePointGroups,
+                    onSelect = { v ->
+                        // Cascade: reset space group when point group changes
+                        onFilterChange(filterState.copy(pointGroup = v, spaceGroup = null))
+                    },
+                )
+            }
+            item {
+                FilterDropdownChip(
+                    label = spaceGroupLabel,
+                    selectedValue = filterState.spaceGroup,
+                    options = availableSpaceGroups,
+                    onSelect = { v -> onFilterChange(filterState.copy(spaceGroup = v)) },
+                )
+            }
+            if (filterState.isActive) {
+                item {
+                    TextButton(onClick = { onFilterChange(SearchFilterState()) }) {
+                        Text(localized("清除", "Clear"), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -2338,6 +3268,7 @@ private fun MpSearchScreen(
     var downloadingId by remember { mutableStateOf<String?>(null) }
     var testingConnection by remember { mutableStateOf(true) }
     var connectionError by remember { mutableStateOf(false) }
+    var filterState by remember { mutableStateOf(SearchFilterState()) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         if (MaterialsProject.testConnection()) {
@@ -2400,16 +3331,22 @@ private fun MpSearchScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
             )
             Spacer(Modifier.height(12.dp))
-            // Per v0.3.3: snapshot `results` into a local val so the LazyColumn's item lambda never
+            // Per v0.6.5: snapshot `results` into a local val so the LazyColumn's item lambda never
             // re-reads a null `results` during a Compose snapshot-apply (which threw NPE on the 2nd
             // search when `results = null` invalidated the list mid-recomposition).
             val current = results
+            val filtered = current?.let { filterMpResults(it, filterState) }
+            val filterOptions = current?.let { buildFilterOptions(it.map { r -> r.meta() }) } ?: SearchFilterOptions(emptyList(), emptyList(), emptyList(), emptyList())
+            LaunchedEffect(current) { filterState = SearchFilterState() }
+            if (current != null && current.isNotEmpty()) {
+                SearchFilterBar(options = filterOptions, filterState = filterState, onFilterChange = { filterState = it })
+            }
             when {
                 searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索中…", "Searching…")) }
-                current == null -> {}
-                current.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
+                filtered == null -> {}
+                filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                    items(current) { item ->
+                    items(filtered) { item ->
                         Card(
                             enabled = downloadingId == null,
                             onClick = {
@@ -2432,6 +3369,7 @@ private fun MpSearchScreen(
                             Column(Modifier.padding(12.dp)) {
                                 Text(item.materialId, fontWeight = FontWeight.Bold)
                                 Text("${item.formula}  ${item.crystalSystem}  ${item.spaceGroup}  ${item.nsites} sites")
+                                item.energyAboveHull?.let { Text(localized("E_hull: %.3f eV/atom".format(it), "E_hull: %.3f eV/atom".format(it)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                                 if (downloadingId == item.materialId) {
                                     Text(localized("下载中…", "Downloading…"), style = MaterialTheme.typography.bodySmall)
                                 }
@@ -2478,6 +3416,7 @@ private fun CodSearchScreen(
     var downloadingId by remember { mutableStateOf<String?>(null) }
     var testingMirrors by remember { mutableStateOf(true) }
     var connectionError by remember { mutableStateOf(false) }
+    var filterState by remember { mutableStateOf(SearchFilterState()) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         val mirror = CrystallographyOpenDatabase.testMirrors()
@@ -2572,16 +3511,23 @@ private fun CodSearchScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
             )
             Spacer(Modifier.height(12.dp))
-            // Per v0.3.3: snapshot `results` into a local val so the LazyColumn's item lambda never
+            // Per v0.6.5: snapshot `results` into a local val so the LazyColumn's item lambda never
             // re-reads a null `results` during a Compose snapshot-apply (which threw NPE on the 2nd
             // search when `results = null` invalidated the list mid-recomposition).
             val current = results
+            val filtered = current?.let { filterCodResults(it, filterState) }
+            val filterOptions = current?.let { buildFilterOptions(it.map { r -> r.meta() }) } ?: SearchFilterOptions(emptyList(), emptyList(), emptyList(), emptyList())
+            LaunchedEffect(current) { filterState = SearchFilterState() }
+            if (current != null && current.isNotEmpty()) {
+                SearchFilterBar(options = filterOptions, filterState = filterState, onFilterChange = { filterState = it })
+            }
             when {
                 searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索中…", "Searching…")) }
-                current == null -> {}
-                current.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
+                filtered == null -> {}
+                filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                    items(current) { item ->
+                    items(filtered) { item ->
+                        val isExact = CrystallographyOpenDatabase.isExactMatch(item, query, mode)
                         Card(
                             enabled = downloadingId == null,
                             onClick = {
@@ -2599,10 +3545,19 @@ private fun CodSearchScreen(
                                     }
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).then(
+                                if (isExact) Modifier.border(2.dp, Color(0xFF7542A5), RoundedCornerShape(12.dp)) else Modifier
+                            ),
+                            colors = androidx.compose.material3.CardDefaults.cardColors(),
                         ) {
                             Column(Modifier.padding(12.dp)) {
-                                Text(item.fileId, fontWeight = FontWeight.Bold)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(item.fileId, fontWeight = FontWeight.Bold)
+                                    if (isExact) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(localized("精确匹配", "Exact match"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                    }
+                                }
                                 Text("${item.formula}  ${item.spaceGroup}${if (item.sgNumber.isNotBlank()) " #${item.sgNumber}" else ""}  ${item.name}${if (item.nel > 0) "  ${item.nel} elements" else ""}")
                                 if (downloadingId == item.fileId) {
                                     Text(localized("下载中…", "Downloading…"), style = MaterialTheme.typography.bodySmall)
@@ -2684,16 +3639,7 @@ private fun OnlineSourceCard(
     }
 }
 
-@Composable
-private fun HelpDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.help_title)) },
-        text = { Text(stringResource(R.string.help_message)) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.confirm)) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
-    )
-}
+// Per v0.6.5: HelpDialog replaced by unified link-confirmation dialog above.
 
 @Composable
 private fun SponsorDialog(onDismiss: () -> Unit, launchCount: Int = 0, onSponsor: () -> Unit = {}, onAlreadySponsored: () -> Unit = {}) {
@@ -2782,8 +3728,8 @@ private fun MpCautionDialog(preferences: SharedPreferences, onDismiss: () -> Uni
             Column {
                 Text(
                     localized(
-                        "由于Materials Project官方接口存在两种API，其中新API需要apikey才能使用，旧API可以直接接入；但旧API只能返回对称性为P1的非对称晶胞。因此Krystals的Materials Project接口需要新API使用。\n\n· 由于新API不时有bug，所以有时会回退成旧API。\n\n· 如果旧API被mp官方废除，将导致部分晶体无法下载，请及时更新软件。\n\n· 若查找到旧API数据库截止结果，将自动转入新API，存在丢失正当晶胞的问题",
-                        "Materials Project exposes two APIs: the new one (requires an API key) and a legacy one (direct access) that only returns P1 asymmetric cells. Krystals therefore requires the new API.\n\n· The new API is occasionally buggy and may fall back to the legacy API.\n\n· If the legacy API is retired by MP, some crystals will no longer be downloadable — please update the app.\n\n· If the searched results do NOT contain in the legacy API's data, will automatically transmit to the new-gen API. Some symmetry information will be discarded."
+                        "Krystals使用Materials Project的新API进行晶体搜索和下载。新API需要apikey才能使用。\n\n· 搜索结果中的晶胞为原始素晶胞，Krystals会自动将其转换为正当晶胞后展示。\n\n· 若转换失败，将回退为素晶胞展示。",
+                        "Krystals uses the Materials Project new API for crystal search and download. The new API requires an API key.\n\n· Search results return primitive cells; Krystals automatically converts them to conventional cells before display.\n\n· If conversion fails, the primitive cell is shown instead."
                     ),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -2805,9 +3751,9 @@ private fun MpCautionDialog(preferences: SharedPreferences, onDismiss: () -> Uni
 }
 
 @Composable
-private fun AboutScreen(onBack: () -> Unit) {
+private fun AboutScreen(onBack: () -> Unit, onCheckUpdates: () -> Unit = {}, isCheckingUpdates: Boolean = false) {
     BackHandler(enabled = true) { onBack() }
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.navigationBars)) {
         TopAppBar(
             title = { Text(stringResource(R.string.about)) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
@@ -2822,6 +3768,23 @@ private fun AboutScreen(onBack: () -> Unit) {
             Text("${stringResource(R.string.version)} ${com.krystals.app.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(24.dp))
             Text(localized("Krystals 是由 凯楽斯kelesss 与 AI辅助开发的一款 Android 平台轻量级晶体结构查看和编辑工具。", "Krystals is a lightweight Android CIF crystal structure viewer and editor, developed by kelesss with AI assistance."), style = MaterialTheme.typography.bodyLarge, textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = MaterialTheme.colorScheme.onBackground)
+            Spacer(Modifier.height(16.dp))
+            // Per v0.7.1: "Check for Updates" button moved below the software description.
+            Button(
+                onClick = onCheckUpdates,
+                enabled = !isCheckingUpdates,
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                if (isCheckingUpdates) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(localized("检查更新", "Check for Updates"))
+            }
             Spacer(Modifier.height(24.dp))
             Text(localized("关于作者", "About the author"), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.padding(bottom = 8.dp))
             // Per v0.2.3: links in one horizontal row, separated by " | " (dropped Bilibili live + Zhihu).
@@ -2864,3 +3827,86 @@ private fun AssetImage(path: String, modifier: Modifier, contentScale: ContentSc
 }
 
 private fun String.ensureCifExtension() = if (endsWith(".cif", true)) this else "$this.cif"
+
+// ── Per v0.6.5: Update check and APK download/install helpers ──────────────────
+
+/** Version info fetched from the remote JSON. */
+private data class UpdateInfo(
+    val versionCode: Int,
+    val versionName: String,
+    val packageName: String,
+)
+
+/** Fetch version info from the remote JSON. Returns null on failure. */
+private suspend fun fetchUpdateInfo(): UpdateInfo? = withContext(Dispatchers.IO) {
+    runCatching {
+        val client = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        val request = okhttp3.Request.Builder()
+            .url("https://www.kelesss.art/lib/krystals-release/current_version.json")
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@withContext null
+            val body = response.body?.string() ?: return@withContext null
+            val json = org.json.JSONObject(body)
+            UpdateInfo(
+                versionCode = json.optInt("versionCode", 0),
+                versionName = json.optString("versionName", ""),
+                packageName = json.optString("packageName", ""),
+            ).takeIf { it.versionCode > 0 && it.packageName.isNotBlank() }
+        }
+    }.getOrNull()
+}
+
+/** Download the APK and trigger installation. Returns true on success. */
+private suspend fun downloadAndInstallApk(
+    context: android.content.Context,
+    packageName: String,
+    onProgress: (Float) -> Unit,
+): Boolean = withContext(Dispatchers.IO) {
+    runCatching {
+        val downloadUrl = "https://www.kelesss.art/lib/krystals-release/$packageName"
+        val client = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        val request = okhttp3.Request.Builder().url(downloadUrl).build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@withContext false
+            val body = response.body ?: return@withContext false
+            val contentLength = body.contentLength()
+            val apkDir = java.io.File(context.cacheDir, "apk_updates").apply { mkdirs() }
+            val apkFile = java.io.File(apkDir, packageName)
+            body.byteStream().use { input ->
+                java.io.FileOutputStream(apkFile).use { output ->
+                    val buffer = ByteArray(8192)
+                    var totalRead = 0L
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                        totalRead += bytesRead
+                        if (contentLength > 0) {
+                            onProgress((totalRead.toFloat() / contentLength).coerceIn(0f, 1f))
+                        }
+                    }
+                    output.flush()
+                }
+            }
+            // Trigger APK installation.
+            val apkUri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                apkFile,
+            )
+            val installIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(apkUri, "application/vnd.android.package-archive")
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(installIntent)
+            true
+        }
+    }.onFailure { it.printStackTrace() }.getOrDefault(false)
+}

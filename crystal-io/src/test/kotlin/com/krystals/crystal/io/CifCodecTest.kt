@@ -82,7 +82,7 @@ class CifCodecTest {
     }
 
     @Test
-    fun externalBondRulesAreRead() {
+    fun externalBondRulesAreIgnored() {
         val source = """
             data_test
             _cell_length_a 4.0
@@ -105,9 +105,10 @@ class CifCodecTest {
             _geom_bond_distance
             C1 O1 1.2
         """.trimIndent()
+        // Per v0.7.1: bond rules from CIF are intentionally ignored to prevent
+        // stale or incorrect rules (e.g. Cr-Cr in Cr2O3) from being loaded.
         val parsed = CifCodec.parseStructure(source)
-        assertEquals(1, parsed.bondConfiguration.rules.size)
-        assertEquals(1.2, parsed.bondConfiguration.rules.single().maxAngstrom, 1e-8)
+        assertEquals(0, parsed.bondConfiguration.rules.size)
     }
 
     @Test fun preservesUnknownSpaceGroupSymbol() {

@@ -70,7 +70,8 @@ class AnalysisTest {
         val expectedBvs = 8.0 * kotlin.math.exp((parameter.r0 - kotlin.math.sqrt(12.0)) / parameter.b)
         val bvs = BondValence.bondValenceSums(structure, BondConfiguration())
         assertEquals(expectedBvs, bvs.getValue("Cs"), 1e-8)
-        assertEquals(expectedBvs, bvs.getValue("Cl"), 1e-8)
+        // Per v0.6.5: anion BVS is negated for display (Cl is an anion).
+        assertEquals(-expectedBvs, bvs.getValue("Cl"), 1e-8)
     }
 
     @Test fun bvsReusesSymmetryEquivalentSiteAtoms() {
@@ -146,14 +147,16 @@ class AnalysisTest {
         assertFailsWith<VoronoiSearchLimitExceededException> {
             VoronoiNeighbours.find(structure, atoms)
         }
-        assertFailsWith<VoronoiSearchLimitExceededException> {
-            BondValence.smartIonicRules(structure, BondConfiguration())
-        }
+        // Per v0.6.5: smartIonicRules now catches VoronoiSearchLimitExceededException internally
+        // and returns success=false instead of propagating the exception.
+        val smartIonicResult = BondValence.smartIonicRules(structure, BondConfiguration())
+        assertFalse(smartIonicResult.success)
+        assertTrue(smartIonicResult.rules.isEmpty())
         assertTrue(BondValence.bondValenceSums(structure, BondConfiguration()).isEmpty())
     }
 
     @Test fun preservesBondAndBoundaryImageResults() {
-        val rule = BondRule("Cs", "Cl", 0.1, 4.0, extendAcrossCell = true)
+        val rule = BondRule("Cs", "Cl", 0.1, 4.0, extendAtoB = true, extendBtoA = true)
         val structure = csCl(BondConfiguration(listOf(rule))).first
         val network = BondDetector.buildNetwork(structure, BondConfiguration(listOf(rule)), Expansion())
         assertTrue(network.bonds.isNotEmpty())
@@ -171,7 +174,7 @@ class AnalysisTest {
             symmetryOperations = listOf(SymmetryOperation.IDENTITY),
             sites = listOf(Site(siteId, "C1", Species("C"), FractionalCoordinate.ZERO)),
         )
-        val rule = BondRule(siteId, siteId, 0.1, 1.01, extendAcrossCell = true)
+        val rule = BondRule(siteId, siteId, 0.1, 1.01, extendAtoB = true, extendBtoA = true)
 
         fun verify(expansion: Expansion, boundaryOffset: Int3, boundaryPosition: FractionalCoordinate) {
             val network = BondDetector.buildNetwork(structure, BondConfiguration(listOf(rule)), expansion)
@@ -244,4 +247,92 @@ class AnalysisTest {
         assertEquals(Int3(0, 0, 0), SymmetryExpander.expand(result.structure).first().cellOffset)
         assertEquals(BondConfiguration(), result.bondConfiguration)
     }
+
+    // ── Per v0.7.1: primitive ↔ conventional round-trip regression tests ──────
+    // Guards the matrix-direction convention in convertToConventional: the Bravais
+    // transformation matrices are row-form (row i = new lattice vector i in the old
+    // basis), so the Mat3 used for L' = L × M must be the transpose. F and I matrices
+    // are symmetric and pass either way; A, C, R are not and catch the regression.
+
+    private fun centeredStructure(
+        name: String,
+        symbol: String,
+        number: Int,
+        lattice: Lattice,
+        sites: List<Site>,
+    ): CrystalStructure = CrystalStructure(
+        blockName = name,
+        lattice = lattice,
+        spaceGroup = SpaceGroupCatalog.resolve(symbol, number),
+        symmetryOperations = SpaceGroupCatalog.operations(symbol),
+        sites = sites,
+    )
+
+    private fun assertSameExpandedAtoms(expected: CrystalStructure, actual: CrystalStructure) {
+        val expectedAtoms = SymmetryExpander.expand(expected)
+        val remaining = SymmetryExpander.expand(actual).toMutableList()
+        assertEquals(expectedAtoms.size, remaining.size, "expanded atom count")
+        for (atom in expectedAtoms) {
+            val match = assertNotNull(
+                remaining.firstOrNull {
+                    it.species.symbol == atom.species.symbol &&
+                        it.fractionalCoordinate.almostEquals(atom.fractionalCoordinate, 1e-4)
+                },
+                "No match for ${atom.species.symbol} at ${atom.fractionalCoordinate}",
+            )
+            remaining.remove(match)
+        }
+    }
+
+    private fun assertPrimitiveRoundTrip(structure: CrystalStructure) {
+        val primitive = CrystalEditor.convertToPrimitive(structure, BondConfiguration()).structure
+        assertFalse(primitive.isConventional)
+        val restored = CrystalEditor.convertToConventional(primitive, BondConfiguration()).structure
+        assertTrue(restored.isConventional)
+        assertEquals(structure.lattice.a, restored.lattice.a, 1e-6, "a")
+        assertEquals(structure.lattice.b, restored.lattice.b, 1e-6, "b")
+        assertEquals(structure.lattice.c, restored.lattice.c, 1e-6, "c")
+        assertEquals(structure.lattice.alpha, restored.lattice.alpha, 1e-6, "alpha")
+        assertEquals(structure.lattice.beta, restored.lattice.beta, 1e-6, "beta")
+        assertEquals(structure.lattice.gamma, restored.lattice.gamma, 1e-6, "gamma")
+        assertSameExpandedAtoms(structure, restored)
+    }
+
+    @Test fun primitiveRoundTripCCentered() = assertPrimitiveRoundTrip(
+        centeredStructure(
+            "c2", "C2", 5, Lattice(5.0, 6.0, 7.0, 90.0, 100.0, 90.0),
+            listOf(Site("Na", "Na1", Species("Na"), FractionalCoordinate(0.2, 0.3, 0.4))),
+        ),
+    )
+
+    @Test fun primitiveRoundTripACentered() = assertPrimitiveRoundTrip(
+        centeredStructure(
+            "amm2", "Amm2", 38, Lattice(4.0, 5.0, 6.0, 90.0, 90.0, 90.0),
+            listOf(Site("Si", "Si1", Species("Si"), FractionalCoordinate(0.15, 0.25, 0.35))),
+        ),
+    )
+
+    @Test fun primitiveRoundTripICentered() = assertPrimitiveRoundTrip(
+        centeredStructure(
+            "w", "Im-3m", 229, Lattice(3.16, 3.16, 3.16, 90.0, 90.0, 90.0),
+            listOf(Site("W", "W1", Species("W"), FractionalCoordinate.ZERO)),
+        ),
+    )
+
+    @Test fun primitiveRoundTripFCentered() = assertPrimitiveRoundTrip(
+        centeredStructure(
+            "nacl", "Fm-3m", 225, Lattice(5.64, 5.64, 5.64, 90.0, 90.0, 90.0),
+            listOf(
+                Site("Na", "Na1", Species("Na"), FractionalCoordinate.ZERO),
+                Site("Cl", "Cl1", Species("Cl"), FractionalCoordinate(0.5, 0.5, 0.5)),
+            ),
+        ),
+    )
+
+    @Test fun primitiveRoundTripRCentered() = assertPrimitiveRoundTrip(
+        centeredStructure(
+            "r3", "R3", 146, Lattice(5.0, 5.0, 7.0, 90.0, 90.0, 120.0),
+            listOf(Site("O", "O1", Species("O"), FractionalCoordinate(0.2, 0.3, 0.4))),
+        ),
+    )
 }

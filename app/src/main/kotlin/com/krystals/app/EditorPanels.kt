@@ -3,6 +3,9 @@
 package com.krystals.app
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -29,6 +32,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.atan2
@@ -38,11 +42,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -79,6 +86,8 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -104,6 +113,7 @@ import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
+import com.krystals.crystal.data.BravaisLatticeData
 import com.krystals.renderer.core.style.RenderPalette
 import com.krystals.renderer.core.style.AxisMode
 import com.krystals.renderer.core.style.BondColorMode
@@ -116,6 +126,7 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -129,23 +140,52 @@ fun EditorPanel(
     onStructure: (EditResult) -> Unit,
     onMessage: (String) -> Unit,
     onRunBondComputation: ((suspend () -> EditResult?) -> Unit)? = null,
+    onPersistentMessage: (String?) -> Unit = {},
 ) {
-    var selectedTab by remember { mutableStateOf(if (tab.editingSiteId != null) EditorTab.ATOMS else EditorTab.BASIC) }
-    // Per v0.2.3: resizable panel (mirrors DisplayPanel).
-    var panelRatio by remember { mutableStateOf(0.62f) }
+    var selectedTab by remember { mutableStateOf(
+        when {
+            tab.editingSiteId != null -> EditorTab.ATOMS
+            tab.pendingEditorTab == "atoms" -> EditorTab.ATOMS
+            tab.pendingEditorTab == "bonds" -> EditorTab.BONDS
+            tab.pendingEditorTab == "expansion" -> EditorTab.EXPANSION
+            else -> EditorTab.BASIC
+        }
+    ) }
+    // Per v0.7.1: consume the pending tab hint once the editor opens.
+    LaunchedEffect(Unit) { tab.pendingEditorTab = null }
+    // Per v0.7.0: slide-in animation state.
+    var visible by remember { mutableStateOf(false) }
+    var dismissed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { visible = true }
+    val slideProgress by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(150, easing = FastOutSlowInEasing),
+        label = "editorSlide",
+    )
+    LaunchedEffect(visible) {
+        if (!visible && dismissed) { delay(150); onDismiss() }
+    }
+    fun doDismiss() { dismissed = true; visible = false }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val landscape = maxWidth > maxHeight
-        val widthPx = with(androidx.compose.ui.platform.LocalDensity.current) { maxWidth.toPx() }
-        val heightPx = with(androidx.compose.ui.platform.LocalDensity.current) { maxHeight.toPx() }
+        // Per v0.7.0: persist panel ratio per orientation (portrait/landscape) so the user's
+        // drag-resize preference survives across sessions.
+        val panelPrefs = LocalContext.current.getSharedPreferences("panel_sizes", android.content.Context.MODE_PRIVATE)
+        val prefKey = "editor_panel_ratio_${if (landscape) "landscape" else "portrait"}"
+        var panelRatio by remember(landscape) { mutableStateOf(panelPrefs.getFloat(prefKey, 0.62f)) }
+        val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
+        val heightPx = with(LocalDensity.current) { maxHeight.toPx() }
         Box(
-            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f)).clickable(
-                interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss,
+            Modifier.fillMaxSize().graphicsLayer { alpha = slideProgress }.background(Color.Black.copy(alpha = 0.22f)).clickable(
+                interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = { doDismiss() },
             ),
         )
         val panelModifier = if (landscape) {
             Modifier.fillMaxHeight().fillMaxWidth(panelRatio).align(Alignment.CenterEnd)
+                .graphicsLayer { translationX = (1f - slideProgress) * widthPx }
         } else {
             Modifier.fillMaxWidth().fillMaxHeight(panelRatio).align(Alignment.BottomCenter)
+                .graphicsLayer { translationY = (1f - slideProgress) * heightPx }
         }
         Surface(
             tonalElevation = 8.dp,
@@ -170,6 +210,7 @@ fun EditorPanel(
                                 } else {
                                     panelRatio = (panelRatio - amount.y / heightPx).coerceIn(0.2f, 0.95f)
                                 }
+                                panelPrefs.edit().putFloat(prefKey, panelRatio).apply()
                             }
                         }
                         .then(handleModifier)
@@ -183,12 +224,12 @@ fun EditorPanel(
                             EditorTab.BASIC to stringResource(R.string.basic_info), EditorTab.ATOMS to stringResource(R.string.atoms),
                             EditorTab.BONDS to stringResource(R.string.bonds), EditorTab.EXPANSION to stringResource(R.string.expand_cell),
                         ).forEach { (kind, label) -> FilterChip(selectedTab == kind, onClick = { selectedTab = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
-                        Spacer(Modifier.weight(1f)); IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null) }
+                        Spacer(Modifier.weight(1f)); IconButton(onClick = { doDismiss() }) { Icon(Icons.Default.Close, null) }
                     }
                     when (selectedTab) {
                         EditorTab.BASIC -> BasicEditor(tab, onStructure, onMessage, onRunBondComputation)
-                        EditorTab.ATOMS -> AtomEditor(tab, onDismiss, onStructure, onMessage, onRunBondComputation)
-                        EditorTab.BONDS -> BondEditor(tab, onStructure, onMessage)
+                        EditorTab.ATOMS -> AtomEditor(tab, { doDismiss() }, onStructure, onMessage, onRunBondComputation, onPersistentMessage)
+                        EditorTab.BONDS -> BondEditor(tab, onStructure, onMessage, { doDismiss() }, onPersistentMessage)
                         EditorTab.EXPANSION -> ExpansionEditor(tab, onMessage, onRunBondComputation)
                     }
                 }
@@ -236,6 +277,7 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
     val lockBeta = systemName !in setOf("Triclinic", "Monoclinic")
     val lockGamma = systemName !in setOf("Triclinic")
     var transformOpen by remember { mutableStateOf(false) }
+    var clearSymmetryOpen by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         OutlinedTextField(tab.name, onValueChange = { tab.name = it; tab.dirty = true }, label = { Text(localized("文件名", "File name")) }, modifier = Modifier.fillMaxWidth())
@@ -274,28 +316,107 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
             }.mapCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetLattice(it)) }
                 .onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid cell parameters") }
         }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("应用晶胞", "Apply cell")) }
-        if (SpaceGroupCatalog.isRhombohedral(tab.structure.spaceGroup.symbol)) {
-            // γ ≈ 120 indicates the hexagonal setting; otherwise treat as already rhombohedral.
-            val toRhom = tab.structure.lattice.gamma > 100.0
-            OutlinedButton(onClick = {
-                runCatching { CrystalEditor.convertHexRhom(tab.structure, tab.bondConfiguration, toRhom) }
-                    .onSuccess(onStructure)
-                    .onFailure { onMessage(it.message ?: "Conversion failed") }
-            }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                Text(localized("六方/菱方晶胞转换", "Hex/Rhombohedral conversion"))
+        // Per v0.8.1: swapped order — primitive/conventional conversion comes before 3×3 transform.
+        val centering = BravaisLatticeData.centeringFromSymbol(tab.structure.spaceGroup.symbol)
+        if (centering != BravaisLatticeData.CenteringType.PRIMITIVE) {
+            OutlinedButton(
+                onClick = {
+                    tab.recordHistory()
+                    if (tab.isPrimitiveCell) {
+                        // Converting from primitive back to conventional.
+                        // Save current primitive data so we can restore it later.
+                        tab.savedPrimitiveStructure = tab.structure
+                        tab.savedPrimitiveBondConfig = tab.bondConfiguration
+                        // Restore saved conventional data if available; otherwise do matrix conversion.
+                        val result = if (tab.savedConventionalStructure != null) {
+                            EditResult(tab.savedConventionalStructure!!, tab.savedConventionalBondConfig!!)
+                        } else {
+                            runCatching { CrystalEditor.convertToConventional(tab.structure, tab.bondConfiguration) }
+                                .getOrElse { onMessage(it.message ?: "Conversion failed"); return@OutlinedButton }
+                                .also {
+                                    tab.savedConventionalStructure = it.structure
+                                    tab.savedConventionalBondConfig = it.bondConfiguration
+                                }
+                        }
+                        if (onRunBondComputation != null) onRunBondComputation {
+                            CrystalEditor.ensureAutoBondRules(result.structure, result.bondConfiguration)
+                        } else onStructure(CrystalEditor.ensureAutoBondRules(result.structure, result.bondConfiguration))
+                        tab.isPrimitiveCell = false
+                    } else {
+                        // Converting from conventional to primitive.
+                        // Save current conventional data so we can restore it later.
+                        tab.savedConventionalStructure = tab.structure
+                        tab.savedConventionalBondConfig = tab.bondConfiguration
+                        // Restore saved primitive data if available; otherwise do matrix conversion.
+                        val result = if (tab.savedPrimitiveStructure != null) {
+                            EditResult(tab.savedPrimitiveStructure!!, tab.savedPrimitiveBondConfig!!)
+                        } else {
+                            runCatching { CrystalEditor.convertToPrimitive(tab.structure, tab.bondConfiguration) }
+                                .getOrElse { onMessage(it.message ?: "Conversion failed"); return@OutlinedButton }
+                                .also {
+                                    tab.savedPrimitiveStructure = it.structure
+                                    tab.savedPrimitiveBondConfig = it.bondConfiguration
+                                }
+                        }
+                        if (onRunBondComputation != null) onRunBondComputation {
+                            CrystalEditor.ensureAutoBondRules(result.structure, result.bondConfiguration)
+                        } else onStructure(CrystalEditor.ensureAutoBondRules(result.structure, result.bondConfiguration))
+                        tab.isPrimitiveCell = true
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            ) {
+                Text(if (tab.isPrimitiveCell) localized("转换为正当晶胞", "Convert to Conventional") else localized("转换为素晶胞", "Convert to Primitive"))
             }
         }
         OutlinedButton(onClick = { transformOpen = true }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("3×3 变换矩阵", "3×3 Transform")) }
+        // Per v0.8.0: Clear symmetry button.
+        OutlinedButton(
+            onClick = { clearSymmetryOpen = true },
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        ) { Text(localized("清除对称性", "Clear Symmetry")) }
     }
-    if (transformOpen) TransformDialog(onDismiss = { transformOpen = false }) { rows, translation ->
-        runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.Transform(rows, translation)) }
+    if (transformOpen) TransformDialog(onDismiss = { transformOpen = false }) { rows, translation, clearSymmetryFirst ->
+        runCatching {
+            if (clearSymmetryFirst) {
+                CrystalEditor.transformAfterClearingSymmetry(tab.structure, tab.bondConfiguration, rows, translation)
+            } else {
+                CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.Transform(rows, translation))
+            }
+        }
             .onSuccess { transformed ->
                 if (onRunBondComputation != null) onRunBondComputation {
                     CrystalEditor.ensureAutoBondRules(transformed.structure, transformed.bondConfiguration)
                 } else onStructure(CrystalEditor.ensureAutoBondRules(transformed.structure, transformed.bondConfiguration))
+// Per v0.7.1: 3×3 matrix transform no longer affects expansion. The scaling is
+// handled by symmetry operations within the structure itself.
+                tab.isPrimitiveCell = false
+                tab.savedConventionalStructure = null; tab.savedConventionalBondConfig = null
+                tab.savedPrimitiveStructure = null; tab.savedPrimitiveBondConfig = null
                 transformOpen = false
             }
             .onFailure { onMessage(it.message ?: "Invalid transformation") }
+    }
+    if (clearSymmetryOpen) {
+        AlertDialog(
+            onDismissRequest = { clearSymmetryOpen = false },
+            title = { Text(localized("确认", "Confirm")) },
+            text = { Text(localized("确认移除此晶体的对称性并回退到P1点群吗？", "Remove symmetry and revert to P1?")) },
+            confirmButton = { TextButton(onClick = {
+                runCatching { CrystalEditor.clearSymmetry(tab.structure, tab.bondConfiguration) }
+                    .onSuccess { result ->
+                        if (onRunBondComputation != null) onRunBondComputation {
+                            CrystalEditor.ensureAutoBondRules(result.structure, result.bondConfiguration)
+                        } else onStructure(CrystalEditor.ensureAutoBondRules(result.structure, result.bondConfiguration))
+                        tab.isPrimitiveCell = false
+                        tab.savedConventionalStructure = null; tab.savedConventionalBondConfig = null
+                        tab.savedPrimitiveStructure = null; tab.savedPrimitiveBondConfig = null
+                        clearSymmetryOpen = false
+                    }
+                    .onFailure { onMessage(it.message ?: "Failed to clear symmetry") }
+            }) { Text(stringResource(R.string.confirm)) } },
+            dismissButton = { TextButton(onClick = { clearSymmetryOpen = false }) { Text(stringResource(R.string.cancel)) } },
+        )
     }
 }
 
@@ -305,30 +426,36 @@ private fun CellField(label: String, value: String, onValue: (String) -> Unit, e
 }
 
 @Composable
-private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (EditResult) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> EditResult?) -> Unit)? = null) {
+private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (EditResult) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> EditResult?) -> Unit)? = null, onPersistentMessage: (String?) -> Unit = {}) {
     var atomDialog by remember { mutableStateOf<Site?>(null) }
     var newElement by remember { mutableStateOf<String?>(null) }
     var periodicOpen by remember { mutableStateOf(false) }
     LaunchedEffect(tab.editingSiteId) { tab.editingSiteId?.let { id -> atomDialog = tab.structure.sites.firstOrNull { it.id == id }; tab.editingSiteId = null } }
+    val atomEditHint = localized("点击需要修改/删除的原子", "Tap the atom to modify/delete")
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { periodicOpen = true }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建", "New")) }
-            OutlinedButton(onClick = { tab.recordHistory(); tab.atomEditMode = AtomEditMode.MODIFY_NEXT; onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Text(localized("修改", "Modify")) }
-            OutlinedButton(onClick = { tab.recordHistory(); tab.atomEditMode = AtomEditMode.DELETE_NEXT; onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Text(localized("删除", "Delete")) }
+            OutlinedButton(onClick = { tab.recordHistory(); tab.atomEditMode = AtomEditMode.MODIFY_NEXT; onPersistentMessage(atomEditHint); onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Text(localized("修改", "Modify")) }
+            OutlinedButton(onClick = { tab.recordHistory(); tab.atomEditMode = AtomEditMode.DELETE_NEXT; onPersistentMessage(atomEditHint); onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Text(localized("删除", "Delete")) }
         }
-        Text(localized("选择修改或删除后，在查看器中点击原子。", "Choose Modify or Delete, then tap an atom in the viewer."), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(8.dp))
-        LazyColumn(Modifier.fillMaxSize()) {
-            items(tab.structure.sites, key = { it.id }) { site ->
-                Row(Modifier.fillMaxWidth().clickable { atomDialog = site }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+LazyColumn(Modifier.fillMaxSize()) {
+items(tab.structure.sites, key = { it.id }) { site ->
+Row(
+    Modifier
+        .fillMaxWidth()
+        .clickable { atomDialog = site }
+        .border(0.5.dp, Color.Gray, RoundedCornerShape(8.dp))
+        .padding(10.dp),
+    verticalAlignment = Alignment.CenterVertically,
+) {
                     Box(Modifier.size(20.dp).background(colorFromArgb(RenderPalette.resolveArgb(site.species.symbol, tab.renderConfiguration)), CircleShape))
                     Text("${site.label}  ${site.species.symbol}   (${fmt(site.fractionalCoordinate.x)}, ${fmt(site.fractionalCoordinate.y)}, ${fmt(site.fractionalCoordinate.z)})", modifier = Modifier.weight(1f).padding(start = 10.dp))
                     IconButton(onClick = {
                         val deleted = runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.DeleteAtom(site.id)) }
                             .onFailure { onMessage(it.message ?: "Delete failed") }.getOrNull() ?: return@IconButton
-                        // Per v0.5.0: deleting an atom changes bond partners → recompute rules with overlay.
-                        if (onRunBondComputation != null) onRunBondComputation {
-                            CrystalEditor.ensureAutoBondRules(deleted.structure, deleted.bondConfiguration)
-                        } else onStructure(CrystalEditor.ensureAutoBondRules(deleted.structure, deleted.bondConfiguration))
+                        // Per v0.7.1: deleting an atom no longer regenerates all bond rules —
+                        // only rules referencing the deleted atom are removed (handled inside DeleteAtom).
+                        onStructure(deleted)
                     }) { Icon(Icons.Default.Delete, null) }
                 }
             }
@@ -344,12 +471,8 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Ed
             )
         }
             .onSuccess {
-                // Per v0.5.0: AddAtom already synthesizes rules inside the editor; recompute on a
-                // background thread with the overlay when available, else apply synchronously.
-                if (onRunBondComputation != null) {
-                    onRunBondComputation { CrystalEditor.ensureAutoBondRules(it.structure, it.bondConfiguration) }
-                } else onStructure(CrystalEditor.ensureAutoBondRules(it.structure, it.bondConfiguration))
-                it.warnings.forEach(onMessage); newElement = null
+                // Per v0.7.1: AddAtom no longer regenerates bond rules — existing rules are preserved.
+                onStructure(it); it.warnings.forEach(onMessage); newElement = null
             }.onFailure { onMessage(it.message ?: "Invalid atom") }
     } }
     atomDialog?.let { site -> AtomDialog(site, site.species.symbol, onDismiss = { atomDialog = null }) { label, chosen, frac, occupancy ->
@@ -365,11 +488,27 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Ed
 }
 
 @Composable
-private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, FractionalCoordinate) -> Unit) {
+private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, FractionalCoordinate, Boolean) -> Unit) {
     // Per v0.6.2: labeled matrix (xx, xy, …, zz) with a vertical separator and translation column.
     val matrixLabels = listOf("xx", "xy", "xz", "yx", "yy", "yz", "zx", "zy", "zz")
     val matrixValues = remember { List(9) { index -> mutableStateOf(if (index % 4 == 0) "1" else "0") } }
     val translationValues = remember { List(3) { mutableStateOf("0") } }
+    // Per v0.8.0: warning state for handedness change and shear matrix.
+    var pendingRows by remember { mutableStateOf<List<List<Int>>?>(null) }
+    var pendingTranslation by remember { mutableStateOf(FractionalCoordinate.ZERO) }
+    var showHandednessWarning by remember { mutableStateOf(false) }
+    var showShearWarning by remember { mutableStateOf(false) }
+
+    fun parseMatrix(): Pair<List<List<Int>>, FractionalCoordinate>? = runCatching {
+        val rows = List(3) { r -> List(3) { c ->
+            val number = eval(matrixValues[r * 3 + c].value)
+            require(kotlin.math.abs(number - kotlin.math.round(number)) < 1e-9) { "Matrix entries must be integers" }
+            number.toInt()
+        } }
+        val translation = FractionalCoordinate(eval(translationValues[0].value), eval(translationValues[1].value), eval(translationValues[2].value))
+        rows to translation
+    }.getOrNull()
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(localized("3×3 变换矩阵", "3×3 Transform")) },
@@ -378,7 +517,7 @@ private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, Fr
             repeat(3) { row -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 repeat(3) { column ->
                     val idx = row * 3 + column
-                    OutlinedTextField(matrixValues[idx].value, { matrixValues[idx].value = it }, singleLine = true, label = { Text(matrixLabels[idx], style = MaterialTheme.typography.labelSmall) }, modifier = Modifier.weight(1f).padding(2.dp), textStyle = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(matrixValues[idx].value, { matrixValues[idx].value = it.filter { ch -> ch.isDigit() || ch == '-' } }, singleLine = true, label = { Text(matrixLabels[idx], style = MaterialTheme.typography.labelSmall) }, modifier = Modifier.weight(1f).padding(2.dp), textStyle = MaterialTheme.typography.bodySmall)
                 }
                 // Continuous vertical separator between matrix and translation
                 Box(Modifier.width(2.dp).height(48.dp).background(MaterialTheme.colorScheme.outline))
@@ -387,16 +526,45 @@ private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, Fr
             Text(localized("变换后坐标 R' = XR + T", "Transformed coordinate R' = XR + T"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth().padding(top = 4.dp), textAlign = TextAlign.Center)
         } },
         confirmButton = { TextButton(onClick = {
-            val rows = List(3) { r -> List(3) { c ->
-                val number = eval(matrixValues[r * 3 + c].value)
-                require(kotlin.math.abs(number - kotlin.math.round(number)) < 1e-9) { "Matrix entries must be integers" }
-                number.toInt()
-            } }
-            val translation = FractionalCoordinate(eval(translationValues[0].value), eval(translationValues[1].value), eval(translationValues[2].value))
-            onApply(rows, translation)
+            val parsed = parseMatrix()
+            if (parsed == null) return@TextButton
+            val (rows, translation) = parsed
+            pendingRows = rows
+            pendingTranslation = translation
+            when {
+                CrystalEditor.isShearMatrix(rows) -> showShearWarning = true
+                CrystalEditor.changesHandedness(rows) -> showHandednessWarning = true
+                else -> { onApply(rows, translation, false); onDismiss() }
+            }
         }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
+    // Per v0.8.0: Handedness warning — matrix changes right-handed to left-handed or vice versa.
+    if (showHandednessWarning) {
+        AlertDialog(
+            onDismissRequest = { showHandednessWarning = false },
+            title = { Text(localized("注意", "Warning")) },
+            text = { Text(localized("此变换矩阵将右手系变为左手系（或反之），这可能影响晶体的物理性质描述。是否继续？", "This matrix changes handedness (right-handed ↔ left-handed). This may affect physical property descriptions. Continue?")) },
+            confirmButton = { TextButton(onClick = {
+                showHandednessWarning = false
+                pendingRows?.let { onApply(it, pendingTranslation, false); onDismiss() }
+            }) { Text(stringResource(R.string.confirm)) } },
+            dismissButton = { TextButton(onClick = { showHandednessWarning = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    // Per v0.8.0: Shear warning — matrix will reduce crystal symmetry. Clear symmetry first.
+    if (showShearWarning) {
+        AlertDialog(
+            onDismissRequest = { showShearWarning = false },
+            title = { Text(localized("注意", "Warning")) },
+            text = { Text(localized("此变换为剪切矩阵，将降低晶体对称性。系统将先移除对称性（回退到P1），再执行变换。是否继续？", "This is a shear matrix that will reduce crystal symmetry. Symmetry will be cleared (P1) before applying the transform. Continue?")) },
+            confirmButton = { TextButton(onClick = {
+                showShearWarning = false
+                pendingRows?.let { onApply(it, pendingTranslation, true); onDismiss() }
+            }) { Text(stringResource(R.string.confirm)) } },
+            dismissButton = { TextButton(onClick = { showShearWarning = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
 }
 
 @Composable
@@ -476,7 +644,7 @@ private fun cell(w: androidx.compose.ui.unit.Dp, h: androidx.compose.ui.unit.Dp,
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMessage: (String) -> Unit) {
+private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMessage: (String) -> Unit, onDismiss: () -> Unit, onPersistentMessage: (String?) -> Unit = {}) {
     val sites = tab.structure.sites
     if (sites.isEmpty()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("请先添加原子", "Add atoms first")) }; return }
     var addOpen by remember { mutableStateOf(false) }
@@ -561,57 +729,74 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         // Per v0.5.0: "自动应用半径" (auto-apply radii) clears every bond rule and regenerates them
         // from one of three radius sources (smart-ionic default / bonding / vdW).
+        // Per v0.7.1: "绘制" (draw) and "删除" (delete) buttons replace the old auto-apply button position.
+        // Auto-apply is now a compact row with a Switch + source selector + ε slider.
+        val drawHint = localized("点击成键的两个目标原子", "Tap two atoms to bond")
+        val deleteHint = localized("点击要删除键的两个原子", "Tap two atoms to delete their bond")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { addOpen = true }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建规则", "New rule")) }
-            Box(Modifier.weight(1f)) {
-                OutlinedButton(onClick = { radiiMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(localized("自动应用半径", "Auto-apply radii"))
+            Button(onClick = { addOpen = true }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建", "New")) }
+            OutlinedButton(onClick = {
+                tab.bondDrawMode = BondDrawMode.DRAWING
+                tab.bondDrawFirstSiteId = null
+                tab.bondDrawFirstCartesian = null
+                tab.selectedAtomIds = emptyList()
+                onPersistentMessage(drawHint)
+                onDismiss()
+            }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Create, null); Text(localized("绘制", "Draw")) }
+            OutlinedButton(onClick = {
+                tab.bondDrawMode = BondDrawMode.DELETING
+                tab.bondDrawFirstSiteId = null
+                tab.bondDrawFirstCartesian = null
+                tab.selectedAtomIds = emptyList()
+                onPersistentMessage(deleteHint)
+                onDismiss()
+            }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Text(localized("删除", "Delete")) }
+        }
+        // Per v0.7.1: label on first line, mode button + slider on second line.
+        var sliderEpsilon by remember(tab.bondEpsilon) { mutableStateOf(tab.bondEpsilon.toFloat().coerceIn(0.1f, 0.6f)) }
+        Text(
+            localized("自动应用规则：容忍度 ε = ", "Auto-apply rules: tolerance ε = ") + "%.2f".format(sliderEpsilon.toDouble()),
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Per v0.7.1: highlighted "模式" button opens a dropdown to pick radius source.
+            Box {
+                Button(
+                    onClick = { radiiMenuOpen = true },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    Icon(Icons.Default.Settings, null, modifier = Modifier.size(16.dp))
+                    Text(localized("模式", "modes"), modifier = Modifier.padding(start = 4.dp), style = MaterialTheme.typography.labelSmall)
                 }
                 DropdownMenu(expanded = radiiMenuOpen, onDismissRequest = { radiiMenuOpen = false }) {
                     DropdownMenuItem(text = { Text(localized("智能离子", "Smart ionic")) }, onClick = {
                         radiiMenuOpen = false
+                        tab.lastRadiusSource = RadiusSource.SMART_IONIC
                         rebuildAsync(RadiusSource.SMART_IONIC, tab.bondEpsilon, skipConfirm = false)
                     })
                     DropdownMenuItem(text = { Text(localized("键合半径", "Bonding radius")) }, onClick = {
                         radiiMenuOpen = false
+                        tab.lastRadiusSource = RadiusSource.BONDING
                         rebuildAsync(RadiusSource.BONDING, tab.bondEpsilon, skipConfirm = true)
                     })
                     DropdownMenuItem(text = { Text(localized("vdW 半径", "vdW radius")) }, onClick = {
                         radiiMenuOpen = false
+                        tab.lastRadiusSource = RadiusSource.VDW
                         rebuildAsync(RadiusSource.VDW, tab.bondEpsilon, skipConfirm = true)
                     })
-                    HorizontalDivider()
-                    DropdownMenuItem(text = { Text(localized("取消", "Cancel")) }, onClick = { radiiMenuOpen = false })
                 }
             }
-        }
-        // Per v0.6.2: ε tolerance title + slider + input, with a divider below.
-        Text(localized("容忍度 ε", "tolerance ε"), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 6.dp, bottom = 2.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            var epsilonText by remember(tab.bondEpsilon) { mutableStateOf("%.2f".format(tab.bondEpsilon)) }
-            OutlinedTextField(
-                value = epsilonText,
-                onValueChange = { input ->
-                    epsilonText = input
-                    input.toFloatOrNull()?.let { v ->
-                        val clamped = v.coerceIn(0.1f, 0.6f)
-                        if (clamped.toDouble() != tab.bondEpsilon) {
-                            tab.bondEpsilon = clamped.toDouble()
-                            rebuildAsync(tab.lastRadiusSource, tab.bondEpsilon, skipConfirm = true)
-                        }
-                    }
-                },
-                singleLine = true,
-                modifier = Modifier.width(88.dp),
-            )
             // Per v0.6.3: only trigger rebuild on finger release to prevent lag.
-            var sliderEpsilon by remember(tab.bondEpsilon) { mutableStateOf(tab.bondEpsilon.toFloat().coerceIn(0.1f, 0.6f)) }
             Slider(
                 value = sliderEpsilon,
                 onValueChange = { v -> sliderEpsilon = v },
                 onValueChangeFinished = {
                     tab.bondEpsilon = sliderEpsilon.toDouble()
-                    epsilonText = "%.2f".format(tab.bondEpsilon)
                     rebuildAsync(tab.lastRadiusSource, tab.bondEpsilon, skipConfirm = true)
                 },
                 valueRange = 0.1f..0.6f,
@@ -625,7 +810,9 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
                 val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
                 val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
                 Row(
-                    Modifier.fillMaxWidth().clickable { editingRule = rule }.padding(vertical = 6.dp),
+                    Modifier.fillMaxWidth()
+                        .clickable { editingRule = rule }
+                        .padding(vertical = 6.dp, horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("$labelA — $labelB", modifier = Modifier.weight(1f))
@@ -681,13 +868,18 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
             },
         )
     }
-    if (addOpen) BondRuleDialog(sites, editingRule = null, onDismiss = { addOpen = false }) { siteA, siteB, min, max, extend ->
-        runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extend))) }
+    // Per v0.7.1: auto-open the BondRuleDialog when a preset arrives from the draw flow.
+    LaunchedEffect(tab.pendingBondDrawRule) {
+        if (tab.pendingBondDrawRule != null) { addOpen = true }
+    }
+    if (addOpen) BondRuleDialog(sites, editingRule = null, preset = tab.pendingBondDrawRule, onDismiss = { addOpen = false; tab.pendingBondDrawRule = null }) { siteA, siteB, min, max, extendAtoB, extendBtoA ->
+        tab.pendingBondDrawRule = null
+        runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extendAtoB, extendBtoA))) }
             .onSuccess { onStructure(it); addOpen = false }.onFailure { onMessage(it.message ?: "Invalid bond rule") }
     }
     editingRule?.let { rule ->
-        BondRuleDialog(sites, editingRule = rule, onDismiss = { editingRule = null }) { siteA, siteB, min, max, extend ->
-            runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extend))) }
+        BondRuleDialog(sites, editingRule = rule, onDismiss = { editingRule = null }) { siteA, siteB, min, max, extendAtoB, extendBtoA ->
+            runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extendAtoB, extendBtoA))) }
                 .onSuccess { onStructure(it); editingRule = null }.onFailure { onMessage(it.message ?: "Invalid bond rule") }
         }
     }
@@ -697,11 +889,12 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
 private fun BondRuleDialog(
     sites: List<Site>,
     editingRule: BondRule?,
+    preset: BondRule? = null,
     onDismiss: () -> Unit,
-    onApply: (String, String, Double, Double, Boolean) -> Unit,
+    onApply: (String, String, Double, Double, Boolean, Boolean) -> Unit,
 ) {
-    var a by remember { mutableStateOf(editingRule?.siteA ?: sites.first().id) }
-    var b by remember { mutableStateOf(editingRule?.siteB ?: sites.first().id) }
+    var a by remember { mutableStateOf(preset?.siteA ?: editingRule?.siteA ?: sites.first().id) }
+    var b by remember { mutableStateOf(preset?.siteB ?: editingRule?.siteB ?: sites.first().id) }
     val siteA = sites.firstOrNull { it.id == a } ?: sites.first()
     val siteB = sites.firstOrNull { it.id == b } ?: sites.first()
     // Per v0.4.1: default maximum is the sum of the two atoms' bonding radii (键合半径),
@@ -709,17 +902,19 @@ private fun BondRuleDialog(
     // suggested window tracks the selected pair.
     val defaultMax = PeriodicTable.radius(siteA.species.symbol, RadiusSource.BONDING) +
         PeriodicTable.radius(siteB.species.symbol, RadiusSource.BONDING)
-    var minValue by remember { mutableFloatStateOf((editingRule?.minAngstrom ?: 0.1).toFloat()) }
+    var minValue by remember { mutableFloatStateOf((preset?.minAngstrom ?: editingRule?.minAngstrom ?: 0.1).toFloat()) }
     // When creating a new rule (no editingRule), maxValue follows the selected pair's default; once
     // the user drags the slider the override sticks until they switch sites again.
-    var maxValue by remember { mutableFloatStateOf((editingRule?.maxAngstrom ?: defaultMax).toFloat()) }
-    var userTouchedMax by remember { mutableStateOf(editingRule != null) }
+    // Per v0.7.1: when a preset is provided (from draw flow), use its max and mark as user-touched.
+    var maxValue by remember { mutableFloatStateOf((preset?.maxAngstrom ?: editingRule?.maxAngstrom ?: defaultMax).toFloat()) }
+    var userTouchedMax by remember { mutableStateOf(editingRule != null || preset != null) }
     if (!userTouchedMax) {
         // Re-sync the displayed maximum to the current pair's default whenever the user changes A/B
         // without having manually adjusted the slider.
         LaunchedEffect(defaultMax) { maxValue = defaultMax.toFloat() }
     }
-    val extendAcrossCell = editingRule?.extendAcrossCell ?: false
+    val extendAtoB = editingRule?.extendAtoB ?: false
+    val extendBtoA = editingRule?.extendBtoA ?: false
     val sliderMax = max(5.0, defaultMax + 1.0).toFloat().coerceAtMost(10.0f)
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -737,7 +932,7 @@ private fun BondRuleDialog(
             val min = minValue.toDouble()
             val max = maxValue.toDouble()
             if (min > max) return@TextButton
-            runCatching { onApply(a, b, min, max, extendAcrossCell) }.onFailure { /* ignore */ }
+            runCatching { onApply(a, b, min, max, extendAtoB, extendBtoA) }.onFailure { /* ignore */ }
         }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
@@ -757,13 +952,13 @@ private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRun
     var z by remember(tab.expansion) { mutableStateOf(tab.expansion.z) }
     // Per v0.5.3b: pre-resolved so the degrade snackbar can fire from a non-@Composable onClick.
     val degradeMessage = localized("原子数过多，已降级显示（边界多面体可能不完整）", "Many atoms; rendering in degraded mode (boundary polyhedra may be incomplete)")
-    Column(Modifier.fillMaxSize().padding(18.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
         Text(localized("显示扩胞", "Display supercell"), fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
         listOf(
-            Triple("x", x) { v: Int -> x = v },
-            Triple("y", y) { v: Int -> y = v },
-            Triple("z", z) { v: Int -> z = v },
+            Triple("a", x) { v: Int -> x = v },
+            Triple("b", y) { v: Int -> y = v },
+            Triple("c", z) { v: Int -> z = v },
         ).forEach { (label, value, setter) ->
             ExpansionCluster(label, value, setter)
             Spacer(Modifier.height(10.dp))
@@ -777,6 +972,7 @@ private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRun
                 val degrade = BondDetector.estimatePeakAtomCount(base, expansion) >
                     BondDetector.SHELL_DEGRADE_THRESHOLD
                 tab.expansion = expansion
+                tab.structuralExpansion = false
                 degrade
             }.onSuccess { degrade ->
                 if (degrade) onMessage(degradeMessage)
@@ -825,6 +1021,9 @@ fun AppearanceDialog(
     var colorPickerOpen by remember { mutableStateOf(false) }
     var bondColorPickerOpen by remember { mutableStateOf(false) }
     var followTheme by remember { mutableStateOf(backgroundFollowTheme) }
+    // Per v0.6.5: precompute dark/light for the follow-theme clickable.
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    val isDarkSurface = (0.299f * surfaceColor.red + 0.587f * surfaceColor.green + 0.114f * surfaceColor.blue) < 0.5f
     // Per v0.5.3a: preview hides the dialog visually (alpha 0) but keeps it mounted so the
     // Preview button's pointerInput survives the press-and-hold and onPreviewEnd fires on release.
     // (v0.5.2a unmounted the dialog on press, killing the gesture → stuck preview.)
@@ -856,7 +1055,11 @@ fun AppearanceDialog(
                     Box(
                         Modifier.size(40.dp).then(
                             if (followTheme) Modifier.border(2.dp, Color(0xFF7542A5), RoundedCornerShape(20.dp)) else Modifier
-                        ).clickable { followTheme = true; onBackgroundFollowThemeChange(true) }
+                        ).clickable {
+followTheme = true
+// Per v0.6.5: do NOT call onBackgroundFollowThemeChange or update appearance here.
+// The theme background is applied only on save or preview.
+                        }
                     ) {
                         Canvas(Modifier.fillMaxSize()) {
                             drawArc(color = Color.Black, startAngle = 90f, sweepAngle = 180f, useCenter = true, size = size)
@@ -873,7 +1076,7 @@ fun AppearanceDialog(
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
                         Box(Modifier.size(40.dp).background(colorFromArgb(argb), RoundedCornerShape(20.dp))
                             .then(if (appearance.backgroundArgb == argb && !followTheme) Modifier.border(2.dp, Color(0xFF7542A5), RoundedCornerShape(20.dp)) else Modifier)
-                            .clickable { followTheme = false; onBackgroundFollowThemeChange(false); appearance = appearance.copy(backgroundArgb = argb) })
+                            .clickable { followTheme = false; appearance = appearance.copy(backgroundArgb = argb) })
                         Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
                     }
                 }
@@ -890,7 +1093,7 @@ fun AppearanceDialog(
                             RoundedCornerShape(20.dp),
                         )
                         .then(if (!followTheme) Modifier.border(2.dp, Color(0xFF7542A5), RoundedCornerShape(20.dp)) else Modifier)
-                        .clickable { followTheme = false; onBackgroundFollowThemeChange(false); colorPickerOpen = true })
+                        .clickable { followTheme = false; colorPickerOpen = true })
                     Text(localized("自定义", "Custom"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
                 }
             }
@@ -905,10 +1108,11 @@ fun AppearanceDialog(
                     DropdownField(localized("线型", "Line"), lineLabels[appearance.lineStyle.ordinal], lineLabels) { appearance = appearance.copy(lineStyle = LineStyle.entries[lineLabels.indexOf(it)]) }
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            // Per v0.6.5: Axes section — separate from frame, with position sliders.
+            Text(localized("坐标轴", "Axes"), fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
             val axisLabels = listOf("abc", "XYZ")
-            Text(localized("坐标轴", "Axes"), style = MaterialTheme.typography.bodySmall)
-            // Per v0.5.3: switch left, system dropdown right, both vertically centred and spaced.
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.material3.Switch(checked = appearance.showAxes, onCheckedChange = { appearance = appearance.copy(showAxes = it) })
                 if (appearance.showAxes) {
@@ -917,6 +1121,10 @@ fun AppearanceDialog(
                         appearance = appearance.copy(axisMode = AxisMode.entries[axisLabels.indexOf(it)])
                     }
                 }
+            }
+            if (appearance.showAxes) {
+                LabeledSlider(localized("坐标轴 x 坐标", "Axis X position"), appearance.axisOffsetX, 0f..1f, decimals = 2) { appearance = appearance.copy(axisOffsetX = it) }
+                LabeledSlider(localized("坐标轴 y 坐标", "Axis Y position"), appearance.axisOffsetY, 0f..1f, decimals = 2) { appearance = appearance.copy(axisOffsetY = it) }
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("原子", "Atoms"), fontWeight = FontWeight.Bold)
@@ -1008,7 +1216,8 @@ fun AppearanceDialog(
                         detectTapGestures(
                             onPress = {
                                 previewing = true
-                                onPreviewStart(appearance)
+                                val previewAppearance = if (followTheme) appearance.copy(backgroundArgb = if (isDarkSurface) 0xFF101014L else 0xFFF8F8FBL) else appearance
+                                onPreviewStart(previewAppearance)
                                 tryAwaitRelease()
                                 onPreviewEnd()
                                 previewing = false
@@ -1021,7 +1230,11 @@ fun AppearanceDialog(
             TextButton(onClick = onDismiss) { Text(localized("取消", "Cancel")) }
             Spacer(Modifier.width(8.dp))
             Button(
-                onClick = { onApplied(appearance); onDismiss() },
+                onClick = {
+                    onBackgroundFollowThemeChange(followTheme)
+                    val savedAppearance = if (followTheme) appearance.copy(backgroundArgb = if (isDarkSurface) 0xFF101014L else 0xFFF8F8FBL) else appearance
+                    onApplied(savedAppearance); onDismiss()
+                },
                 shape = RoundedCornerShape(16.dp),
             ) { Text(localized("保存", "Save")) }
         }
@@ -1045,7 +1258,7 @@ fun AppearanceDialog(
             onDismissRequest = { resetConfirmOpen = false },
             title = { Text(localized("确认", "Confirm")) },
             text = { Text(localized("确认将外观设置为默认设置吗？", "Reset all appearance settings to defaults?")) },
-            confirmButton = { TextButton(onClick = { resetConfirmOpen = false; appearance = ViewerAppearance(); followTheme = true; onBackgroundFollowThemeChange(true) }) { Text(stringResource(R.string.confirm)) } },
+            confirmButton = { TextButton(onClick = { resetConfirmOpen = false; appearance = ViewerAppearance(); followTheme = true }) { Text(stringResource(R.string.confirm)) } },
             dismissButton = { TextButton(onClick = { resetConfirmOpen = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
@@ -1070,8 +1283,8 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
             val radius = size.minDimension * 0.38f
             val center = Offset(size.width / 2f, size.height / 2f)
             val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
-            // Per v0.5.3: slightly lower the preview sphere's own lightness so the highlight reads.
-            val gray = Color(0xFF747479).copy(alpha = opacity)
+            // Per v0.6.5: brighten the preview sphere for better visibility.
+            val gray = Color(0xFFA8A8AD).copy(alpha = opacity)
             val theta = appearance.lightAzimuth / 180f * PI.toFloat()
             val phi = appearance.lightElevation / 180f * PI.toFloat()
             val cosPhi = cos(phi)
@@ -1162,7 +1375,7 @@ private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
     c: Offset, r: Float, appearance: ViewerAppearance, fog: Float, bg: Color,
 ) {
-    val base = Color(0xFF747479).blend(bg, fog)
+    val base = Color(0xFFA8A8AD).blend(bg, fog)
     drawCircle(base, r, c)
     if (appearance.reflectionEnabled) {
         val theta = appearance.lightAzimuth / 180f * PI.toFloat()

@@ -11,6 +11,7 @@ data class CrystalStructure(
     val spaceGroup: SpaceGroup,
     val symmetryOperations: List<SymmetryOperation>,
     val sites: List<Site>,
+    val isConventional: Boolean = true,
 ) {
     val effectiveSymmetryOperations: List<SymmetryOperation>
         get() = symmetryOperations.ifEmpty { SpaceGroupCatalog.operations(spaceGroup.symbol) }
