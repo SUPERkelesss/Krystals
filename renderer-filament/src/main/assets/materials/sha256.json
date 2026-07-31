@@ -1,13 +1,13 @@
 {
-    "atom_opaque.filamat":  "9342b60761e04d4d51b24f3e418c0af682bab7933c39991119a534f9f79f3d1d",
-    "atom_transparent.filamat":  "6b79754180011453e46719536f14e24d814b9d564a2c1f51a06aee232d5bbaf4",
-    "opaque.filamat":  "693fee8128d5b08416deeec97b0eaff97b565167bacbb3b92b533ce8c1219131",
-    "transparent.filamat":  "475fdf18e4df38dc9aabe836c45c633c4aad7ee9969c73a286efd9450613c525",
-    "polyhedron.filamat":  "4e20c6a476dd99f47704a30588b60445a897c0de391d2a960225b4c9eeeeccae",
-    "unlit_opaque.filamat":  "117ce7c037caab3160a47df55340cad2425285af2ba6d172d3133909181b9e55",
-    "unlit_transparent.filamat":  "94fdd3eec8b63806a0bca7d9e7b33c162ce189068a02551d50ebbf1290bcb8dc",
-    "unlit_polyhedron.filamat":  "15047218327071583da37522996230f8e8af8448bc622b6baa65ce08b61d554f",
-    "highlight.filamat":  "59d90d0c821373504603b88c6c72a27c603f750b1ae243eafcf11b225137f76c",
+    "atom_opaque.filamat":  "dd4d7612742d0a9ba122637cca2328d48d853fc6d668ace6b94e87ddc66d22f5",
+    "atom_transparent.filamat":  "a1e36240d7e4f5bf0c70ab95634f9d96019e280a6a4d24c6312063804f20b0a9",
+    "opaque.filamat":  "630e98d76143a85fd939e5d30d21d6992e8e0f2c3acf91db5bd238dbf4a650f4",
+    "transparent.filamat":  "5ea20bfa20ec2a54efb52634cb5ef05655aeb5de4312e7fcf9efb0721baca212",
+    "polyhedron.filamat":  "43565881d2cc8df0f331ab0a608dfdcc44649042b2af76276bad2167936f915c",
+    "unlit_opaque.filamat":  "dca52f820ca6f21b436328866218a3bf8133587d886122ccf7f5d19bbc07725d",
+    "unlit_transparent.filamat":  "d90e7c1fe8d5c989e76a281ad9c36f595dd82bf1619991507f813e29cc055b02",
+    "unlit_polyhedron.filamat":  "1555e19bf8ba6690331a956f4223bae1016595a3e2cf7f38bf0fb77042e23b73",
+    "highlight.filamat":  "e9486e62ecab0661198c0765fe55b7318a47133e2a891785b425417d698023e3",
     "depth_cueing.filamat":  "37e43341e0a7ebabc1335176c92d74d3175a73e98eaa7669f4460b9aa089feab",
     "picking.filamat":  "d4b81d4bd51736b4657c13bcf3d38d8b0dba8007292cada0f090ec22a484b129"
 }

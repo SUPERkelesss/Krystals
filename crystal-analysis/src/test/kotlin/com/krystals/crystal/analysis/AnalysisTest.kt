@@ -335,4 +335,102 @@ class AnalysisTest {
             listOf(Site("O", "O1", Species("O"), FractionalCoordinate(0.2, 0.3, 0.4))),
         ),
     )
+
+    // ── Per v0.7.1: conventional-cell metric detection and noise-tolerant ASU ──
+
+    @Test fun conventionalCellWithIdentityOpsIsNotConverted() {
+        // Fe scenario from MP downloads: a conventional I-centered cell (all atoms listed,
+        // identity ops only, cubic metric) must NOT be treated as primitive — converting
+        // it again produces a wrong doubled cell (e.g. atom at 1/4,1/4,1/4).
+        val structure = CrystalStructure(
+            blockName = "fe",
+            lattice = Lattice(2.87, 2.87, 2.87, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("Im-3m", 229),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(
+                Site("Fe1", "Fe1", Species("Fe"), FractionalCoordinate.ZERO),
+                Site("Fe2", "Fe2", Species("Fe"), FractionalCoordinate(0.5, 0.5, 0.5)),
+            ),
+        )
+        assertTrue(CrystalEditor.isConventionalCell(structure))
+    }
+
+    @Test fun primitiveCellWithIdentityOpsIsConverted() {
+        // Primitive bcc cell: rhombohedral metric (109.47°) fails the cubic check.
+        val primitive = CrystalStructure(
+            blockName = "fe-p",
+            lattice = Lattice(2.486, 2.486, 2.486, 109.471, 109.471, 109.471),
+            spaceGroup = SpaceGroupCatalog.resolve("Im-3m", 229),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(Site("Fe1", "Fe1", Species("Fe"), FractionalCoordinate.ZERO)),
+        )
+        assertFalse(CrystalEditor.isConventionalCell(primitive))
+        // R-centered hexagonal cell (γ=120°) with identity ops IS conventional.
+        val hexR = CrystalStructure(
+            blockName = "r3-hex",
+            lattice = Lattice(5.0, 5.0, 7.0, 90.0, 90.0, 120.0),
+            spaceGroup = SpaceGroupCatalog.resolve("R3", 146),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(Site("O", "O1", Species("O"), FractionalCoordinate(0.2, 0.3, 0.4))),
+        )
+        assertTrue(CrystalEditor.isConventionalCell(hexR))
+    }
+
+    @Test fun noisyPrimitiveAtomsMergeInAsu() {
+        // MP-style noisy coordinates: symmetry-mate atoms differing by ~2e-6 must still
+        // merge into one ASU site during primitive→conventional conversion (Cr2O3 scenario).
+        val conventional = centeredStructure(
+            "r3", "R3", 146, Lattice(5.0, 5.0, 7.0, 90.0, 90.0, 120.0),
+            listOf(Site("O", "O1", Species("O"), FractionalCoordinate(0.2, 0.3, 0.4))),
+        )
+        val primitive = CrystalEditor.convertToPrimitive(conventional, BondConfiguration()).structure
+        val baseSite = primitive.sites.single()
+        val base = baseSite.fractionalCoordinate
+        // The 3-fold axis is [111] in the rhombohedral primitive basis → cyclic permutation.
+        val noisyMate1 = FractionalCoordinate(base.z + 2e-6, base.x - 2e-6, base.y + 1e-6).wrapped()
+        val noisyMate2 = FractionalCoordinate(base.y - 1e-6, base.z + 2e-6, base.x - 2e-6).wrapped()
+        val noisyPrimitive = primitive.copy(
+            sites = listOf(
+                baseSite,
+                Site("O:m2", "O2", Species("O"), noisyMate1),
+                Site("O:m3", "O3", Species("O"), noisyMate2),
+            ),
+        )
+        val restored = CrystalEditor.convertToConventional(noisyPrimitive, BondConfiguration()).structure
+        assertEquals(1, restored.sites.size, "noisy symmetry mates should merge into one ASU site")
+        assertEquals(5.0, restored.lattice.a, 1e-6, "a")
+        assertEquals(7.0, restored.lattice.c, 1e-6, "c")
+        assertSameExpandedAtoms(conventional, restored)
+    }
+
+    @Test fun noisySpecialPositionCollapsesMultiplicity() {
+        // Cr2O3 scenario from MP downloads: sites on special positions (Cr 12c, O 18e)
+        // carrying DFT-relaxation noise must still expand to the correct multiplicity
+        // (12 + 18 = 30), not to general-position near-duplicate clusters (36 + 36 = 72).
+        val conventional = centeredStructure(
+            "cr2o3", "R-3c", 167, Lattice(4.96, 4.96, 13.59, 90.0, 90.0, 120.0),
+            listOf(
+                Site("Cr", "Cr1", Species("Cr"), FractionalCoordinate(0.0, 0.0, 0.1477)),
+                Site("O", "O1", Species("O"), FractionalCoordinate(0.3054, 0.0, 0.25)),
+            ),
+        )
+        assertEquals(30, SymmetryExpander.expand(conventional).size, "sanity: ideal cell")
+        val primitive = CrystalEditor.convertToPrimitive(conventional, BondConfiguration()).structure
+        // Perturb each primitive site asymmetrically (simulating DFT relaxation noise).
+        val noisy = primitive.copy(
+            sites = primitive.sites.mapIndexed { i, site ->
+                site.copy(
+                    fractionalCoordinate = FractionalCoordinate(
+                        site.fractionalCoordinate.x + 3e-6 * (i + 1),
+                        site.fractionalCoordinate.y - 2e-6 * (i + 1),
+                        site.fractionalCoordinate.z + 4e-6 * (i + 1),
+                    ).wrapped(),
+                )
+            },
+        )
+        val restored = CrystalEditor.convertToConventional(noisy, BondConfiguration()).structure
+        assertEquals(2, restored.sites.size, "ASU site count")
+        assertEquals(30, SymmetryExpander.expand(restored).size, "expanded atom count")
+        assertSameExpandedAtoms(conventional, restored)
+    }
 }

@@ -36,6 +36,8 @@ object AppearanceStore {
         put("polyhedronReflectionEnabled", polyhedronReflectionEnabled)
         put("showAxes", showAxes)
         put("axisMode", axisMode.name)
+        put("axisOffsetX", axisOffsetX)
+        put("axisOffsetY", axisOffsetY)
         put("depthOfFieldEnabled", depthOfFieldEnabled)
         put("dofNear", dofNear)
         put("dofFar", dofFar)
@@ -65,6 +67,8 @@ object AppearanceStore {
             polyhedronReflectionEnabled = o.optBoolean("polyhedronReflectionEnabled", d.polyhedronReflectionEnabled),
             showAxes = o.optBoolean("showAxes", d.showAxes),
             axisMode = runCatching { AxisMode.valueOf(o.optString("axisMode", d.axisMode.name)) }.getOrDefault(d.axisMode),
+            axisOffsetX = o.optDouble("axisOffsetX", d.axisOffsetX.toDouble()).toFloat(),
+            axisOffsetY = o.optDouble("axisOffsetY", d.axisOffsetY.toDouble()).toFloat(),
             depthOfFieldEnabled = o.optBoolean("depthOfFieldEnabled", d.depthOfFieldEnabled),
             // Per v0.5.4: 景深标度改为「近=正/远=负」(near>=far)。旧存档按「近=负」(near<far)存,
             // 读入时翻符号迁移到新约定;新存档(near>=far)原样保留。

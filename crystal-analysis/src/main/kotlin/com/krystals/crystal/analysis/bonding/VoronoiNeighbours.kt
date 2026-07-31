@@ -77,8 +77,10 @@ internal object VoronoiNeighbours {
             val shellX = ceil(Vec3(inverse.a.x, inverse.b.x, inverse.c.x).length() * relevantDistance + 1.0).toInt()
             val shellY = ceil(Vec3(inverse.a.y, inverse.b.y, inverse.c.y).length() * relevantDistance + 1.0).toInt()
             val shellZ = ceil(Vec3(inverse.a.z, inverse.b.z, inverse.c.z).length() * relevantDistance + 1.0).toInt()
-            val completeCandidates = candidates(center, atoms, structure, shellX, shellY, shellZ)
-                .filter { it.distance <= relevantDistance }
+            // Per v0.7.1: pass maxDistance into candidates() so far-away images are skipped during
+            // generation, avoiding unnecessary object creation and reducing the sort cost from
+            // O(M log M) to O(m log m) where m << M is the post-filter count.
+            val completeCandidates = candidates(center, atoms, structure, shellX, shellY, shellZ, relevantDistance)
             val faces = buildCell(completeCandidates)
 
             for (face in faces) {
@@ -101,22 +103,29 @@ internal object VoronoiNeighbours {
         shellX: Int,
         shellY: Int,
         shellZ: Int,
+        maxDistance: Double = Double.MAX_VALUE,
     ): List<Candidate> {
         require(shellX >= 0 && shellY >= 0 && shellZ >= 0)
         ensureCandidateBudget(atoms.size, shellX, shellY, shellZ)
         val lattice = structure.lattice.matrix
         val centerPosition = center.cartesianCoordinate.toVec3()
+        val maxDistSq = maxDistance * maxDistance
         return buildList {
             for (other in atoms) {
                 val otherPosition = other.cartesianCoordinate.toVec3()
                 for (dx in -shellX..shellX) for (dy in -shellY..shellY) for (dz in -shellZ..shellZ) {
                     if (center.id == other.id && dx == 0 && dy == 0 && dz == 0) continue
-                    val offset = Int3(dx, dy, dz)
                     val translation = lattice.a * dx.toDouble() +
                         lattice.b * dy.toDouble() + lattice.c * dz.toDouble()
                     val displacement = otherPosition + translation - centerPosition
-                    val distance = displacement.length()
-                    if (distance > EPS) add(Candidate(other.id, offset, displacement, distance))
+                    val distSq = displacement.lengthSquared()
+                    // Per v0.7.1: skip far-away images during generation (distance² comparison
+                    // avoids sqrt for rejected candidates) and avoid creating Candidate objects
+                    // that would only be filtered out later.
+                    if (distSq > EPS * EPS && distSq <= maxDistSq) {
+                        val offset = Int3(dx, dy, dz)
+                        add(Candidate(other.id, offset, displacement, kotlin.math.sqrt(distSq)))
+                    }
                 }
             }
         }.sortedBy { it.distance }
@@ -141,7 +150,16 @@ internal object VoronoiNeighbours {
         if (candidates.isEmpty()) return emptyList()
         val halfExtent = candidates.maxOf { it.distance } + 1.0
         var faces = boundingCube(halfExtent)
+        // Per v0.7.1: track the maximum vertex distance of the current cell. A candidate whose
+        // distance exceeds 2× this value cannot intersect the cell (its bisector plane is beyond
+        // the cell), so we can skip the expensive clipping computation.
         for (candidate in candidates) {
+            var maxVertexDist = 0.0
+            for (face in faces) for (v in face.vertices) {
+                val len = v.length()
+                if (len > maxVertexDist) maxVertexDist = len
+            }
+            if (candidate.distance > 2.0 * maxVertexDist + EPS) continue
             faces = clip(faces, candidate)
             if (faces.isEmpty()) break
         }

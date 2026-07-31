@@ -17,6 +17,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedVisibility
@@ -144,6 +145,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -179,6 +181,7 @@ import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.*
 import com.krystals.crystal.analysis.structure.StructureAnalyzer
 import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.data.PeriodicTableData
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.ParsedStructure
 import com.krystals.interaction.measure.MeasurementMode
@@ -813,22 +816,25 @@ fun KrystalsRoot(
         }
 
         // Dialogs live inside KrystalsTheme so they pick up the correct color scheme (dark/light).
-        if (computing) {
-            androidx.compose.material3.BasicAlertDialog(onDismissRequest = {
-                computationJob?.cancel()
-                computing = false
-                computationJob = null
-                // Per v0.7.1: undo the modification that triggered the computation.
-                viewModel.current?.undo()
-            }) {
-                androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
-                    Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        androidx.compose.material3.CircularProgressIndicator()
-                        Text(localized("计算中...", "Computing..."))
-                    }
-                }
-            }
-        }
+if (computing) {
+androidx.compose.material3.BasicAlertDialog(
+onDismissRequest = {
+computationJob?.cancel()
+computing = false
+computationJob = null
+// Per v0.7.1: undo the modification that triggered the computation.
+viewModel.current?.undo()
+},
+properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
+) {
+androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
+Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+androidx.compose.material3.CircularProgressIndicator()
+Text(localized("计算中...", "Computing..."))
+}
+}
+}
+}
         if (voronoiWarningOpen) {
             AlertDialog(
                 onDismissRequest = { voronoiWarningOpen = false },
@@ -1245,19 +1251,26 @@ private fun ViewerScreen(
             displayOpen -> displayOpen = false
             measureOpen -> measureOpen = false
             alignOpen -> alignOpen = false
-            menuOpen -> menuOpen = false
-            toolOpen -> toolOpen = false
-            tab.commentsOpen -> tab.commentsOpen = false
-            tab.editorOpen -> tab.editorOpen = false
-            // Per v0.7.1: cancel bond-draw / atom-edit persistent message on back press.
-            tab.bondDrawMode != BondDrawMode.NONE || persistentMessage != null -> {
+            // Per v0.7.1: exit bond-draw / atom-edit mode and return to the editor panel.
+            // Priority is higher than floating-ball secondary menu retraction.
+            tab.bondDrawMode != BondDrawMode.NONE || tab.atomEditMode != AtomEditMode.NONE || persistentMessage != null -> {
+                tab.pendingEditorTab = when {
+                    tab.bondDrawMode != BondDrawMode.NONE -> "bonds"
+                    tab.atomEditMode != AtomEditMode.NONE -> "atoms"
+                    else -> null
+                }
                 tab.bondDrawMode = BondDrawMode.NONE
                 tab.bondDrawFirstSiteId = null
                 tab.bondDrawFirstCartesian = null
                 tab.selectedAtomIds = emptyList()
                 tab.atomEditMode = AtomEditMode.NONE
                 persistentMessage = null
+                if (tab.pendingEditorTab != null) tab.editorOpen = true
             }
+            menuOpen -> menuOpen = false
+            toolOpen -> toolOpen = false
+            tab.commentsOpen -> tab.commentsOpen = false
+            tab.editorOpen -> tab.editorOpen = false
             else -> onBackCloseCurrent()
         }
     }
@@ -2094,31 +2107,57 @@ private fun ThemeMenuItem(mode: ThemeMode, onTheme: (ThemeMode) -> Unit) {
     )
 }
 
+/** Per v0.6.5: classify an element as metal (true) or non-metal (false). */
+private fun isMetal(symbol: String): Boolean = symbol !in setOf(
+    "H", "He", "B", "C", "N", "O", "F", "Ne",
+    "Si", "P", "S", "Cl", "Ar",
+    "Ge", "As", "Se", "Br", "Kr",
+    "Sb", "Te", "I", "Xe",
+    "At", "Rn", "Po",
+)
+
 private data class LegendEntry(val label: String, val argb: Long)
 
 @Composable
 private fun ElementLegend(entries: List<LegendEntry>, expanded: Boolean, onToggle: () -> Unit, onExpand: () -> Unit, modifier: Modifier = Modifier) {
     val defaultHeight = 220.dp
+    val collapseThreshold = 40.dp
+    // Per v0.7.1: remembered height for next click-expand. Updated during drag when above threshold.
     var legendHeight by remember { mutableStateOf(defaultHeight) }
-    // Per v0.7.1: track whether the legend was hidden by dragging — if so, next expand uses default height.
-    var hiddenByDrag by remember { mutableStateOf(false) }
+    // Per v0.7.1: local expanded state for immediate updates during drag (avoids recomposition lag).
+    var localExpanded by remember { mutableStateOf(expanded) }
+    // Per v0.7.1: drag state — when true, height follows finger via dragHeight (raw, instant).
+    var isDragging by remember { mutableStateOf(false) }
+    var dragHeight by remember { mutableStateOf(0.dp) }
     val density = LocalDensity.current
     // Per v0.7.1: track latest values for gesture callback without restarting pointerInput.
-    val expandedLatest by rememberUpdatedState(expanded)
-    val onExpandLatest by rememberUpdatedState(onExpand)
     val onToggleLatest by rememberUpdatedState(onToggle)
-    // Per v0.7.1: when expanding via click after being hidden by drag, restore to default height.
-    LaunchedEffect(expanded) {
-        if (expanded && hiddenByDrag) {
-            legendHeight = defaultHeight
-            hiddenByDrag = false
-        }
-    }
+    val onExpandLatest by rememberUpdatedState(onExpand)
+    // Sync localExpanded with external expanded parameter (for click toggle).
+    LaunchedEffect(expanded) { localExpanded = expanded }
     // Per v0.7.0: smooth icon rotation (0° → 180°) over 150ms.
     val legendRotation by animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
+        targetValue = if (localExpanded) 180f else 0f,
         animationSpec = tween(150, easing = FastOutSlowInEasing),
         label = "legendRotation",
+    )
+    // Per v0.7.1: animated height — during drag, target is dragHeight with snap() so
+    // animateDpAsState tracks it closely. When not dragging, target is the final state
+    // (legendHeight or 0) with tween(150) for smooth click expand/collapse.
+    val animatedHeight by animateDpAsState(
+        targetValue = if (isDragging) dragHeight else (if (localExpanded) legendHeight else 0.dp),
+        animationSpec = if (isDragging) snap() else tween(150, easing = FastOutSlowInEasing),
+        label = "legendHeight",
+    )
+    // Per v0.7.1: use raw dragHeight during drag for zero-frame-delay finger tracking.
+    // animatedHeight (≈dragHeight via snap) is used when drag ends, providing a smooth
+    // transition into the tween animation toward the final target.
+    val displayedHeight = if (isDragging) dragHeight else animatedHeight
+    // Per v0.7.1: fade alpha — snap during drag, tween otherwise.
+    val contentAlpha by animateFloatAsState(
+        targetValue = if (localExpanded) 1f else 0f,
+        animationSpec = if (isDragging) snap() else tween(150),
+        label = "legendAlpha",
     )
     Surface(modifier.alpha(0.84f), shape = RoundedCornerShape(14.dp), tonalElevation = 5.dp) {
         Column(Modifier.width(130.dp)) {
@@ -2127,23 +2166,29 @@ private fun ElementLegend(entries: List<LegendEntry>, expanded: Boolean, onToggl
                     .pointerInput(Unit) {
                         detectDragGestures(
                             onDragStart = {
-                                // Per v0.7.1: press-and-swipe-up expands from collapsed state.
-                                if (!expandedLatest) {
-                                    legendHeight = defaultHeight
-                                    hiddenByDrag = false
-                                    onExpandLatest()
-                                }
+                                isDragging = true
+                                // Initialize dragHeight to current displayed height.
+                                dragHeight = if (localExpanded) legendHeight else 0.dp
                             },
+                            onDragEnd = { isDragging = false },
+                            onDragCancel = { isDragging = false },
                         ) { change, amount ->
                             change.consume()
-                            // Per v0.7.1: no minimum height limit — allow dragging to 0 to hide.
-                            val newHeight = (legendHeight - with(density) { amount.y.toDp() }).coerceIn(0.dp, 600.dp)
-                            legendHeight = newHeight
-                            // Per v0.7.1: increased threshold from 10.dp to 40.dp for collapsing.
-                            // When dragged below threshold, collapse the legend and mark as hiddenByDrag.
-                            if (newHeight <= 40.dp && expandedLatest) {
-                                hiddenByDrag = true
-                                onToggleLatest()
+                            val newHeight = (dragHeight - with(density) { amount.y.toDp() }).coerceIn(0.dp, 600.dp)
+                            dragHeight = newHeight
+                            if (newHeight > collapseThreshold) {
+                                // Above threshold: expanded state, record legendHeight.
+                                if (!localExpanded) {
+                                    localExpanded = true
+                                    onExpandLatest()
+                                }
+                                legendHeight = newHeight
+                            } else {
+                                // Below threshold: collapsed state, don't record legendHeight.
+                                if (localExpanded) {
+                                    localExpanded = false
+                                    onToggleLatest()
+                                }
                             }
                         }
                     }
@@ -2155,13 +2200,16 @@ private fun ElementLegend(entries: List<LegendEntry>, expanded: Boolean, onToggl
                 Text(localized("图例", "Legend"), modifier = Modifier.weight(1f).padding(start = 6.dp), style = MaterialTheme.typography.labelLarge)
                 Icon(Icons.Default.ExpandMore, null, modifier = Modifier.size(18.dp).graphicsLayer { rotationZ = legendRotation })
             }
-            // Per v0.7.0: smooth expand/collapse animation (150ms).
-            AnimatedVisibility(
-                visible = expanded,
-                enter = expandVertically(animationSpec = tween(150, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-                exit = shrinkVertically(animationSpec = tween(150, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
-            ) {
-                Column(Modifier.fillMaxWidth().height(legendHeight).verticalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp)) {
+            if (displayedHeight > 0.dp) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(displayedHeight)
+                        .clipToBounds()
+                        .graphicsLayer { alpha = contentAlpha }
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                ) {
                     entries.forEach { entry ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(18.dp).background(Color(entry.argb), CircleShape))
@@ -2508,8 +2556,27 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                         visibleRules.groupBy { rule ->
                                             val ea = elementOf[rule.siteA] ?: "?"
                                             val eb = elementOf[rule.siteB] ?: "?"
-                                            if (ea <= eb) "$ea—$eb" else "$eb—$ea"
-                                        }.toSortedMap()
+                                            // Per v0.7.1: metal first in pair label; if same type, larger atomic number first.
+                                            val eaMetal = isMetal(ea)
+                                            val ebMetal = isMetal(eb)
+                                            val (first, second) = when {
+                                                eaMetal && !ebMetal -> ea to eb
+                                                !eaMetal && ebMetal -> eb to ea
+                                                else -> {
+                                                    val eaNum = PeriodicTableData.symbols.indexOf(ea)
+                                                    val ebNum = PeriodicTableData.symbols.indexOf(eb)
+                                                    if (eaNum >= ebNum) ea to eb else eb to ea
+                                                }
+                                            }
+                                            "$first—$second"
+                                        }.toSortedMap(
+                                            compareBy(
+                                                { if (isMetal(it.split("—").getOrNull(0) ?: "?")) 0 else 1 },
+                                                { if (isMetal(it.split("—").getOrNull(1) ?: "?")) 0 else 1 },
+                                                { -PeriodicTableData.symbols.indexOf(it.split("—").getOrNull(0) ?: "?") },
+                                                { -PeriodicTableData.symbols.indexOf(it.split("—").getOrNull(1) ?: "?") },
+                                            )
+                                        )
                                     }
                                     groupedRules.forEach { (pairLabel, groupRules) ->
                                         val expanded = collapsedGroups["B:$pairLabel"] != true
@@ -2519,7 +2586,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                         val gElem1 = groupElements.getOrNull(0) ?: "?"
                                         val gElem2 = groupElements.getOrNull(1) ?: "?"
                                         val groupSameElement = gElem1 == gElem2
-                                        // elem1→elem2 flag for each rule (elem1 is the smaller element).
+                                        // elem1→elem2 flag for each rule (elem1 is the metal or larger-atomic-number element).
                                         fun ruleExtend1(r: com.krystals.crystal.analysis.bonding.BondRule): Boolean {
                                             val aElem = elementOf[r.siteA] ?: "?"
                                             return if (aElem == gElem1) r.extendAtoB else r.extendBtoA

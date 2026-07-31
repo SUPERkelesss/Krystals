@@ -425,9 +425,9 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         val newSites = expanded.mapNotNull { atom ->
             val fc = atom.fractionalCoordinate
             val key = atom.species.symbol to Triple(
-                Math.round(fc.x * 1e8) / 1e8,
-                Math.round(fc.y * 1e8) / 1e8,
-                Math.round(fc.z * 1e8) / 1e8,
+                Math.round(fc.x * 1e4) / 1e4,
+                Math.round(fc.y * 1e4) / 1e4,
+                Math.round(fc.z * 1e4) / 1e4,
             )
             if (key in seen) return@mapNotNull null
             seen.add(key)
@@ -484,9 +484,9 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         val labelCounts = HashMap<String, Int>()
         val newSites = transformed.zip(expanded).mapNotNull { (fc, atom) ->
             val key = atom.species.symbol to Triple(
-                Math.round(fc.x * 1e8) / 1e8,
-                Math.round(fc.y * 1e8) / 1e8,
-                Math.round(fc.z * 1e8) / 1e8,
+                Math.round(fc.x * 1e4) / 1e4,
+                Math.round(fc.y * 1e4) / 1e4,
+                Math.round(fc.z * 1e4) / 1e4,
             )
             if (key in seen) return@mapNotNull null
             seen.add(key)
@@ -512,7 +512,9 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
             SymmetryOperation(newRot, newTrans, op.source)
         }.distinctBy { rotationKey(it.rotation) + ":" + translationKey(it.translation) }
         // 6. Find the ASU using the transformed operations.
-        val asu = findAsymmetricUnit(newSites, transformedOps)
+        val asu = findAsymmetricUnit(newSites, transformedOps).map { site ->
+            site.copy(fractionalCoordinate = symmetrizePosition(site.fractionalCoordinate, transformedOps))
+        }
         val newStructure = structure.copy(
             lattice = Lattice.fromMatrix(newCellMatrix),
             symmetryOperations = transformedOps,
@@ -562,9 +564,9 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
                     site.fractionalCoordinate.toVec3() + t,
                 ).wrapped()
                 val key = site.species.symbol to Triple(
-                    Math.round(fc.x * 1e8) / 1e8,
-                    Math.round(fc.y * 1e8) / 1e8,
-                    Math.round(fc.z * 1e8) / 1e8,
+                    Math.round(fc.x * 1e4) / 1e4,
+                    Math.round(fc.y * 1e4) / 1e4,
+                    Math.round(fc.z * 1e4) / 1e4,
                 )
                 if (key in seen) continue
                 seen.add(key)
@@ -573,7 +575,9 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         }
         // 3. Find the asymmetric unit using the full symmetry operations.
         val fullOps = SpaceGroupCatalog.operations(structure.spaceGroup.symbol)
-        val asu = findAsymmetricUnit(allAtoms, fullOps)
+        val asu = findAsymmetricUnit(allAtoms, fullOps).map { site ->
+            site.copy(fractionalCoordinate = symmetrizePosition(site.fractionalCoordinate, fullOps))
+        }
         // 4. Transform lattice.
         val newCellMatrix = structure.lattice.matrix * transform
         // 5. Adjust lattice parameters to ideal values for the crystal system.
@@ -709,6 +713,9 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
     /**
      * Find the asymmetric unit from a list of atoms by removing those that can be generated
      * from another atom via a symmetry operation.
+     * Per v0.7.1: uses 1e-4 tolerance (≈0.001 Å) so symmetry-mate atoms with DFT-relaxation
+     * noise (e.g. Materials Project coordinates, ~1e-6 fractional) still merge into one site.
+     * Only same-species atoms are merged.
      */
     private fun findAsymmetricUnit(atoms: List<Site>, operations: List<SymmetryOperation>): List<Site> {
         val asu = mutableListOf<Site>()
@@ -719,7 +726,10 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
             for (op in operations) {
                 val generated = op.apply(atoms[i].fractionalCoordinate)
                 for (j in atoms.indices) {
-                    if (!used[j] && j != i && generated.almostEquals(atoms[j].fractionalCoordinate)) {
+                    if (!used[j] && j != i &&
+                        atoms[j].species.symbol == atoms[i].species.symbol &&
+                        generated.almostEquals(atoms[j].fractionalCoordinate, 1e-4)
+                    ) {
                         used[j] = true
                     }
                 }
@@ -728,6 +738,33 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         }
         return asu
     }
+
+    /**
+     * Per v0.7.1: Snap a position exactly onto its symmetry elements by averaging it with
+     * its near-coincident images (the site's stabilizer under [operations]). The average is
+     * exactly invariant under the stabilizer, so a noisy near-special-position site (e.g.
+     * Materials Project coordinates) expands to the correct special-position multiplicity
+     * instead of producing near-duplicate atoms. General positions (trivial stabilizer)
+     * are returned unchanged.
+     */
+    private fun symmetrizePosition(
+        position: FractionalCoordinate,
+        operations: List<SymmetryOperation>,
+    ): FractionalCoordinate {
+        val base = position.toVec3()
+        val images = operations.map { it.apply(position) }
+            .filter { it.almostEquals(position, 1e-4) }
+        if (images.size <= 1) return position
+        val sum = images.fold(Vec3.ZERO) { acc, img -> acc + unwrapNear(img.toVec3(), base) }
+        return FractionalCoordinate.fromVec3(sum / images.size.toDouble()).wrapped()
+    }
+
+    /** Shift v by an integer lattice translation so it lies as close as possible to ref. */
+    private fun unwrapNear(v: Vec3, ref: Vec3): Vec3 = Vec3(
+        v.x + kotlin.math.round(ref.x - v.x),
+        v.y + kotlin.math.round(ref.y - v.y),
+        v.z + kotlin.math.round(ref.z - v.z),
+    )
 
     // ── Per v0.6.5: Conventional cell detection and lattice adjustment ────────
 
@@ -809,7 +846,12 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
      * Per v0.6.5: Determine if a CIF-parsed structure is a conventional cell.
      * Checks if the symmetry operations include centering translations (e.g. 1/2,1/2,1/2 for I).
      * If centering translations are present, the cell is conventional.
-     * If only point-group operations (no centering translations), it's likely primitive.
+     *
+     * Per v0.7.1: metric fallback — if the lattice already satisfies the crystal system's
+     * conventional constraints (e.g. cubic 90°, hexagonal 120°), the cell is conventional
+     * even without centering operations. This prevents double-converting conventional cells
+     * from Materials Project downloads (identity ops + all atoms listed). Primitive cells
+     * (e.g. 109.47° for I, 60° for F, ~55° for R) fail the metric check and are converted.
      */
     fun isConventionalCell(structure: CrystalStructure): Boolean {
         val centering = BravaisLatticeData.centeringFromSymbol(structure.spaceGroup.symbol)
@@ -818,21 +860,32 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         // Check if the symmetry operations include centering translations.
         // A centering translation is an operation with identity rotation and a non-zero translation.
         val centeringTrans = centeringTranslations(centering).filter { it != Vec3.ZERO }
-        val ops = structure.effectiveSymmetryOperations
+        val ops = structure.symmetryOperations
 
-        // If the CIF provides no explicit operations, we can't tell — assume conventional.
-        if (structure.symmetryOperations.isEmpty()) return true
-
-        // Check if any centering translation appears among the operations.
-        for (t in centeringTrans) {
-            val found = ops.any { op ->
-                op.rotation == Mat3.IDENTITY &&
-                kotlin.math.abs(op.translation.x - t.x) < 1e-4 &&
-                kotlin.math.abs(op.translation.y - t.y) < 1e-4 &&
-                kotlin.math.abs(op.translation.z - t.z) < 1e-4
+        if (ops.isNotEmpty() && centeringTrans.all { t ->
+                ops.any { op ->
+                    op.rotation == Mat3.IDENTITY &&
+                        kotlin.math.abs(op.translation.x - t.x) < 1e-4 &&
+                        kotlin.math.abs(op.translation.y - t.y) < 1e-4 &&
+                        kotlin.math.abs(op.translation.z - t.z) < 1e-4
+                }
             }
-            if (!found) return false
-        }
-        return true
+        ) return true
+
+        // Per v0.7.1: metric fallback (see doc comment).
+        return latticeMatchesCrystalSystem(structure.lattice, structure.spaceGroup.number)
+    }
+
+    /**
+     * Per v0.7.1: Returns true if the lattice already satisfies the conventional metric
+     * constraints of its crystal system, by comparing against constrainLattice output.
+     * Lengths use 1e-3 relative tolerance, angles 1e-2 degrees absolute tolerance.
+     */
+    private fun latticeMatchesCrystalSystem(lattice: Lattice, groupNumber: Int?): Boolean {
+        val c = constrainLattice(lattice, groupNumber)
+        fun lengthEq(a: Double, b: Double) = abs(a - b) <= 1e-3 * maxOf(a, b)
+        fun angleEq(a: Double, b: Double) = abs(a - b) <= 1e-2
+        return lengthEq(c.a, lattice.a) && lengthEq(c.b, lattice.b) && lengthEq(c.c, lattice.c) &&
+            angleEq(c.alpha, lattice.alpha) && angleEq(c.beta, lattice.beta) && angleEq(c.gamma, lattice.gamma)
     }
 }

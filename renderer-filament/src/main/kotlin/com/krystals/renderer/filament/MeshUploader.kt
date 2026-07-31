@@ -130,10 +130,18 @@ class MeshUploader(private val engine: Engine) : AutoCloseable {
         engine.destroyVertexBuffer(mesh.vertexBuffer)
     }
 
+    /**
+     * Per v0.7.1: merge polyhedron faces grouped by (sourceAtomId, material) instead of by
+     * material alone. This makes each polyhedron a separate renderable entity, allowing
+     * Filament's transparent pass to sort polyhedra by distance. Previously, all faces from
+     * all polyhedra sharing the same material were merged into one mesh, causing unstable
+     * front-back ordering when faces from different polyhedra overlapped in the view.
+     */
     fun mergePolyhedra(meshes: List<MeshInstance>): List<MergedMesh> = meshes
         .filter { it.visible }
-        .groupBy { it.material }
-        .map { (material, group) ->
+        .groupBy { it.sourceAtomId to it.material }
+        .map { (_, group) ->
+            val material = group.first().material
             val positions = ArrayList<Float>()
             val normals = ArrayList<Float>()
             val indices = ArrayList<Int>()
