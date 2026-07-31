@@ -3209,13 +3209,21 @@ private fun SearchFilterBar(
     } else {
         options.pointGroups
     }
-    val availableSpaceGroups = if (filterState.pointGroup != null) {
-        // Per v0.6.5: use normalized comparison to handle format differences
-        // (e.g. catalog "P 1" vs search result "P1")
-        val catalogSymbols = spaceGroupsForPointGroup(filterState.pointGroup).map(::normalizeSgSymbol).toSet()
-        options.spaceGroups.filter { normalizeSgSymbol(it) in catalogSymbols }
-    } else {
-        options.spaceGroups
+    val availableSpaceGroups = when {
+        filterState.pointGroup != null -> {
+            // Per v0.6.5: use normalized comparison to handle format differences
+            // (e.g. catalog "P 1" vs search result "P1")
+            val catalogSymbols = spaceGroupsForPointGroup(filterState.pointGroup).map(::normalizeSgSymbol).toSet()
+            options.spaceGroups.filter { normalizeSgSymbol(it) in catalogSymbols }
+        }
+        filterState.crystalSystem != null -> {
+            // Per v0.7.1: filter space groups by crystal system when point group is not selected.
+            val catalogSymbols = SpaceGroupCatalog.all
+                .filter { it.crystalSystem == filterState.crystalSystem }
+                .map { it.symbol }.map(::normalizeSgSymbol).toSet()
+            options.spaceGroups.filter { normalizeSgSymbol(it) in catalogSymbols }
+        }
+        else -> options.spaceGroups
     }
 
     Surface(
@@ -3388,11 +3396,11 @@ private fun MpSearchScreen(
                 Checkbox(fuzzySearch, onCheckedChange = { fuzzySearch = it })
                 Text(localized("模糊搜索", "Fuzzy search"), style = MaterialTheme.typography.bodyMedium)
             }
-            Text(
-                localized(
-                    "精确搜索匹配约化化学式（如 SiO2）。模糊搜索用 * 通配，如 *O2、Si*、*SiO*。",
-                    "Exact matches the reduced formula (e.g. SiO2). Fuzzy uses * wildcards, e.g. *O2, Si*, *SiO*.",
-                ),
+Text(
+localized(
+"使用 * 进行元素通配搜索（如SiO*）。精确搜索中，* 仅代表一种元素；模糊搜索显示 * 代表多种元素的结果。",
+"Use * for element wildcard search (e.g. SiO*). In exact search, * represents a single element; fuzzy search shows results where * matches multiple elements.",
+),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
@@ -3436,7 +3444,7 @@ private fun MpSearchScreen(
                             Column(Modifier.padding(12.dp)) {
                                 Text(item.materialId, fontWeight = FontWeight.Bold)
                                 Text("${item.formula}  ${item.crystalSystem}  ${item.spaceGroup}  ${item.nsites} sites")
-                                item.energyAboveHull?.let { Text(localized("E_hull: %.3f eV/atom".format(it), "E_hull: %.3f eV/atom".format(it)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                                item.energyAboveHull?.let { Text(localized("E_hull: %.3f eV/atom (%s)".format(it, if (it <= 0.0) "stable" else "unstable"), "E_hull: %.3f eV/atom (%s)".format(it, if (it <= 0.0) "stable" else "unstable")), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                                 if (downloadingId == item.materialId) {
                                     Text(localized("下载中…", "Downloading…"), style = MaterialTheme.typography.bodySmall)
                                 }
