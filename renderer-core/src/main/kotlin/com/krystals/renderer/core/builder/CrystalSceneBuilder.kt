@@ -87,7 +87,9 @@ class CrystalSceneBuilder {
 
         val objects = mutableListOf<RenderObject>()
 
-        // Atom pass: emit plain AtomInstance for ungrouped visible atoms; skip grouped members.
+        // Per v0.8.2: emit all atoms as AtomInstances (backward-compat for BondNetwork adapter,
+        // picking, info windows), then additionally emit GatheredAtomInstances for groups.
+        // Backends that understand GatheredAtomInstance skip drawing individual member atoms.
         val groupCenterById = linkedMapOf<String, Vec3>()
         for (g in groups) {
             val maxRadius = g.memberAtomIds.mapNotNull { id -> atomById[id]?.let { options.atomRadiusByElement[it.species.symbol] ?: options.defaultAtomRadius } }.maxOrNull() ?: options.defaultAtomRadius
@@ -103,9 +105,7 @@ class CrystalSceneBuilder {
                 visible = anyVisible,
             )
         }
-        val groupAtomIds = groupByMemberId.keys
         for (atom in analysis.atoms) {
-            if (atom.id in groupAtomIds) continue  // handled by GatheredAtomInstance
             objects += AtomInstance(
                 id = "atom:${atom.id}",
                 atom = atom,
