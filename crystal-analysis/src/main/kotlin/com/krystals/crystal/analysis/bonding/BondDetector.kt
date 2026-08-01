@@ -273,13 +273,11 @@ object BondDetector {
                         if (d > autoMaxD) {
                             val key = if (c.siteId < q.siteId) "${c.siteId}\u0000${q.siteId}" else "${q.siteId}\u0000${c.siteId}"
                             if (key in disabledPairs) continue
-// Per v0.8.2: prefer the hbond rule when both it and the normal rule exist
-                            // for the same pair — the hbond rule's minAngstrom is the covalent-
-                            // radii boundary, so covalent distances still match the normal rule
-                            // while H-bond distances match the hbond rule.
+                            // Per v0.8.3: only an explicit pair rule can bond beyond the covalent
+                            // window; the rule is authoritative (window checked on the normal path).
                             val hbondCand = hbondByPair[key]
                             val normalCand = custom[key]
-                            val customRule = if (hbondCand != null && d >= hbondCand.minAngstrom && d <= hbondCand.maxAngstrom) hbondCand else if (normalCand != null && d >= normalCand.minAngstrom && d <= normalCand.maxAngstrom) normalCand else null
+                            val customRule = hbondCand ?: normalCand
                             if (customRule == null) continue
                             // A custom rule extends the window and covers d; fall through to the
                             // normal path below, which re-resolves the same customRule and bonds it.
@@ -289,23 +287,34 @@ object BondDetector {
                         // legacy path built the same key inline — a plain-space join would miss rules).
                         val key = if (c.siteId < q.siteId) "${c.siteId}\u0000${q.siteId}" else "${q.siteId}\u0000${c.siteId}"
                         if (key in disabledPairs) continue
-// Per v0.8.2: prefer the hbond rule when both it and the normal rule exist
-                            // for the same pair — the hbond rule's minAngstrom is the covalent-
-                            // radii boundary, so covalent distances still match the normal rule
-                            // while H-bond distances match the hbond rule.
-                            val hbondCand = hbondByPair[key]
-                            val normalCand = custom[key]
-                            val customRule = if (hbondCand != null && d >= hbondCand.minAngstrom && d <= hbondCand.maxAngstrom) hbondCand else if (normalCand != null && d >= normalCand.minAngstrom && d <= normalCand.maxAngstrom) normalCand else null
+                        val hbondCand = hbondByPair[key]
+                        val normalCand = custom[key]
+                        // Per v0.8.3: a pair rule is authoritative — when a custom/hbond rule
+                        // exists for the pair it alone decides bonding; a distance outside its
+                        // window is NOT bonded (previously the covalent auto fallback resurrected
+                        // it, producing spurious same-polarity bonds like Al–Al in corundum).
+                        // The hbond rule wins when its window covers the distance; otherwise the
+                        // normal rule, if any, decides.
+                        val customRule = when {
+                            hbondCand != null && d >= hbondCand.minAngstrom && d <= hbondCand.maxAngstrom -> hbondCand
+                            normalCand != null && d >= normalCand.minAngstrom && d <= normalCand.maxAngstrom -> normalCand
+                            hbondCand != null -> hbondCand
+                            normalCand != null -> normalCand
+                            else -> null
+                        }
                         val isPeriodicSameSite = c.siteId == q.siteId &&
                             PeriodicBoundary.isIntegerTranslation(c.fractionalCoordinate - (q.fractionalCoordinate + offB))
                         if (customRule == null && isPeriodicSameSite) continue
-                        val rule = customRule ?: BondRule(
+                        // Per v0.8.3: the covalent auto fallback only applies to cross-element
+                        // pairs with no rule — same-element pairs (e.g. Al–Al in corundum) never
+                        // get an implicit bond from it; the smartIonic rule set decides instead.
+                        val rule = customRule ?: if (c.species.symbol == q.species.symbol) null else BondRule(
                             c.siteId, q.siteId, 0.1,
                             PeriodicTable.covalentRadius(c.species.symbol) +
                                 PeriodicTable.covalentRadius(q.species.symbol) + 0.45,
                             BondRuleSource.AUTO,
                         )
-                        if (d < rule.minAngstrom || d > rule.maxAngstrom) continue
+                        if (rule == null || d < rule.minAngstrom || d > rule.maxAngstrom) continue
                         val bIsShell = offB != ZERO_OFFSET
                         val bAtom = if (bIsShell) getShellAtom(q, offB) else q
                         // Per v0.3.43: orient so the shell atom (when exactly one endpoint is shell) is atomB.
@@ -395,14 +404,15 @@ object BondDetector {
                     val isPeriodicSameSite = a.siteId == b.siteId &&
                         PeriodicBoundary.isIntegerTranslation(a.fractionalCoordinate - b.fractionalCoordinate)
                     if (customRule == null && isPeriodicSameSite) continue
-                    val rule = customRule ?: BondRule(
+                    // Per v0.8.3: same-element pairs never get an implicit covalent bond.
+                    val rule = customRule ?: if (a.species.symbol == b.species.symbol) null else BondRule(
                         a.siteId, b.siteId, 0.1,
                         PeriodicTable.covalentRadius(a.species.symbol) +
                             PeriodicTable.covalentRadius(b.species.symbol) + 0.45,
                         BondRuleSource.AUTO,
                     )
                     val d = distance(a.cartesianCoordinate.toVec3(), b.cartesianCoordinate.toVec3())
-                    if (d > 0.0 && d >= rule.minAngstrom && d <= rule.maxAngstrom) {
+                    if (rule != null && d > 0.0 && d >= rule.minAngstrom && d <= rule.maxAngstrom) {
                         // Per v0.3.43: orient the bond so the shell atom (when exactly one endpoint is a
                         // shell atom) is atomB. The renderer keys cross-cell visibility on atomB being an
                         // external shell; boundary-image↔primary bonds stay drawn by default.
@@ -452,7 +462,7 @@ object BondDetector {
                 val key = listOf(atom.siteId, other.siteId).sorted().joinToString("\u0000")
                 // Per v0.2.3: a pair the user explicitly deleted is not redrawn via the fallback.
                 if (key in bondConfiguration.disabledPairs) continue
-                val rule = custom[key] ?: hbondByPair[key] ?: BondRule(
+                val rule = custom[key] ?: hbondByPair[key] ?: if (atom.species.symbol == other.species.symbol) null else BondRule(
                     atom.siteId, other.siteId, 0.1,
                     PeriodicTable.covalentRadius(atom.species.symbol) +
                         PeriodicTable.covalentRadius(other.species.symbol) + 0.45,
@@ -465,7 +475,7 @@ object BondDetector {
                     val d = distance(atom.cartesianCoordinate.toVec3(), other.cartesianCoordinate.toVec3() + offsets[k])
                     if (d < bestD) { bestD = d; bestIdx = k }
                 }
-                if (bestD > 0.0 && bestD >= rule.minAngstrom && bestD <= rule.maxAngstrom) {
+                if (rule != null && bestD > 0.0 && bestD >= rule.minAngstrom && bestD <= rule.maxAngstrom) {
                     result += Bond(atom.id, other.id, bestD, rule, intOffsets[bestIdx])
                 }
             }

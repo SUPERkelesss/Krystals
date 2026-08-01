@@ -107,9 +107,15 @@ object BondValence {
 
         val rules = structure.sites.flatMapIndexed { i, siteA ->
             structure.sites.drop(i).mapNotNull { siteB ->
-                // Skip anion–anion pairs (O–O, O–F, …): no ionic bond between two anions.
-                if (analysis.siteValence[siteA.id]?.isAnion == true &&
-                    analysis.siteValence[siteB.id]?.isAnion == true) return@mapNotNull null
+                // Per v0.8.3: skip same-polarity pairs. The ionic model excludes anion–anion
+                // (O–O, O–F, …) AND cation–cation (Al–Al in corundum, metal–metal in oxides)
+                // bonds. Only pairs with an explicitly resolved role are skipped; unresolved
+                // sites (null isAnion) still generate rules so the covalent fallback path
+                // keeps working for mixed/unknown cases.
+                val aAnion = analysis.siteValence[siteA.id]?.isAnion
+                val bAnion = analysis.siteValence[siteB.id]?.isAnion
+                if (aAnion == true && bAnion == true) return@mapNotNull null
+                if (aAnion == false && bAnion == false) return@mapNotNull null
                 val rA = analysis.siteValence[siteA.id]?.radius ?: PeriodicTable.radius(siteA.species.symbol, RadiusSource.BONDING)
                 val rB = analysis.siteValence[siteB.id]?.radius ?: PeriodicTable.radius(siteB.species.symbol, RadiusSource.BONDING)
                 // Per v0.6.5: order siteA/siteB — metal first, or larger atomic number first if same type.
