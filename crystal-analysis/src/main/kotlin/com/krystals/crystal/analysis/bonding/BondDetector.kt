@@ -273,8 +273,14 @@ object BondDetector {
                         if (d > autoMaxD) {
                             val key = if (c.siteId < q.siteId) "${c.siteId}\u0000${q.siteId}" else "${q.siteId}\u0000${c.siteId}"
                             if (key in disabledPairs) continue
-                            val customRule = custom[key] ?: hbondByPair[key]
-                            if (customRule == null || d < customRule.minAngstrom || d > customRule.maxAngstrom) continue
+// Per v0.8.2: prefer the hbond rule when both it and the normal rule exist
+                            // for the same pair — the hbond rule's minAngstrom is the covalent-
+                            // radii boundary, so covalent distances still match the normal rule
+                            // while H-bond distances match the hbond rule.
+                            val hbondCand = hbondByPair[key]
+                            val normalCand = custom[key]
+                            val customRule = if (hbondCand != null && d >= hbondCand.minAngstrom && d <= hbondCand.maxAngstrom) hbondCand else if (normalCand != null && d >= normalCand.minAngstrom && d <= normalCand.maxAngstrom) normalCand else null
+                            if (customRule == null) continue
                             // A custom rule extends the window and covers d; fall through to the
                             // normal path below, which re-resolves the same customRule and bonds it.
                         }
@@ -283,7 +289,13 @@ object BondDetector {
                         // legacy path built the same key inline — a plain-space join would miss rules).
                         val key = if (c.siteId < q.siteId) "${c.siteId}\u0000${q.siteId}" else "${q.siteId}\u0000${c.siteId}"
                         if (key in disabledPairs) continue
-                        val customRule = custom[key] ?: hbondByPair[key]
+// Per v0.8.2: prefer the hbond rule when both it and the normal rule exist
+                            // for the same pair — the hbond rule's minAngstrom is the covalent-
+                            // radii boundary, so covalent distances still match the normal rule
+                            // while H-bond distances match the hbond rule.
+                            val hbondCand = hbondByPair[key]
+                            val normalCand = custom[key]
+                            val customRule = if (hbondCand != null && d >= hbondCand.minAngstrom && d <= hbondCand.maxAngstrom) hbondCand else if (normalCand != null && d >= normalCand.minAngstrom && d <= normalCand.maxAngstrom) normalCand else null
                         val isPeriodicSameSite = c.siteId == q.siteId &&
                             PeriodicBoundary.isIntegerTranslation(c.fractionalCoordinate - (q.fractionalCoordinate + offB))
                         if (customRule == null && isPeriodicSameSite) continue
