@@ -84,6 +84,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawWithContent
@@ -200,14 +201,14 @@ fun EditorPanel(
                 Modifier.fillMaxWidth().height(24.dp)
             }
             val dividerModifier = if (landscape) {
-                Modifier.fillMaxHeight().width(12.dp)
+                Modifier.fillMaxHeight().width(18.dp)
             } else {
-                Modifier.fillMaxWidth().height(12.dp)
+                Modifier.fillMaxWidth().height(18.dp)
             }
             val handle = @Composable {
-                // Per v0.8.1: 24.dp drag hit target around the original 12.dp visible divider so
-                // the resize handle is easier to grab; persist the ratio once when the drag ends
-                // (or is cancelled) instead of writing SharedPreferences on every drag frame.
+                // Per v0.8.1: 24.dp drag hit target (the visible divider stays pinned to the panel
+                // edge, pre-v0.8.1 style); persist the ratio once when the drag ends (or is
+                // cancelled) instead of writing SharedPreferences on every drag frame.
                 Box(
                     Modifier
                         .then(handleModifier)
@@ -225,9 +226,18 @@ fun EditorPanel(
                                 },
                             )
                         },
-                    contentAlignment = Alignment.Center,
                 ) {
-                    Box(Modifier.then(dividerModifier).background(MaterialTheme.colorScheme.outlineVariant))
+                    // Per v0.8.1: pin the visible divider to the panel edge (as pre-v0.8.1) so no
+                    // background strip shows above it; only the drag hit target is 24.dp.
+                    Box(
+                        Modifier.then(dividerModifier)
+                            // In Compose 1.11 the 1-D Alignment.Start is an Alignment.Horizontal that
+                            // is NOT an Alignment, so BoxScope.align() rejects it. CenterStart/TopStart
+                            // are declared Alignment; the divider fills the other axis so its
+                            // alignment on that axis is irrelevant.
+                            .align(if (landscape) Alignment.CenterStart else Alignment.TopStart)
+                            .background(MaterialTheme.colorScheme.outlineVariant)
+                    )
                 }
             }
             val content = @Composable {
@@ -822,13 +832,20 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
             items(visibleRules, key = { it.key }) { rule ->
                 val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
                 val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
-                Row(
-                    Modifier.fillMaxWidth()
-                        .clickable { editingRule = rule }
-                        .padding(vertical = 6.dp, horizontal = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("$labelA — $labelB", modifier = Modifier.weight(1f))
+                // Per v0.8.1: hbond rules get a gray dashed-style border + label chip.
+                val rowModifier = Modifier.fillMaxWidth()
+                    .clickable { editingRule = rule }
+                    .padding(vertical = 6.dp, horizontal = 4.dp)
+                    .let { if (rule.isHBond) it.border(BorderStroke(1.dp, Color.Gray), RoundedCornerShape(4.dp)) else it }
+                Row(rowModifier, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("$labelA — $labelB")
+                        if (rule.isHBond) Text(
+                            localized("氢键", "H-bond"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.Gray,
+                        )
+                    }
                     Text("%.3f–%.3f Å".format(rule.minAngstrom, rule.maxAngstrom), modifier = Modifier.padding(horizontal = 8.dp))
                     IconButton(onClick = {
                         onStructure(CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.RemoveBondRule(rule.key)))
