@@ -202,6 +202,15 @@ fun rememberViewerController() = remember { ViewerController() }
 
 private data class TapEvent(val time: Long, val position: Offset)
 
+/** Per v0.8.1: mutable draw-frame outputs that are only read by the gesture handler. Plain fields
+ *  (NOT Compose state) — writing them every frame inside the Canvas draw lambda must not schedule a
+ *  recomposition cascade. */
+private class TapHitState {
+    var lastTap: TapEvent? = null
+    var measurementBounds = emptyList<Triple<Rect, Boolean, Int>>()
+    var atomInfoBounds = emptyList<Triple<Rect, Boolean, Long>>()
+}
+
 @Composable
 @Deprecated("Use the Filament backend; retained as Canvas-Legacy fallback")
 fun CrystalViewport(
@@ -364,9 +373,14 @@ private fun LegacyCanvasViewport(
     onBlankTap: () -> Unit = {},
 ) {
     val background = colorFromArgb(backgroundColor(appearance.backgroundArgb).srgbArgb)
-    var lastTap by remember { mutableStateOf<TapEvent?>(null) }
-    var measurementBoundsList by remember { mutableStateOf<List<Triple<Rect, Boolean, Int>>>(emptyList()) }
-    var atomInfoBoundsList by remember { mutableStateOf<List<Triple<Rect, Boolean, Long>>>(emptyList()) }
+    // Per v0.8.1: draw-frame outputs live in a plain (non-Compose-state) holder so per-frame writes
+    // inside the Canvas draw lambda do not schedule recompositions.
+    val hitState = remember { TapHitState() }
+    // Per v0.8.1: reflection parameters depend only on lightIntensity/diffusion (change on slider
+    // moves, not per frame) — compute once here instead of once per atom/bond/polyhedron-face.
+    val reflection = remember(appearance.lightIntensity, appearance.diffusion) {
+        legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
+    }
     // Per v0.7.1: cache rotation-independent data outside the Canvas draw lambda so it is
     // NOT recomputed every frame during drag-rotation of large cells.
     // — coordination neighbors: O(bonds) per frame → now O(1)
@@ -445,8 +459,8 @@ private fun LegacyCanvasViewport(
                                 // Per v0.3.0: a tap on any measurement or info box triggers the
                                 // toggle; the box hit carries its identity + locked state so the host
                                 // knows which window was tapped.
-                                val tapInMeasurementBox = measurementBoundsList.firstOrNull { it.first.contains(down) }
-                                val tapInAtomInfoBox = atomInfoBoundsList.firstOrNull { it.first.contains(down) }
+                                val tapInMeasurementBox = hitState.measurementBounds.firstOrNull { it.first.contains(down) }
+                                val tapInAtomInfoBox = hitState.atomInfoBounds.firstOrNull { it.first.contains(down) }
                                 when {
                                     tapInMeasurementBox != null -> {
                                         val idx = tapInMeasurementBox.third
@@ -455,9 +469,9 @@ private fun LegacyCanvasViewport(
                                     }
                                     tapInAtomInfoBox != null -> onInspectionLockToggle(tapInAtomInfoBox.third, tapInAtomInfoBox.second)
                                     else -> controller.pick(down)?.let { atom ->
-                                        val prev = lastTap
+                                        val prev = hitState.lastTap
                                         val now = SystemClock.uptimeMillis()
-                                        lastTap = TapEvent(now, down)
+                                        hitState.lastTap = TapEvent(now, down)
                                         if (prev != null && now - prev.time < 300 && (down - prev.position).getDistance() < 24f) {
                                             onInspectAtom(atom)
                                         } else {
@@ -473,8 +487,8 @@ private fun LegacyCanvasViewport(
             },
     ) {
         drawRect(background)
-        measurementBoundsList = emptyList()
-        atomInfoBoundsList = emptyList()
+        hitState.measurementBounds = emptyList()
+        hitState.atomInfoBounds = emptyList()
         if (snapshot.atoms.isEmpty()) {
             // Per v0.3.42: no longer draw a "No atoms" message; just leave the background.
             controller.projectedAtoms = emptyList()
@@ -603,9 +617,9 @@ private fun LegacyCanvasViewport(
                 // Per v0.5.3a: depth cueing blends each object's colour toward the background by its
                 // fog amount; opacity is unchanged. Bonds split at the midpoint so each half fades by
                 // its endpoint atom's depth (continuous fade into the atoms).
-                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, renderable.lockedHighlight, appearance, renderConfiguration, dofFog(renderable.depth), bgColor)
-                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, renderConfiguration, visibility.hiddenSites, ::dofFog, bgColor)
-                is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance, dofFog(renderable.depth), bgColor)
+                is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, renderable.lockedHighlight, appearance, renderConfiguration, dofFog(renderable.depth), bgColor, reflection)
+                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, renderConfiguration, visibility.hiddenSites, ::dofFog, bgColor, reflection)
+                is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance, dofFog(renderable.depth), bgColor, reflection)
                 is DihedralPlaneRenderable -> drawDihedralPlane(renderable, appearance, dofFog(renderable.depth), bgColor)
             }
         }
@@ -617,7 +631,7 @@ private fun LegacyCanvasViewport(
             drawMeasurement(projected, m.atomIds, m.mode, true)?.let { bounds += Triple(it, true, idx) }
         }
         drawMeasurement(projected, selectedAtomIds, measurementMode, false)?.let { bounds += Triple(it, false, -1) }
-        measurementBoundsList = bounds
+        hitState.measurementBounds = bounds
         val infoBounds = mutableListOf<Triple<Rect, Boolean, Long>>()
         lockedInspectedAtomIds.forEach { id ->
             drawAtomInfo(projected, id, true, appearance, bondValenceBySite)?.let { infoBounds += Triple(it, true, id) }
@@ -625,8 +639,9 @@ private fun LegacyCanvasViewport(
         if (inspectedAtomId != null && inspectedAtomId !in lockedInspectedAtomIds) {
             drawAtomInfo(projected, inspectedAtomId, false, appearance, bondValenceBySite)?.let { infoBounds += Triple(it, false, inspectedAtomId) }
         }
-        atomInfoBoundsList = infoBounds
-        controller.projectedAtoms = visibleProjected
+        hitState.atomInfoBounds = infoBounds
+        // Per v0.8.1: projectedAtoms was already set at line ~531-533 above; this duplicate
+        // assignment (legacy dead write) is removed.
     }
 }
 
@@ -638,6 +653,7 @@ private fun DrawScope.drawAtom(
     renderConfiguration: RenderConfiguration,
     fog: Float = 0f,
     bgColor: Color = Color.Black,
+    reflection: LegacyReflectionParameters = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion),
 ) {
     // Per v0.6: depth cueing modulates OPACITY by (1 - fog); distant atoms become transparent.
     val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
@@ -685,7 +701,6 @@ private fun DrawScope.drawAtom(
         drawPath(wedgePath(-90f + occSweep, 360f - occSweep), faded)
     }
     if (appearance.reflectionEnabled) {
-        val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
         val highlightOffset = legacyHighlightOffset(
             atom.radius.toDouble(),
             appearance.lightAzimuth,
@@ -769,6 +784,7 @@ private fun DrawScope.drawBond(
     hiddenSites: Set<String> = emptySet(),
     dofFog: (Double) -> Float,
     bgColor: Color = Color.Black,
+    reflection: LegacyReflectionParameters = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion),
 ) {
     // Per v0.6: depth cueing modulates each half's OPACITY by (1 - fog); splitting at the
     // midpoint keeps the fade continuous into the atoms instead of a single mid-depth step.
@@ -799,8 +815,8 @@ private fun DrawScope.drawBond(
         // Unicolor: same colour, each half's opacity modulated by its endpoint's fog.
         val baseA = colorFromArgb(appearance.uniformBondArgb).copy(alpha = opacity * (1f - fogA))
         val baseB = colorFromArgb(appearance.uniformBondArgb).copy(alpha = opacity * (1f - fogB))
-        drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
-        drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+        drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, reflection)
+        drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, reflection)
     } else {
         val baseA = colorFromArgb(
             RenderPalette.resolveSiteArgb(a.atom.siteId, a.atom.species.symbol, renderConfiguration),
@@ -808,8 +824,8 @@ private fun DrawScope.drawBond(
         val baseB = colorFromArgb(
             RenderPalette.resolveSiteArgb(b.atom.siteId, b.atom.species.symbol, renderConfiguration),
         ).copy(alpha = opacity * (1f - fogB))
-        drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
-        drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, appearance.diffusion)
+        drawBondCylinder(start, midpoint, width / 2f, perp, lightOnPerp, baseA, appearance.bondReflectionEnabled, appearance.lightIntensity, reflection)
+        drawBondCylinder(midpoint, end, width / 2f, perp, lightOnPerp, baseB, appearance.bondReflectionEnabled, appearance.lightIntensity, reflection)
     }
 }
 
@@ -821,10 +837,9 @@ private fun DrawScope.drawBondCylinder(
     lightOnPerp: Double,
     base: Color,
     reflectionEnabled: Boolean,
-    // Per v0.5.2: world-light intensity/diffusion now drive the bond's highlight brightness, shadow
-    // contrast and highlight band width (previously fixed 0.55/0.55/0.45 and ±0.15).
+    // Per v0.5.2: world-light intensity drives the bond's shadow contrast (previously fixed 0.45).
     lightIntensity: Float,
-    diffusion: Float,
+    reflection: LegacyReflectionParameters,
 ) {
     val offset = perp * halfWidth
     val p1 = start + offset
@@ -843,7 +858,6 @@ private fun DrawScope.drawBondCylinder(
     val highlightPos = (0.5 - lightOnPerp * 0.35).toFloat().coerceIn(0.1f, 0.9f)
     val shadowA = base.darken(1f - 0.45f * lightIntensity)
     val shadowB = base.darken(1f - 0.35f * lightIntensity)
-    val reflection = legacyReflectionParameters(lightIntensity, diffusion)
     val highlight = if (reflectionEnabled) base.lighten(reflection.bondHighlightFactor) else base
     val band = reflection.bondHighlightBand
     val brush = Brush.linearGradient(
@@ -957,7 +971,7 @@ private fun polyhedronFaceRenderables(
     return result
 }
 
-private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appearance: ViewerAppearance, fog: Float = 0f, bgColor: Color = Color.Black) {
+private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appearance: ViewerAppearance, fog: Float = 0f, bgColor: Color = Color.Black, reflection: LegacyReflectionParameters = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)) {
     if (face.screenVerts.size < 3) return
     // Per v0.3.44: back faces are emitted outline-only — skip the fill and just draw the edges at
     // a lower alpha so the polyhedron's back silhouette is faintly visible.
@@ -976,7 +990,6 @@ private fun DrawScope.drawPolyhedronFace(face: PolyhedronFaceRenderable, appeara
             val spec = Math.pow(face.normalCam.dot(half).coerceIn(0.0, 1.0), 48.0)
             val ambient = (1f - 0.6f * appearance.lightIntensity).coerceIn(0.4f, 1f)
             val diffFactor = (ambient + (1f - ambient) * diff.toFloat()).coerceIn(0f, 1f)
-            val reflection = legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
             val specAmount = (spec.toFloat() * reflection.polyhedronSpecularFactor).coerceIn(0f, 1f)
             fadedBase.copy(
                 red = (fadedBase.red * diffFactor + specAmount).coerceIn(0f, 1f),

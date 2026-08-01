@@ -231,11 +231,14 @@ object CrystalImageExporter {
         // Per v0.3.41: boundary images are displayed by default; only external shell atoms remain
         // hidden unless a bond rule opts in to "extend across cell".
         val visibleExternalShellAtomIds = mutableSetOf<Long>()
+        // Per v0.8.1: build an id→atom map once so the bond loop below is O(bonds) instead of the
+        // previous O(bonds × atoms) linear scan per endpoint.
+        val atomById = snapshot.atoms.associateBy { it.id }
         if (visibility.showBonds) {
             snapshot.bonds.forEach { bond ->
                 if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
-                val a = snapshot.atoms.firstOrNull { it.id == bond.atomA } ?: return@forEach
-                val b = snapshot.atoms.firstOrNull { it.id == bond.atomB } ?: return@forEach
+                val a = atomById[bond.atomA] ?: return@forEach
+                val b = atomById[bond.atomB] ?: return@forEach
                 // Per v0.6.5: use directional shouldExtendAcrossCell so only the correct
                 // direction's external atoms are shown.
                 if (b.isExternalShell && bond.rule.shouldExtendAcrossCell(a.siteId, true) && b.siteId !in visibility.hiddenSites) {
