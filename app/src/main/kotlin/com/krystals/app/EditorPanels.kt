@@ -195,27 +195,40 @@ fun EditorPanel(
             // content must sit beside it in a Row (a Column with a fillMaxHeight first child would
             // leave no height for the tabs/content — the cause of the blank landscape panel).
             val handleModifier = if (landscape) {
+                Modifier.fillMaxHeight().width(24.dp)
+            } else {
+                Modifier.fillMaxWidth().height(24.dp)
+            }
+            val dividerModifier = if (landscape) {
                 Modifier.fillMaxHeight().width(12.dp)
             } else {
                 Modifier.fillMaxWidth().height(12.dp)
             }
             val handle = @Composable {
+                // Per v0.8.1: 24.dp drag hit target around the original 12.dp visible divider so
+                // the resize handle is easier to grab; persist the ratio once when the drag ends
+                // (or is cancelled) instead of writing SharedPreferences on every drag frame.
                 Box(
                     Modifier
-                        .pointerInput(landscape) {
-                            detectDragGestures { change, amount ->
-                                change.consume()
-                                if (landscape) {
-                                    panelRatio = (panelRatio - amount.x / widthPx).coerceIn(0.2f, 0.95f)
-                                } else {
-                                    panelRatio = (panelRatio - amount.y / heightPx).coerceIn(0.2f, 0.95f)
-                                }
-                                panelPrefs.edit().putFloat(prefKey, panelRatio).apply()
-                            }
-                        }
                         .then(handleModifier)
-                        .background(MaterialTheme.colorScheme.outlineVariant),
-                )
+                        .pointerInput(landscape) {
+                            detectDragGestures(
+                                onDragEnd = { panelPrefs.edit().putFloat(prefKey, panelRatio).apply() },
+                                onDragCancel = { panelPrefs.edit().putFloat(prefKey, panelRatio).apply() },
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    if (landscape) {
+                                        panelRatio = (panelRatio - amount.x / widthPx).coerceIn(0.2f, 0.95f)
+                                    } else {
+                                        panelRatio = (panelRatio - amount.y / heightPx).coerceIn(0.2f, 0.95f)
+                                    }
+                                },
+                            )
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.then(dividerModifier).background(MaterialTheme.colorScheme.outlineVariant))
+                }
             }
             val content = @Composable {
                 Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {

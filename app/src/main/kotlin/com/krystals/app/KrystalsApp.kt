@@ -133,6 +133,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -195,6 +196,7 @@ import com.krystals.renderer.core.style.ViewerAppearance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.filament.FilamentRenderer
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -306,6 +308,9 @@ private const val BUILD_SCENE_TIMEOUT_MS = 15_000L
 /** Per v0.5.3b: warn before opening a cell whose asymmetric expansion exceeds this many atoms. */
 private const val LARGE_CELL_WARN_THRESHOLD = 1000
 
+/** Per v0.8.x: persisted flag — user chose "don't ask again" for the canvas-rendering warning. */
+private const val CANVAS_WARN_DONT_ASK_KEY = "canvas_warn_dont_ask"
+
 @Composable
 fun KrystalsRoot(
     activity: MainActivity,
@@ -384,26 +389,42 @@ fun KrystalsRoot(
     val scope = rememberCoroutineScope()
     // Per v0.5.0: global "计算中..." overlay shown while bond rules are recomputed (open file, add/
     // delete atom, transform, hex/rhom conversion) off the UI thread.
-    var computing by remember { mutableStateOf(false) }
-    var computationJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    var voronoiWarningOpen by remember { mutableStateOf(false) }
-    var cifWarningOpen by remember { mutableStateOf(false) }
-    var pendingOpen by remember { mutableStateOf<PendingOpen?>(null) }
+    // Per v0.8.1: dialog gate states are MutableState references so KrystalsRootDialogs (extracted
+    // below) owns their reads — toggling one of these dialogs no longer recomposes the KrystalsRoot
+    // scaffold. States only ever set by KrystalsRoot internals (pendingSaveTabId, pendingExportBitmap,
+    // helpOpen, sponsorLaunchCount, aboutOpen, updateChecking) stay as plain delegated booleans.
+    val computingState = remember { mutableStateOf(false) }
+    var computing by computingState
+    val computationJobState = remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var computationJob by computationJobState
+    val voronoiWarningOpenState = remember { mutableStateOf(false) }
+    var voronoiWarningOpen by voronoiWarningOpenState
+    val cifWarningOpenState = remember { mutableStateOf(false) }
+    var cifWarningOpen by cifWarningOpenState
+    val pendingOpenState = remember { mutableStateOf<PendingOpen?>(null) }
+    var pendingOpen by pendingOpenState
     var pendingSaveTabId by remember { mutableStateOf<String?>(null) }
-    var closeRequest by remember { mutableStateOf<Int?>(null) }
-    var exitRequest by remember { mutableStateOf(false) }
+    val closeRequestState = remember { mutableStateOf<Int?>(null) }
+    var closeRequest by closeRequestState
+    val exitRequestState = remember { mutableStateOf(false) }
+    var exitRequest by exitRequestState
     var pendingExportBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var helpOpen by remember { mutableStateOf(false) }
-    var sponsorOpen by remember { mutableStateOf(false) }
+    val sponsorOpenState = remember { mutableStateOf(false) }
+    var sponsorOpen by sponsorOpenState
     // Per v0.6.5: unified confirmation dialog for help/feedback/sponsor links.
-    var linkConfirmUrl by remember { mutableStateOf<String?>(null) }
+    val linkConfirmUrlState = remember { mutableStateOf<String?>(null) }
+    var linkConfirmUrl by linkConfirmUrlState
     var sponsorLaunchCount by remember { mutableStateOf(0) }
     var aboutOpen by remember { mutableStateOf(false) }
     // Per v0.6.5: automatic update check on startup.
-    var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
-    var updateDialogOpen by remember { mutableStateOf(false) }
+    val updateInfoState = remember { mutableStateOf<UpdateInfo?>(null) }
+    var updateInfo by updateInfoState
+    val updateDialogOpenState = remember { mutableStateOf(false) }
+    var updateDialogOpen by updateDialogOpenState
     var updateChecking by remember { mutableStateOf(false) }
-    var updateDownloadProgress by remember { mutableStateOf<Float?>(null) } // null = not downloading
+    val updateDownloadProgressState = remember { mutableStateOf<Float?>(null) } // null = not downloading
+    var updateDownloadProgress by updateDownloadProgressState
     val updateScope = rememberCoroutineScope()
     // Per v0.2.2: prompt for sponsorship on the 5th, 20th, 50th, and every 50th launch thereafter.
     // Per v0.4.0: once the device holds a valid activation code the automatic prompt is suppressed.
@@ -426,20 +447,28 @@ fun KrystalsRoot(
             }
         }
     }
-    var presetOpen by remember { mutableStateOf(false) }
-    var mpSearchOpen by remember { mutableStateOf(false) }
-    var mpKeyDialogOpen by remember { mutableStateOf(false) }
+    val presetOpenState = remember { mutableStateOf(false) }
+    var presetOpen by presetOpenState
+    val mpSearchOpenState = remember { mutableStateOf(false) }
+    var mpSearchOpen by mpSearchOpenState
+    val mpKeyDialogOpenState = remember { mutableStateOf(false) }
+    var mpKeyDialogOpen by mpKeyDialogOpenState
     // Per v0.4.0: activation-code dialog (reached from the sponsor dialog) and the MP "premium
     // content" gate shown when MP is picked without an active code.
-    var activationOpen by remember { mutableStateOf(false) }
-    var mpPremiumOpen by remember { mutableStateOf(false) }
+    val activationOpenState = remember { mutableStateOf(false) }
+    var activationOpen by activationOpenState
+    val mpPremiumOpenState = remember { mutableStateOf(false) }
+    var mpPremiumOpen by mpPremiumOpenState
     // Per v0.4.0: one-time caution shown to activated users before the MP flow, explaining the
     // new/legacy API trade-off. Dismissable permanently via the "不再显示" checkbox.
-    var mpCautionOpen by remember { mutableStateOf(false) }
+    val mpCautionOpenState = remember { mutableStateOf(false) }
+    var mpCautionOpen by mpCautionOpenState
     // Per v0.3.1: MP and COD imports share an "import from online sources" entry that opens a
     // picker; the picker routes to the COD search screen (no key) or the MP flow (key-gated).
-    var onlineSourceOpen by remember { mutableStateOf(false) }
-    var codSearchOpen by remember { mutableStateOf(false) }
+    val onlineSourceOpenState = remember { mutableStateOf(false) }
+    var onlineSourceOpen by onlineSourceOpenState
+    val codSearchOpenState = remember { mutableStateOf(false) }
+    var codSearchOpen by codSearchOpenState
 
     fun showMessage(message: String) { scope.launch { snackbar.showSnackbar(message) } }
 
@@ -453,8 +482,10 @@ fun KrystalsRoot(
     // Per v0.5.3b: when an opened cell expands to more than [LARGE_CELL_WARN_THRESHOLD] atoms the
     // user is warned before the (possibly degraded) scene is built. Resolved once; reused below.
     val largeCellWarningMessage = localized("原子数较多", "Many atoms")
-    var pendingLargeOpen by remember { mutableStateOf<PendingLargeOpen?>(null) }
-    var pendingLargeEdit by remember { mutableStateOf<PendingLargeEdit?>(null) }
+    val pendingLargeOpenState = remember { mutableStateOf<PendingLargeOpen?>(null) }
+    var pendingLargeOpen by pendingLargeOpenState
+    val pendingLargeEditState = remember { mutableStateOf<PendingLargeEdit?>(null) }
+    var pendingLargeEdit by pendingLargeEditState
 
     /**
      * Per v0.5.0: run a bond-recomputing operation off the UI thread with the global "计算中..."
@@ -694,30 +725,15 @@ fun KrystalsRoot(
     fun requestExit() {
         if (viewModel.tabs.any { it.dirty }) exitRequest = true else activity.finishAndRemoveTask()
     }
+    // Per v0.8.1: every window dialog (AlertDialog/Dialog) handles its own back press inside its own
+    // Window, so its KrystalsRoot entry was dead code. Only the inline overlay screens (COD/MP search,
+    // help/sponsor) and the tab stack remain in this handler.
     BackHandler(enabled = true) {
         when {
-            computing -> {
-                computationJob?.cancel()
-                computing = false
-                computationJob = null
-            }
-            voronoiWarningOpen -> voronoiWarningOpen = false
-            exitRequest -> exitRequest = false
-            closeRequest != null -> closeRequest = null
-            pendingOpen != null -> pendingOpen = null
-            pendingLargeOpen != null -> pendingLargeOpen = null
-            pendingLargeEdit != null -> pendingLargeEdit = null
-            cifWarningOpen -> cifWarningOpen = false
             codSearchOpen -> codSearchOpen = false
             mpSearchOpen -> mpSearchOpen = false
             helpOpen -> helpOpen = false
             sponsorOpen -> sponsorOpen = false
-            presetOpen -> presetOpen = false
-            onlineSourceOpen -> onlineSourceOpen = false
-            activationOpen -> activationOpen = false
-            mpKeyDialogOpen -> mpKeyDialogOpen = false
-            mpPremiumOpen -> mpPremiumOpen = false
-            mpCautionOpen -> mpCautionOpen = false
             viewModel.current != null -> { val index = viewModel.selectedIndex; if (viewModel.current?.dirty == true) closeRequest = index else viewModel.close(index) }
             else -> activity.finishAndRemoveTask()
         }
@@ -816,50 +832,205 @@ fun KrystalsRoot(
         }
 
         // Dialogs live inside KrystalsTheme so they pick up the correct color scheme (dark/light).
-if (computing) {
-androidx.compose.material3.BasicAlertDialog(
-onDismissRequest = {
-computationJob?.cancel()
-computing = false
-computationJob = null
-// Per v0.7.1: undo the modification that triggered the computation.
-viewModel.current?.undo()
-},
-properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
+        KrystalsRootDialogs(
+            computingState = computingState,
+            computationJobState = computationJobState,
+            voronoiWarningOpenState = voronoiWarningOpenState,
+            cifWarningOpenState = cifWarningOpenState,
+            pendingOpenState = pendingOpenState,
+            pendingLargeOpenState = pendingLargeOpenState,
+            pendingLargeEditState = pendingLargeEditState,
+            closeRequestState = closeRequestState,
+            exitRequestState = exitRequestState,
+            linkConfirmUrlState = linkConfirmUrlState,
+            updateInfoState = updateInfoState,
+            updateDialogOpenState = updateDialogOpenState,
+            updateDownloadProgressState = updateDownloadProgressState,
+            presetOpenState = presetOpenState,
+            mpKeyDialogOpenState = mpKeyDialogOpenState,
+            activationOpenState = activationOpenState,
+            mpPremiumOpenState = mpPremiumOpenState,
+            mpCautionOpenState = mpCautionOpenState,
+            onlineSourceOpenState = onlineSourceOpenState,
+            mpSearchOpenState = mpSearchOpenState,
+            codSearchOpenState = codSearchOpenState,
+            sponsorOpenState = sponsorOpenState,
+            viewModel = viewModel,
+            activity = activity,
+            preferences = preferences,
+            updateScope = updateScope,
+            showMessage = ::showMessage,
+            openParsed = ::openParsed,
+            doOpenParsed = ::doOpenParsed,
+            runWithBondComputation = { block, skip -> runWithBondComputation(block, skip) },
+            save = { tab, after -> save(tab, after) },
+            openUrl = ::openUrl,
+            proceedToMp = ::proceedToMp,
+            voronoiWarningMessage = voronoiWarningMessage,
+        )
+    // Per v0.6.5: resolve localized strings for update dialogs in composable context.
+    val msgSkipped = localized("已跳过该版本", "This version has been skipped")
+    val msgLatest = localized("当前版本已是最新版", "Current version is up to date")
+    val msgFailed = localized("无法连接至服务器", "Unable to connect to server")
+    var aboutUpdateMessage by remember { mutableStateOf<String?>(null) }
+    if (aboutOpen) {
+        AboutScreen(
+            onBack = { aboutOpen = false },
+            onCheckUpdates = {
+                updateChecking = true
+                aboutUpdateMessage = null
+                updateScope.launch {
+                    val info = fetchUpdateInfo()
+                    updateChecking = false
+                    if (info != null && info.versionCode > com.krystals.app.BuildConfig.VERSION_CODE) {
+                        val skipped = preferences.getInt("skipped_version_code", -1)
+                        if (info.versionCode > skipped) {
+                            updateInfo = info
+                            updateDialogOpen = true
+                        } else {
+                            aboutUpdateMessage = msgSkipped
+                        }
+                    } else if (info != null) {
+                        aboutUpdateMessage = msgLatest
+                    } else {
+                        aboutUpdateMessage = msgFailed
+                    }
+                }
+            },
+            isCheckingUpdates = updateChecking,
+            updateMessage = aboutUpdateMessage,
+        )
+    }
+    if (mpSearchOpen) MpSearchScreen(
+        context = activity,
+        viewModel = viewModel,
+        onBack = { mpSearchOpen = false },
+        onChangeKey = { mpSearchOpen = false; mpKeyDialogOpen = true },
+        onMessage = ::showMessage,
+        onOpenParsed = { parsed, name -> mpSearchOpen = false; openParsed(parsed, name, null) },
+    )
+    if (codSearchOpen) CodSearchScreen(
+        context = activity,
+        viewModel = viewModel,
+        onBack = { codSearchOpen = false },
+        onMessage = ::showMessage,
+        onOpenParsed = { parsed, name -> codSearchOpen = false; openParsed(parsed, name, null) },
+    )
+    }
+    }
+}
+
+/**
+ * Per v0.8.1: all dialogs that live in their own Window (AlertDialog / Dialog). Extracted from
+ * KrystalsRoot so toggling one only recomposes this composable. Each Window dialog consumes back
+ * presses inside its own Window (the old KrystalsRoot BackHandler entries were dead code). Inline
+ * overlay screens (About, COD/MP search) stay in KrystalsRoot because their back handling is
+ * conditional; the states they share are passed here as MutableState references.
+ */
+@Composable
+private fun KrystalsRootDialogs(
+    computingState: MutableState<Boolean>,
+    computationJobState: MutableState<kotlinx.coroutines.Job?>,
+    voronoiWarningOpenState: MutableState<Boolean>,
+    cifWarningOpenState: MutableState<Boolean>,
+    pendingOpenState: MutableState<PendingOpen?>,
+    pendingLargeOpenState: MutableState<PendingLargeOpen?>,
+    pendingLargeEditState: MutableState<PendingLargeEdit?>,
+    closeRequestState: MutableState<Int?>,
+    exitRequestState: MutableState<Boolean>,
+    linkConfirmUrlState: MutableState<String?>,
+    updateInfoState: MutableState<UpdateInfo?>,
+    updateDialogOpenState: MutableState<Boolean>,
+    updateDownloadProgressState: MutableState<Float?>,
+    presetOpenState: MutableState<Boolean>,
+    mpKeyDialogOpenState: MutableState<Boolean>,
+    activationOpenState: MutableState<Boolean>,
+    mpPremiumOpenState: MutableState<Boolean>,
+    mpCautionOpenState: MutableState<Boolean>,
+    onlineSourceOpenState: MutableState<Boolean>,
+    mpSearchOpenState: MutableState<Boolean>,
+    codSearchOpenState: MutableState<Boolean>,
+    sponsorOpenState: MutableState<Boolean>,
+    viewModel: KrystalsViewModel,
+    activity: MainActivity,
+    preferences: SharedPreferences,
+    updateScope: CoroutineScope,
+    showMessage: (String) -> Unit,
+    openParsed: (ParsedStructure, String, Uri?) -> Unit,
+    doOpenParsed: (ParsedStructure, String, Uri?, Int) -> Unit,
+    runWithBondComputation: (suspend () -> com.krystals.crystal.analysis.editing.EditResult?, Boolean) -> Unit,
+    save: (DocumentTab, () -> Unit) -> Unit,
+    openUrl: (String) -> Unit,
+    proceedToMp: () -> Unit,
+    voronoiWarningMessage: String,
 ) {
-androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
-Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-androidx.compose.material3.CircularProgressIndicator()
-Text(localized("计算中...", "Computing..."))
-}
-}
-}
-}
-        if (voronoiWarningOpen) {
-            AlertDialog(
-                onDismissRequest = { voronoiWarningOpen = false },
-                title = { Text(localized("计算已停止", "Calculation stopped")) },
-                text = { Text(voronoiWarningMessage) },
-                confirmButton = {
-                    TextButton(onClick = { voronoiWarningOpen = false }) {
-                        Text(stringResource(R.string.confirm))
-                    }
-                },
-            )
+    var computing by computingState
+    var computationJob by computationJobState
+    var voronoiWarningOpen by voronoiWarningOpenState
+    var cifWarningOpen by cifWarningOpenState
+    var pendingOpen by pendingOpenState
+    var pendingLargeOpen by pendingLargeOpenState
+    var pendingLargeEdit by pendingLargeEditState
+    var closeRequest by closeRequestState
+    var exitRequest by exitRequestState
+    var linkConfirmUrl by linkConfirmUrlState
+    var updateInfo by updateInfoState
+    var updateDialogOpen by updateDialogOpenState
+    var updateDownloadProgress by updateDownloadProgressState
+    var presetOpen by presetOpenState
+    var mpKeyDialogOpen by mpKeyDialogOpenState
+    var activationOpen by activationOpenState
+    var mpPremiumOpen by mpPremiumOpenState
+    var mpCautionOpen by mpCautionOpenState
+    var onlineSourceOpen by onlineSourceOpenState
+    var mpSearchOpen by mpSearchOpenState
+    var codSearchOpen by codSearchOpenState
+    var sponsorOpen by sponsorOpenState
+
+    if (computing) {
+        androidx.compose.material3.BasicAlertDialog(
+            onDismissRequest = {
+                computationJob?.cancel()
+                computing = false
+                computationJob = null
+                // Per v0.7.1: undo the modification that triggered the computation.
+                viewModel.current?.undo()
+            },
+            properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
+        ) {
+            androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
+                Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    androidx.compose.material3.CircularProgressIndicator()
+                    Text(localized("计算中...", "Computing..."))
+                }
+            }
         }
-        if (cifWarningOpen) {
-            AlertDialog(
-                onDismissRequest = { cifWarningOpen = false },
-                title = { Text(localized("警告", "Warning")) },
-                text = { Text(localized("当前所打开的CIF文件不可读或包含异常字符串。", "The CIF file is unreadable or contains malformed strings.")) },
-                confirmButton = {
-                    TextButton(onClick = { cifWarningOpen = false }) {
-                        Text(stringResource(R.string.confirm))
-                    }
-                },
-            )
-        }
-        pendingOpen?.let { pending ->
+    }
+    if (voronoiWarningOpen) {
+        AlertDialog(
+            onDismissRequest = { voronoiWarningOpen = false },
+            title = { Text(localized("计算已停止", "Calculation stopped")) },
+            text = { Text(voronoiWarningMessage) },
+            confirmButton = {
+                TextButton(onClick = { voronoiWarningOpen = false }) {
+                    Text(stringResource(R.string.confirm))
+                }
+            },
+        )
+    }
+    if (cifWarningOpen) {
+        AlertDialog(
+            onDismissRequest = { cifWarningOpen = false },
+            title = { Text(localized("警告", "Warning")) },
+            text = { Text(localized("当前所打开的CIF文件不可读或包含异常字符串。", "The CIF file is unreadable or contains malformed strings.")) },
+            confirmButton = {
+                TextButton(onClick = { cifWarningOpen = false }) {
+                    Text(stringResource(R.string.confirm))
+                }
+            },
+        )
+    }
+    pendingOpen?.let { pending ->
         val document = remember(pending) { CifCodec.parse(pending.text) }
         AlertDialog(
             onDismissRequest = { pendingOpen = null },
@@ -873,7 +1044,6 @@ Text(localized("计算中...", "Computing..."))
             dismissButton = { TextButton(onClick = { pendingOpen = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
-
     pendingLargeOpen?.let { pending ->
         AlertDialog(
             onDismissRequest = { pendingLargeOpen = null },
@@ -888,7 +1058,6 @@ Text(localized("计算中...", "Computing..."))
             dismissButton = { TextButton(onClick = { pendingLargeOpen = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
-
     pendingLargeEdit?.let { pending ->
         AlertDialog(
             onDismissRequest = { pendingLargeEdit = null },
@@ -898,12 +1067,11 @@ Text(localized("计算中...", "Computing..."))
                 "After modification the cell will have too many atoms (~${pending.expandedEstimate}), which may cause severe lag or crashes. Continue?")) },
             confirmButton = { TextButton(onClick = {
                 val b = pending.block; pendingLargeEdit = null
-                runWithBondComputation(b, skipLargeCheck = true)
+                runWithBondComputation(b, true)
             }) { Text(localized("继续", "Continue")) } },
             dismissButton = { TextButton(onClick = { pendingLargeEdit = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
-
     closeRequest?.let { index ->
         val tab = viewModel.tabs.getOrNull(index)
         if (tab != null) AlertDialog(
@@ -933,15 +1101,13 @@ Text(localized("计算中...", "Computing..."))
             },
         ) else closeRequest = null
     }
-
     if (exitRequest) AlertDialog(
         onDismissRequest = { exitRequest = false },
         title = { Text(localized("文件尚未保存", "Unsaved files")) },
         text = { Text(viewModel.tabs.filter { it.dirty }.joinToString("\n") { "• ${it.name}" }) },
-        confirmButton = { TextButton(onClick = { viewModel.current?.let { save(it) }; exitRequest = false }) { Text(stringResource(R.string.save)) } },
+        confirmButton = { TextButton(onClick = { viewModel.current?.let { save(it) {} }; exitRequest = false }) { Text(stringResource(R.string.save)) } },
         dismissButton = { Row { TextButton(onClick = { activity.finishAndRemoveTask() }) { Text(stringResource(R.string.discard)) }; TextButton(onClick = { exitRequest = false }) { Text(stringResource(R.string.cancel)) } } },
     )
-
     // Per v0.6.5: unified link-confirmation dialog for help/feedback/sponsor.
     if (linkConfirmUrl != null) {
         val url = linkConfirmUrl!!
@@ -960,39 +1126,9 @@ Text(localized("计算中...", "Computing..."))
             },
         )
     }
-    // Per v0.6.5: resolve localized strings for update dialogs in composable context.
-    val msgSkipped = localized("已跳过该版本", "This version has been skipped")
-    val msgLatest = localized("当前版本已是最新版", "Current version is up to date")
-    val msgFailed = localized("无法连接至服务器", "Unable to connect to server")
+    // Per v0.6.5: version update dialog.
     val msgStartDownload = localized("开始下载新版本...", "Starting download...")
     val msgDownloadFail = localized("下载失败", "Download failed")
-    if (aboutOpen) {
-        AboutScreen(
-            onBack = { aboutOpen = false },
-            onCheckUpdates = {
-                updateChecking = true
-                updateScope.launch {
-                    val info = fetchUpdateInfo()
-                    updateChecking = false
-                    if (info != null && info.versionCode > com.krystals.app.BuildConfig.VERSION_CODE) {
-                        val skipped = preferences.getInt("skipped_version_code", -1)
-                        if (info.versionCode > skipped) {
-                            updateInfo = info
-                            updateDialogOpen = true
-                        } else {
-                            showMessage(msgSkipped)
-                        }
-                    } else if (info != null) {
-                        showMessage(msgLatest)
-                    } else {
-                        showMessage(msgFailed)
-                    }
-                }
-            },
-            isCheckingUpdates = updateChecking,
-        )
-    }
-    // Per v0.6.5: version update dialog.
     if (updateDialogOpen && updateInfo != null) {
         val info = updateInfo!!
         AlertDialog(
@@ -1045,21 +1181,21 @@ Text(localized("计算中...", "Computing..."))
         viewModel = viewModel,
         preferences = preferences,
         onDismiss = { presetOpen = false },
-        onMessage = ::showMessage,
+        onMessage = { showMessage(it) },
         onOpenParsed = { parsed, name -> presetOpen = false; openParsed(parsed, name, null) },
     )
     if (mpKeyDialogOpen) MpApiKeyDialog(
         context = activity,
         onDismiss = { mpKeyDialogOpen = false },
-        onOpenUrl = ::openUrl,
+        onOpenUrl = { openUrl(it) },
         onConfirmed = { mpKeyDialogOpen = false; mpSearchOpen = true },
-        onMessage = ::showMessage,
+        onMessage = { showMessage(it) },
     )
     if (activationOpen) ActivationDialog(
         context = activity,
         onDismiss = { activationOpen = false },
         onConfirmed = { activationOpen = false },
-        onMessage = ::showMessage,
+        onMessage = { showMessage(it) },
     )
     if (mpPremiumOpen) MpPremiumDialog(
         onDismiss = { mpPremiumOpen = false },
@@ -1069,14 +1205,6 @@ Text(localized("计算中...", "Computing..."))
         preferences = preferences,
         onDismiss = { mpCautionOpen = false },
         onContinue = { mpCautionOpen = false; proceedToMp() },
-    )
-    if (mpSearchOpen) MpSearchScreen(
-        context = activity,
-        viewModel = viewModel,
-        onBack = { mpSearchOpen = false },
-        onChangeKey = { mpSearchOpen = false; mpKeyDialogOpen = true },
-        onMessage = ::showMessage,
-        onOpenParsed = { parsed, name -> mpSearchOpen = false; openParsed(parsed, name, null) },
     )
     if (onlineSourceOpen) OnlineSourcePickerDialog(
         onDismiss = { onlineSourceOpen = false },
@@ -1093,15 +1221,6 @@ Text(localized("计算中...", "Computing..."))
             }
         },
     )
-    if (codSearchOpen) CodSearchScreen(
-        context = activity,
-        viewModel = viewModel,
-        onBack = { codSearchOpen = false },
-        onMessage = ::showMessage,
-        onOpenParsed = { parsed, name -> codSearchOpen = false; openParsed(parsed, name, null) },
-    )
-    }
-    }
 }
 
 @Composable
@@ -1171,6 +1290,19 @@ private fun HomeScreen(
     }
 }
 
+/** Per v0.8.1: mutually-exclusive full-screen viewer panels. Consolidates five independent
+ *  booleans (align/measure/display/info/appearance) into one state so only a single write is
+ *  needed per panel switch. menuOpen (dropdown) and toolOpen (floating-ball fan) stay as plain
+ *  booleans because they can be open simultaneously with a full-screen panel. */
+private sealed class ViewerPanel {
+    object None : ViewerPanel()
+    object Align : ViewerPanel()
+    object Measure : ViewerPanel()
+    object Display : ViewerPanel()
+    object Info : ViewerPanel()
+    object Appearance : ViewerPanel()
+}
+
 @Composable
 private fun ViewerScreen(
     viewModel: KrystalsViewModel,
@@ -1229,28 +1361,85 @@ private fun ViewerScreen(
         "Filament 初始化失败，本次会话已切换到 Canvas",
         "Filament failed to initialize; using Canvas for this session",
     )
-    fun selectBackend(backend: RendererBackend) {
+    // Per v0.8.x: when a scene holds more than 100 atoms, any switch INTO canvas rendering
+    // (3D/2D toggle or engine picker in appearance) is gated behind a confirmation dialog
+    // that can be permanently suppressed with the "don't ask again" checkbox.
+    val canvasWarnAtomThreshold = 100
+    var canvasWarnDontAsk by remember { mutableStateOf(preferences.getBoolean(CANVAS_WARN_DONT_ASK_KEY, false)) }
+    var pendingCanvasConfirm by remember { mutableStateOf<RendererBackend?>(null) }
+    var pendingCanvasTab by remember { mutableStateOf<Int?>(null) }
+    // Resets the checkbox each time a canvas-warning dialog (re)appears.
+    var canvasWarnDontAskChecked by remember(pendingCanvasConfirm, pendingCanvasTab) { mutableStateOf(false) }
+    fun persistCanvasWarnDontAsk() {
+        if (canvasWarnDontAskChecked) {
+            canvasWarnDontAsk = true
+            preferences.edit().putBoolean(CANVAS_WARN_DONT_ASK_KEY, true).apply()
+        }
+    }
+    fun applyBackend(backend: RendererBackend) {
         preferredBackend = backend
         filamentSessionFailed = false
         RendererBackendStore.save(preferences, backend)
     }
-    @Suppress("UNUSED_VARIABLE") val historyVersion = tab.historyVersion
+    fun selectBackend(backend: RendererBackend) {
+        val switchingToCanvas = backend == RendererBackend.CANVAS_LEGACY && effectiveBackend != RendererBackend.CANVAS_LEGACY
+        // Per v0.8.x: use the symmetry-expanded atom count (what the scene actually renders),
+        // matching the LARGE_CELL_WARN_THRESHOLD convention — sites.size alone under-counts
+        // asymmetric cells whose symmetry operations generate many displayed atoms.
+        val sceneAtomCount = SymmetryExpander.expand(tab.structure).size
+        if (switchingToCanvas && !canvasWarnDontAsk && sceneAtomCount > canvasWarnAtomThreshold) {
+            pendingCanvasConfirm = backend
+        } else {
+            applyBackend(backend)
+        }
+    }
+    pendingCanvasConfirm?.let { target ->
+        AlertDialog(
+            onDismissRequest = { persistCanvasWarnDontAsk(); pendingCanvasConfirm = null },
+            title = { Text(localized("警告", "Warning")) },
+            text = { CanvasWarnDialogContent(canvasWarnDontAskChecked) { canvasWarnDontAskChecked = it } },
+            confirmButton = { TextButton(onClick = {
+                persistCanvasWarnDontAsk()
+                pendingCanvasConfirm = null
+                applyBackend(target)
+            }) { Text(localized("确认", "Confirm")) } },
+            dismissButton = { TextButton(onClick = { persistCanvasWarnDontAsk(); pendingCanvasConfirm = null }) { Text(localized("取消", "Cancel")) } },
+        )
+    }
+    // Per v0.8.x: in 2D canvas mode, switching tabs to another cell with >100 atoms is
+    // gated behind the same confirmation dialog (also suppressible via "don't ask again").
+    fun selectTab(index: Int) {
+        if (index == viewModel.selectedIndex) return
+        val target = viewModel.tabs.getOrNull(index) ?: return
+        val sceneAtomCount = SymmetryExpander.expand(target.structure).size
+        if (effectiveBackend == RendererBackend.CANVAS_LEGACY && !canvasWarnDontAsk && sceneAtomCount > canvasWarnAtomThreshold) {
+            pendingCanvasTab = index
+        } else {
+            viewModel.select(index)
+        }
+    }
+    pendingCanvasTab?.let { targetIndex ->
+        AlertDialog(
+            onDismissRequest = { persistCanvasWarnDontAsk(); pendingCanvasTab = null },
+            title = { Text(localized("警告", "Warning")) },
+            text = { CanvasWarnDialogContent(canvasWarnDontAskChecked) { canvasWarnDontAskChecked = it } },
+            confirmButton = { TextButton(onClick = {
+                persistCanvasWarnDontAsk()
+                pendingCanvasTab = null
+                viewModel.select(targetIndex)
+            }) { Text(localized("确认", "Confirm")) } },
+            dismissButton = { TextButton(onClick = { persistCanvasWarnDontAsk(); pendingCanvasTab = null }) { Text(localized("取消", "Cancel")) } },
+        )
+    }
     var menuOpen by remember { mutableStateOf(false) }
     var toolOpen by remember(tab.id) { mutableStateOf(false) }
-    var alignOpen by remember { mutableStateOf(false) }
-    var measureOpen by remember { mutableStateOf(false) }
-    var displayOpen by remember { mutableStateOf(false) }
-    var infoOpen by remember { mutableStateOf(false) }
-    var appearanceOpen by remember { mutableStateOf(false) }
+    // Per v0.8.1: single state for the mutually-exclusive full-screen panels.
+    var activePanel by remember { mutableStateOf<ViewerPanel>(ViewerPanel.None) }
     // Per v0.7.1: persistent overlay message shown during atom-edit / bond-draw flows.
     var persistentMessage by remember { mutableStateOf<String?>(null) }
     BackHandler(enabled = true) {
         when {
-            appearanceOpen -> appearanceOpen = false
-            infoOpen -> infoOpen = false
-            displayOpen -> displayOpen = false
-            measureOpen -> measureOpen = false
-            alignOpen -> alignOpen = false
+            activePanel != ViewerPanel.None -> activePanel = ViewerPanel.None
             // Per v0.7.1: exit bond-draw / atom-edit mode and return to the editor panel.
             // Priority is higher than floating-ball secondary menu retraction.
             tab.bondDrawMode != BondDrawMode.NONE || tab.atomEditMode != AtomEditMode.NONE || persistentMessage != null -> {
@@ -1356,7 +1545,9 @@ private fun ViewerScreen(
         // as a failure. Previously runCatching swallowed it, briefly showing "the coroutine
         // scope … was cancelled" in the error Text below whenever tab.structure changed.
         // Per v0.7.1: delayed dialog — only show if rebuild takes > 300ms.
-        val dialogJob = kotlinx.coroutines.GlobalScope.launch {
+        // Per v0.8.1: launch in this effect's scope (cancelled on key change / leaving composition)
+        // instead of GlobalScope, so a stale dialog can't mutate a disposed composition.
+        val dialogJob = launch {
             kotlinx.coroutines.delay(300)
             sceneRebuilding = true
         }
@@ -1488,6 +1679,10 @@ private fun ViewerScreen(
                 DropdownMenuItem(text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) }, onClick = { menuOpen = false; onExit() })
             } } },
             actions = {
+                // Per v0.8.1: scope the history-version read to the toolbar actions so undo/redo
+                // button enablement recomposes without re-running the whole ViewerScreen. The value
+                // itself is unused — the read is what subscribes this lambda to undo/redo changes.
+                @Suppress("UNUSED_VARIABLE") val historyVersion = tab.historyVersion
                 IconButton(onClick = { tab.undo() }, enabled = tab.history.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, localized("撤回", "Undo")) }
                 IconButton(onClick = { tab.redo() }, enabled = tab.history.canRedo) { Icon(Icons.AutoMirrored.Filled.Redo, localized("前进", "Redo")) }
                 IconButton(
@@ -1505,10 +1700,10 @@ private fun ViewerScreen(
                         fontWeight = FontWeight.Bold,
                     )
                 }
-                IconButton(onClick = { appearanceOpen = true }) { Icon(Icons.Default.ColorLens, null) }
+                IconButton(onClick = { activePanel = ViewerPanel.Appearance }) { Icon(Icons.Default.ColorLens, null) }
             },
         )
-        DocumentTabs(viewModel, onClose)
+        DocumentTabs(viewModel, onClose, ::selectTab)
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
             val current = sceneResult
             when {
@@ -1804,12 +1999,12 @@ sceneBuildError?.let { message ->
                 // measurement mode is active; the Lock button does the same while the view is locked.
                 data class Tool(val icon: androidx.compose.ui.graphics.vector.ImageVector, val active: Boolean, val action: () -> Unit)
                 val tools = listOf(
-                    Tool(Icons.Default.ControlCamera, active = false) { alignOpen = true },
-                    Tool(Icons.Default.Straighten, active = tab.measurementMode != MeasurementMode.NONE) { measureOpen = true },
+                    Tool(Icons.Default.ControlCamera, active = false) { activePanel = ViewerPanel.Align },
+                    Tool(Icons.Default.Straighten, active = tab.measurementMode != MeasurementMode.NONE) { activePanel = ViewerPanel.Measure },
                     Tool(Icons.AutoMirrored.Filled.Comment, active = false) { tab.commentsOpen = true },
-                    Tool(Icons.Default.Info, active = false) { infoOpen = true },
+                    Tool(Icons.Default.Info, active = false) { activePanel = ViewerPanel.Info },
                     Tool(Icons.Default.Edit, active = false) { tab.editorOpen = true },
-                    Tool(Icons.Default.Visibility, active = false) { displayOpen = true },
+                    Tool(Icons.Default.Visibility, active = false) { activePanel = ViewerPanel.Display },
                 )
                 val offsets = FloatingBallLayout.toolOffsets(tab.floatingPosition.snap)
                 // Tier split: tier 1 = inner ring (radius ≤ 80px), tier 2 = outer ring.
@@ -1938,17 +2133,17 @@ sceneBuildError?.let { message ->
     // (not constrained by TopAppBar/DocumentTabs height or navigationBars padding).
     if (tab.editorOpen) EditorPanel(tab, onDismiss = { tab.editorOpen = false }, onStructure = { viewModel.updateAnalysis(tab, it) }, onMessage = onMessage, onRunBondComputation = onRunBondComputation, onPersistentMessage = { persistentMessage = it })
     if (tab.commentsOpen) CommentsPanel(tab, onDismiss = { tab.commentsOpen = false })
-    if (alignOpen) AlignDialog(
-        onDismiss = { alignOpen = false },
+    if (activePanel == ViewerPanel.Align) AlignDialog(
+        onDismiss = { activePanel = ViewerPanel.None },
         onChoice = { choice ->
             when (choice) {
                 "X", "Y", "Z" -> dispatchViewerCommand(ViewerCommand.AlignCartesian(choice.first()))
                 "a", "b", "c" -> dispatchViewerCommand(ViewerCommand.AlignCellAxis(choice.first(), tab.structure.lattice))
             }
-            alignOpen = false
+            activePanel = ViewerPanel.None
         },
     )
-    if (measureOpen) MeasureDialog(
+    if (activePanel == ViewerPanel.Measure) MeasureDialog(
         length = lengthChoice,
         angle = angleChoice,
         dihedral = dihedralChoice,
@@ -1959,7 +2154,7 @@ sceneBuildError?.let { message ->
             MeasurementMode.DIHEDRAL -> dihedralChoice
             else -> null
         },
-        onDismiss = { measureOpen = false },
+        onDismiss = { activePanel = ViewerPanel.None },
         onChoice = { choice ->
             // Per v0.2.3: switching mode keeps any locked measurement; only the active selection resets.
             val mode = when {
@@ -1968,16 +2163,16 @@ sceneBuildError?.let { message ->
                 choice == dihedralChoice -> MeasurementMode.DIHEDRAL
                 else -> MeasurementMode.NONE
             }
-            dispatchViewerCommand(ViewerCommand.SetMeasurementMode(mode)); measureOpen = false
+            dispatchViewerCommand(ViewerCommand.SetMeasurementMode(mode)); activePanel = ViewerPanel.None
         },
     )
-    if (displayOpen) DisplayPanel(tab, viewModel, onDismiss = { displayOpen = false })
-    if (infoOpen) InfoDialog(tab, onDismiss = { infoOpen = false })
+    if (activePanel == ViewerPanel.Display) DisplayPanel(tab, viewModel, onDismiss = { activePanel = ViewerPanel.None })
+    if (activePanel == ViewerPanel.Info) InfoDialog(tab, onDismiss = { activePanel = ViewerPanel.None })
     // Per v0.5.3a: the dialog stays mounted (it self-hides via alpha) so the preview press-and-hold
     // gesture survives; the viewer uses previewAppearance while non-null.
-    if (appearanceOpen) AppearanceDialog(
+    if (activePanel == ViewerPanel.Appearance) AppearanceDialog(
         tab,
-        onDismiss = { appearanceOpen = false },
+        onDismiss = { activePanel = ViewerPanel.None },
         onApplied = { appearance -> viewModel.tabs.forEach { it.recordHistory() }; onApplyAppearance(appearance) },
         rendererBackend = preferredBackend,
         onRendererBackendChanged = ::selectBackend,
@@ -1989,7 +2184,30 @@ sceneBuildError?.let { message ->
 }
 
 @Composable
-private fun DocumentTabs(viewModel: KrystalsViewModel, onClose: (Int) -> Unit) {
+private fun CanvasWarnDialogContent(
+    dontAskChecked: Boolean,
+    onDontAskCheckedChange: (Boolean) -> Unit,
+) {
+    Column {
+        Text(localized(
+            "当前晶胞原子数较多，使用 canvas 渲染可能造成异常帧率下降和卡顿。确认继续吗？",
+            "This cell contains many atoms; canvas rendering may cause severe frame drops and lag. Continue?",
+        ))
+        Row(
+            Modifier.fillMaxWidth().padding(top = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = dontAskChecked, onCheckedChange = onDontAskCheckedChange)
+            Text(
+                localized("不再提示", "Don't ask again"),
+                modifier = Modifier.clickable { onDontAskCheckedChange(!dontAskChecked) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun DocumentTabs(viewModel: KrystalsViewModel, onClose: (Int) -> Unit, onSelect: (Int) -> Unit) {
     val singleTab = viewModel.tabs.size == 1
     val tabBackground = if (singleTab) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant
     // Per v0.7.0: expand button on the left that opens a dropdown listing all tabs.
@@ -2028,7 +2246,7 @@ private fun DocumentTabs(viewModel: KrystalsViewModel, onClose: (Int) -> Unit) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(if (isCurrent) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
-                                .clickable { viewModel.select(index); tabsExpanded = false }
+                                .clickable { onSelect(index); tabsExpanded = false }
                                 .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -2062,7 +2280,7 @@ Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
                                 if (drag < -70f && index > 0) { viewModel.move(index, index - 1); drag = 0f }
                             },
                         )
-                    }.clickable { viewModel.select(index) },
+                    }.clickable { onSelect(index) },
                 ) {
                     Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(tab.name + if (tab.dirty) " •" else "", maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(145.dp))
@@ -2170,21 +2388,33 @@ private fun ElementLegend(entries: List<LegendEntry>, expanded: Boolean, onToggl
                                 // Initialize dragHeight to current displayed height.
                                 dragHeight = if (localExpanded) legendHeight else 0.dp
                             },
-                            onDragEnd = { isDragging = false },
+                            onDragEnd = {
+                                // Per v0.7.1: record legendHeight only at drag end, not during drag.
+                                // If above threshold (expanded), save the final finger height for
+                                // next click-expand. If below threshold (collapsed), keep the
+                                // previous legendHeight unchanged.
+                                if (dragHeight > collapseThreshold) {
+                                    legendHeight = dragHeight
+                                }
+                                isDragging = false
+                            },
                             onDragCancel = { isDragging = false },
                         ) { change, amount ->
                             change.consume()
                             val newHeight = (dragHeight - with(density) { amount.y.toDp() }).coerceIn(0.dp, 600.dp)
                             dragHeight = newHeight
                             if (newHeight > collapseThreshold) {
-                                // Above threshold: expanded state, record legendHeight.
+                                // Above threshold: expanded state.
+                                // Per v0.7.1: do NOT update legendHeight here — only at drag end.
+                                // Updating during drag would overwrite the remembered height as the
+                                // user drags down to collapse (e.g. 500→41), so the next click-expand
+                                // would restore to 41 instead of 500.
                                 if (!localExpanded) {
                                     localExpanded = true
                                     onExpandLatest()
                                 }
-                                legendHeight = newHeight
                             } else {
-                                // Below threshold: collapsed state, don't record legendHeight.
+                                // Below threshold: collapsed state.
                                 if (localExpanded) {
                                     localExpanded = false
                                     onToggleLatest()
@@ -2270,27 +2500,40 @@ private fun CommentsPanel(tab: DocumentTab, onDismiss: () -> Unit) {
             modifier = panelModifier,
         ) {
             val handleModifier = if (landscape) {
+                Modifier.fillMaxHeight().width(24.dp)
+            } else {
+                Modifier.fillMaxWidth().height(24.dp)
+            }
+            val dividerModifier = if (landscape) {
                 Modifier.fillMaxHeight().width(12.dp)
             } else {
                 Modifier.fillMaxWidth().height(12.dp)
             }
             val handle = @Composable {
+                // Per v0.8.1: 24.dp drag hit target around the original 12.dp visible divider so
+                // the resize handle is easier to grab; persist the ratio once when the drag ends
+                // (or is cancelled) instead of writing SharedPreferences on every drag frame.
                 Box(
                     Modifier
-                        .pointerInput(landscape) {
-                            detectDragGestures { change, amount ->
-                                change.consume()
-                                if (landscape) {
-                                    panelRatio = (panelRatio - amount.x / widthPx).coerceIn(0.2f, 0.95f)
-                                } else {
-                                    panelRatio = (panelRatio - amount.y / heightPx).coerceIn(0.2f, 0.95f)
-                                }
-                                panelPrefs.edit().putFloat(prefKey, panelRatio).apply()
-                            }
-                        }
                         .then(handleModifier)
-                        .background(MaterialTheme.colorScheme.outlineVariant),
-                )
+                        .pointerInput(landscape) {
+                            detectDragGestures(
+                                onDragEnd = { panelPrefs.edit().putFloat(prefKey, panelRatio).apply() },
+                                onDragCancel = { panelPrefs.edit().putFloat(prefKey, panelRatio).apply() },
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    if (landscape) {
+                                        panelRatio = (panelRatio - amount.x / widthPx).coerceIn(0.2f, 0.95f)
+                                    } else {
+                                        panelRatio = (panelRatio - amount.y / heightPx).coerceIn(0.2f, 0.95f)
+                                    }
+                                },
+                            )
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.then(dividerModifier).background(MaterialTheme.colorScheme.outlineVariant))
+                }
             }
             val content = @Composable {
                 Column(
@@ -2407,27 +2650,40 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
             // no height for the tabs/content — the cause of the blank landscape panel). The content
             // itself is wrapped in a single Column so the lambda can be reused for both layouts.
             val handleModifier = if (landscape) {
+                Modifier.fillMaxHeight().width(24.dp)
+            } else {
+                Modifier.fillMaxWidth().height(24.dp)
+            }
+            val dividerModifier = if (landscape) {
                 Modifier.fillMaxHeight().width(12.dp)
             } else {
                 Modifier.fillMaxWidth().height(12.dp)
             }
             val handle = @Composable {
+                // Per v0.8.1: 24.dp drag hit target around the original 12.dp visible divider so
+                // the resize handle is easier to grab; persist the ratio once when the drag ends
+                // (or is cancelled) instead of writing SharedPreferences on every drag frame.
                 Box(
                     Modifier
-                        .pointerInput(landscape) {
-                            detectDragGestures { change, amount ->
-                                change.consume()
-                                if (landscape) {
-                                    panelRatio = (panelRatio - amount.x / widthPx).coerceIn(0.2f, 0.95f)
-                                } else {
-                                    panelRatio = (panelRatio - amount.y / heightPx).coerceIn(0.2f, 0.95f)
-                                }
-                                panelPrefs.edit().putFloat(prefKey, panelRatio).apply()
-                            }
-                        }
                         .then(handleModifier)
-                        .background(MaterialTheme.colorScheme.outlineVariant),
-                )
+                        .pointerInput(landscape) {
+                            detectDragGestures(
+                                onDragEnd = { panelPrefs.edit().putFloat(prefKey, panelRatio).apply() },
+                                onDragCancel = { panelPrefs.edit().putFloat(prefKey, panelRatio).apply() },
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    if (landscape) {
+                                        panelRatio = (panelRatio - amount.x / widthPx).coerceIn(0.2f, 0.95f)
+                                    } else {
+                                        panelRatio = (panelRatio - amount.y / heightPx).coerceIn(0.2f, 0.95f)
+                                    }
+                                },
+                            )
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.then(dividerModifier).background(MaterialTheme.colorScheme.outlineVariant))
+                }
             }
             val content = @Composable {
                 Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
@@ -3421,7 +3677,8 @@ localized(
                 filtered == null -> {}
                 filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                    items(filtered) { item ->
+                    // Per v0.8.1: stable key so filter/search updates keep item identity (scroll + reuse).
+                    items(filtered, key = { it.materialId }) { item ->
                         Card(
                             enabled = downloadingId == null,
                             onClick = {
@@ -3601,7 +3858,8 @@ private fun CodSearchScreen(
                 filtered == null -> {}
                 filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                    items(filtered) { item ->
+                    // Per v0.8.1: stable key so filter/search updates keep item identity (scroll + reuse).
+                    items(filtered, key = { it.fileId }) { item ->
                         val isExact = CrystallographyOpenDatabase.isExactMatch(item, query, mode)
                         Card(
                             enabled = downloadingId == null,
@@ -3826,7 +4084,7 @@ private fun MpCautionDialog(preferences: SharedPreferences, onDismiss: () -> Uni
 }
 
 @Composable
-private fun AboutScreen(onBack: () -> Unit, onCheckUpdates: () -> Unit = {}, isCheckingUpdates: Boolean = false) {
+private fun AboutScreen(onBack: () -> Unit, onCheckUpdates: () -> Unit = {}, isCheckingUpdates: Boolean = false, updateMessage: String? = null) {
     BackHandler(enabled = true) { onBack() }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.navigationBars)) {
         TopAppBar(
@@ -3859,6 +4117,12 @@ private fun AboutScreen(onBack: () -> Unit, onCheckUpdates: () -> Unit = {}, isC
                     Spacer(Modifier.width(8.dp))
                 }
                 Text(localized("检查更新", "Check for Updates"))
+            }
+            // Per v0.7.1: show update check result directly on the About screen
+            // (previously used showMessage/Snackbar which was hidden behind this full-screen overlay).
+            if (updateMessage != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(updateMessage, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.height(24.dp))
             Text(localized("关于作者", "About the author"), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.padding(bottom = 8.dp))
