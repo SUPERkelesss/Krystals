@@ -108,7 +108,13 @@ class CrystalSceneBuilder {
             )
         }
 
-        val neighbors = CoordinationAnalyzer.neighbors(analysis, showBonds = true)
+        // Polyhedron faces are only built for sites in polyhedronSiteIds; skip the full
+        // coordination-neighbour table when none are selected (the common case).
+        val neighbors = if (options.polyhedronSiteIds.isEmpty()) {
+            emptyMap()
+        } else {
+            CoordinationAnalyzer.neighbors(analysis, showBonds = true)
+        }
         analysis.atoms.asSequence()
             .filter { (!it.isShell || it.isBoundaryImage) && it.siteId in options.polyhedronSiteIds }
             .forEach { center ->

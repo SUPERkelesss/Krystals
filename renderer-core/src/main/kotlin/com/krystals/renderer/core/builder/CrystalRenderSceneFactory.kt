@@ -19,21 +19,26 @@ object CrystalRenderSceneFactory {
         structuralExpansion: Boolean = false,
     ): RenderScene {
         val atoms = analysis.atoms
-        val atomMaterials = atoms.associate { atom ->
+        // Material colour depends only on the site id, and radius only on the element symbol —
+        // deduplicate expanded atoms before building these tables so repeated symmetry images
+        // don't re-resolve the same palette lookup (N atoms → M unique sites / K unique elements).
+        val uniqueSiteAtoms = atoms.distinctBy { it.siteId }
+        val uniqueElementSymbols = atoms.distinctBy { it.species.symbol }
+        val atomMaterials = uniqueSiteAtoms.associate { atom ->
             atom.siteId to Material(
                 argb = RenderPalette.resolveSiteArgb(atom.siteId, atom.species.symbol, renderConfiguration),
                 opacity = appearance.atomOpacity.toDouble(),
                 reflective = appearance.reflectionEnabled,
             )
         }
-        val bondMaterials = atoms.associate { atom ->
+        val bondMaterials = uniqueSiteAtoms.associate { atom ->
             atom.siteId to Material(
                 argb = RenderPalette.resolveSiteArgb(atom.siteId, atom.species.symbol, renderConfiguration),
                 opacity = appearance.bondOpacity.toDouble(),
                 reflective = appearance.bondReflectionEnabled,
             )
         }
-        val polyhedronMaterials = atoms.associate { atom ->
+        val polyhedronMaterials = uniqueSiteAtoms.associate { atom ->
             atom.siteId to Material(
                 argb = RenderPalette.resolveSiteArgb(atom.siteId, atom.species.symbol, renderConfiguration),
                 opacity = appearance.polyhedronOpacity.toDouble(),
@@ -50,7 +55,7 @@ object CrystalRenderSceneFactory {
                 showBonds = showBonds,
                 // Polyhedra are selected in the display panel; appearance only controls material.
                 polyhedronSiteIds = polyhedronSiteIds,
-                atomRadiusByElement = atoms.associate { it.species.symbol to RenderPalette.defaultRadius(it.species.symbol) },
+                atomRadiusByElement = uniqueElementSymbols.associate { it.species.symbol to RenderPalette.defaultRadius(it.species.symbol) },
                 atomMaterialBySite = atomMaterials,
                 bondMaterialBySite = bondMaterials,
                 polyhedronMaterialBySite = polyhedronMaterials,
