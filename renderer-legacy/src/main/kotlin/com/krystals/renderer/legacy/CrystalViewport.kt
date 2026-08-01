@@ -82,7 +82,7 @@ private data class AtomRenderable(
     override val depthLayer = 2
 }
 
-private data class BondRenderable(val a: ProjectedAtom, val b: ProjectedAtom, val width: Float) : Renderable {
+private data class BondRenderable(val a: ProjectedAtom, val b: ProjectedAtom, val width: Float, val isHBond: Boolean = false) : Renderable {
     // Per v0.5.3a: sort by the bond's GEOMETRIC CENTRE depth (average of its two endpoints' z).
     // +Z is toward the viewer (larger z = closer). v0.5.2a used the nearest endpoint (maxOf), which
     // sorted a mostly-far bond as if fully near and let it paint over closer atoms — the opposite
@@ -563,7 +563,12 @@ private fun LegacyCanvasViewport(
                     val externalBond = b.atom.isExternalShell
                     if (externalBond && !bond.rule.shouldExtendAcrossCell(a.atom.siteId, true)) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(3f, 32f)
-                    addAll(splitBondRenderables(a, b, width))
+                    // Per v0.8.1: H-bonds are a single gray dotted line (no split-cylinder).
+                    if (bond.rule.isHBond) {
+                        add(BondRenderable(a, b, width, isHBond = true))
+                    } else {
+                        addAll(splitBondRenderables(a, b, width))
+                    }
                 }
             }
             if (visibility.polyhedronSites.isNotEmpty()) {
@@ -618,7 +623,7 @@ private fun LegacyCanvasViewport(
                 // fog amount; opacity is unchanged. Bonds split at the midpoint so each half fades by
                 // its endpoint atom's depth (continuous fade into the atoms).
                 is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, renderable.lockedHighlight, appearance, renderConfiguration, dofFog(renderable.depth), bgColor, reflection)
-                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, appearance, renderConfiguration, visibility.hiddenSites, ::dofFog, bgColor, reflection)
+                is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, renderable.isHBond, appearance, renderConfiguration, visibility.hiddenSites, ::dofFog, bgColor, reflection)
                 is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance, dofFog(renderable.depth), bgColor, reflection)
                 is DihedralPlaneRenderable -> drawDihedralPlane(renderable, appearance, dofFog(renderable.depth), bgColor)
             }
@@ -779,6 +784,7 @@ private fun DrawScope.drawBond(
     a: ProjectedAtom,
     b: ProjectedAtom,
     width: Float,
+    isHBond: Boolean,
     appearance: ViewerAppearance,
     renderConfiguration: RenderConfiguration,
     hiddenSites: Set<String> = emptySet(),
@@ -805,6 +811,11 @@ private fun DrawScope.drawBond(
     val end = b.point - dir * if (bHidden) 0f else b.radius
     val clipped = end - start
     if (clipped.getDistance() < 0.001f) return
+    // Per v0.8.1: H-bonds are drawn as a single gray dotted line instead of split cylinders.
+    if (isHBond) {
+        drawLine(Color.Gray.copy(alpha = 0.31f), start, end, strokeWidth = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 6f)))
+        return
+    }
     val perp = Offset(-dir.y, dir.x)
 
     val light = legacyLightDirection(appearance.lightAzimuth, appearance.lightElevation)

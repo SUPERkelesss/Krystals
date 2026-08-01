@@ -45,7 +45,7 @@ object CrystalImageExporter {
         override val depthLayer = 2
     }
 
-    private data class BondPrimitive(val a: Point, val b: Point, val width: Float) : RenderPrimitive {
+    private data class BondPrimitive(val a: Point, val b: Point, val width: Float, val isHBond: Boolean = false) : RenderPrimitive {
         // Per v0.5.3a: sort by the bond's GEOMETRIC CENTRE depth (average endpoint z). +Z toward
         // viewer (larger z = closer). v0.5.2a's nearest-endpoint (maxOf) sorted mostly-far bonds
         // as fully near and let them occlude closer atoms.
@@ -317,7 +317,12 @@ object CrystalImageExporter {
                     val externalBond = b.isExternalShell
                     if (externalBond && !bond.rule.shouldExtendAcrossCell(a.siteId, true)) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(3f, 32f)
-                    addAll(splitBondPrimitives(a, b, width))
+                    // Per v0.8.1: H-bonds are a single gray dotted line (no split-cylinder).
+                    if (bond.rule.isHBond) {
+                        add(BondPrimitive(a, b, width, isHBond = true))
+                    } else {
+                        addAll(splitBondPrimitives(a, b, width))
+                    }
                 }
             }
             if (visibility.polyhedronSites.isNotEmpty()) {
@@ -361,7 +366,7 @@ object CrystalImageExporter {
                 // Per v0.5.3a: each object's colour blends toward the background by its fog amount;
                 // opacity is unchanged. Bonds split at the midpoint (each half by its endpoint's fog).
                 is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, highlightedAtomIds, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, dofFog(primitive.depth), bgArgb)
-                is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, appearance, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, visibility.hiddenSites, ::dofFog, bgArgb)
+                is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, primitive.isHBond, appearance, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, visibility.hiddenSites, ::dofFog, bgArgb)
                 is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, controller.rotation, dofFog(primitive.depth), bgArgb)
                 is DihedralPlanePrimitive -> drawDihedralPlanePrimitive(canvas, primitive, appearance, dofFog(primitive.depth), bgArgb)
             }
@@ -497,7 +502,7 @@ object CrystalImageExporter {
         canvas.drawCircle(point.x, point.y, point.radius + if (point.atomId in selectedAtomIds) 3f else 0f, paint)
 }
 
-private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dofFog: (Double) -> Float, bgArgb: Int = 0xFF101014.toInt()) {
+private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, isHBond: Boolean, appearance: ViewerAppearance, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), hiddenSites: Set<String> = emptySet(), dofFog: (Double) -> Float, bgArgb: Int = 0xFF101014.toInt()) {
         // Per v0.5.3a: depth cueing fades each half's COLOUR toward the background by its endpoint's
         // fog; opacity is unchanged (bondOpacity only). Split at midpoint → continuous fade.
         val opacity = appearance.bondOpacity.coerceIn(0f, 1f)
@@ -521,6 +526,18 @@ private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, appearanc
         val clippedDx = endX - startX
         val clippedDy = endY - startY
         if (sqrt(clippedDx * clippedDx + clippedDy * clippedDy) < 0.001f) return
+        // Per v0.8.1: H-bonds are drawn as a single gray dotted line instead of split cylinders.
+        if (isHBond) {
+            val paint = android.graphics.Paint().apply {
+                color = android.graphics.Color.GRAY
+                alpha = 80
+                strokeWidth = 2f
+                pathEffect = android.graphics.DashPathEffect(floatArrayOf(4f, 6f), 0f)
+                isAntiAlias = true
+            }
+            canvas.drawLine(startX, startY, endX, endY, paint)
+            return
+        }
         val perpX = -dirY
         val perpY = dirX
 
