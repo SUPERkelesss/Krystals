@@ -39,6 +39,7 @@ import com.krystals.interaction.measure.DistanceTool
 import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.measure.MeasurementSelection
 import com.krystals.renderer.core.primitive.AtomInstance
+import com.krystals.renderer.core.scene.GatheredAtomGrouper
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.scene.SceneBounds
 import com.krystals.renderer.core.scene.allBounds
@@ -446,21 +447,32 @@ private fun FilamentLegacyStyleOverlay(
             textSize = 40f
             setShadowLayer(5f, 1f, 1f, android.graphics.Color.BLACK)
         }
+        // Per v0.8.2: compute gathered group membership from the AtomInstance atoms.
+        val atomImages = atomsById.values.map { it.atom }
+        val colorBySite = atomsById.values.associate { it.atom.siteId to it.material.argb }
+        val groupByMemberId = GatheredAtomGrouper.groupByAtomId(atomImages, colorBySite)
+
         inspectionIds.forEach { id ->
             val atom = atomsById[id]?.atom ?: return@forEach
             val anchor = point(id) ?: return@forEach
             val locked = id in state.document.inspection.lockedInspectedAtomIds
-            val valence = bondValenceBySite[atom.siteId]?.let { "  s = %.2f".format(it) }.orEmpty()
-            val fractional = atom.fractionalCoordinate
-            val lines = listOf(
-                "${atom.species.symbol}  ${atom.siteLabel}  occ ${atom.occupancy}$valence",
-                "(${fractional.x.formatFract()}, ${fractional.y.formatFract()}, ${fractional.z.formatFract()})",
-            )
+            // Per v0.8.2: if atom belongs to a gathered group, show up to 3 members.
+            val group = groupByMemberId[id]
+            val displayIds = group?.memberAtomIds ?: listOf(id)
+            val displayMembers = displayIds.take(3).mapNotNull { mid -> atomsById[mid]?.atom }
+            if (displayMembers.isEmpty()) return@forEach
+            val lines = displayMembers.flatMapIndexed { index, m ->
+                val valence = bondValenceBySite[m.siteId]?.let { "  s = %.2f".format(it) }.orEmpty()
+                val f = m.fractionalCoordinate
+                val memberLines = listOf(
+                    "${m.species.symbol}  ${m.siteLabel}  occ ${m.occupancy}$valence",
+                    "(${f.x.formatFract()}, ${f.y.formatFract()}, ${f.z.formatFract()})",
+                )
+                if (index > 0) listOf("---") + memberLines else memberLines
+            } + if (displayIds.size > 3) listOf("...") else emptyList()
             val maxWidth = lines.maxOf(infoPaint::measureText)
             val lineHeight = infoPaint.fontMetrics.run { descent - ascent }
             val pad = 16f
-            // Anchor at Filament's visual sphere radius (no Legacy pixel clamp) so the info
-            // panel clears the rendered sphere at any zoom level.
             val atomRadius = (atomsById.getValue(id).radius * scale).toFloat()
             val left = anchor.x + atomRadius + 14f
             val top = anchor.y - atomRadius - 14f - lines.size * lineHeight - pad

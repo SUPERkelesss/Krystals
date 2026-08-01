@@ -400,8 +400,9 @@ object CrystalImageExporter {
         // Per v0.3.0: draw locked (persistent) + active measurement/info windows.
         lockedMeasurements.forEach { m -> drawMeasurement(canvas, snapshot, points, m.atomIds, m.mode, true) }
         drawMeasurement(canvas, snapshot, points, selectedAtomIds, measurementMode, false)
-        lockedInspectedAtomIds.forEach { id -> drawAtomInfo(canvas, points, id, true, bondValenceBySite) }
-        if (inspectedAtomId != null && inspectedAtomId !in lockedInspectedAtomIds) drawAtomInfo(canvas, points, inspectedAtomId, false, bondValenceBySite)
+        fun gFor(a: Long?) = a?.let { groupByMemberId[it]?.memberAtomIds }.orEmpty()
+        lockedInspectedAtomIds.forEach { id -> drawAtomInfo(canvas, points, id, true, bondValenceBySite, gFor(id)) }
+        if (inspectedAtomId != null && inspectedAtomId !in lockedInspectedAtomIds) drawAtomInfo(canvas, points, inspectedAtomId, false, bondValenceBySite, gFor(inspectedAtomId))
         return bitmap
     }
 
@@ -946,21 +947,37 @@ val ez = if (useExpansion) snapshot.expansion.z else 1
         canvas.drawText(label, anchorX + 12f, anchorY - 12f, paint)
     }
 
-    private fun drawAtomInfo(canvas: Canvas, points: List<Point>, inspectedAtomId: Long?, locked: Boolean, bondValenceBySite: Map<String, Double> = emptyMap()) {
-        val atom = inspectedAtomId?.let { id -> points.firstOrNull { it.atomId == id } } ?: return
-        val bvs = bondValenceBySite[atom.siteId]
-        val bvsText = bvs?.let { "  s = %.2f".format(it) } ?: ""
-        val label = "${atom.element}  ${atom.siteLabel}  occ ${atom.occupancy}$bvsText\n(${atom.fractional.x.formatFract()}, ${atom.fractional.y.formatFract()}, ${atom.fractional.z.formatFract()})"
+    private fun drawAtomInfo(canvas: Canvas, points: List<Point>, inspectedAtomId: Long?, locked: Boolean, bondValenceBySite: Map<String, Double> = emptyMap(), gatheredMemberIds: List<Long> = emptyList()) {
+        val label: String; val anchorX: Float; val anchorY: Float; val anchorR: Float
+        // Per v0.8.2: gathered group info window — up to 3 member sites, "---" separated.
+        if (gatheredMemberIds.isNotEmpty()) {
+            val members = gatheredMemberIds.mapNotNull { id -> points.firstOrNull { it.atomId == id } }
+            val first = members.firstOrNull() ?: return
+            anchorX = first.x; anchorY = first.y; anchorR = first.radius
+            val display = members.take(3)
+            label = display.joinToString("\n---\n") { m ->
+                val b = bondValenceBySite[m.siteId]
+                val bt = b?.let { "  s = %.2f".format(it) } ?: ""
+                "${m.element}  ${m.siteLabel}  occ ${m.occupancy}$bt\n(${m.fractional.x.formatFract()}, ${m.fractional.y.formatFract()}, ${m.fractional.z.formatFract()})"
+            } + if (members.size > 3) "\n..." else ""
+        } else {
+            val atom = inspectedAtomId?.let { id -> points.firstOrNull { it.atomId == id } } ?: return
+            anchorX = atom.x; anchorY = atom.y; anchorR = atom.radius
+            val bvs = bondValenceBySite[atom.siteId]
+            val bvsText = bvs?.let { "  s = %.2f".format(it) } ?: ""
+            val fractional = atom.fractional
+            label = "${atom.element}  ${atom.siteLabel}  occ ${atom.occupancy}$bvsText\n(${fractional.x.formatFract()}, ${fractional.y.formatFract()}, ${fractional.z.formatFract()})"
+        }
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 40f; setShadowLayer(5f, 1f, 1f, Color.BLACK) }
         val lines = label.split('\n')
         val widths = lines.map { line -> paint.measureText(line) }
         val maxWidth = widths.maxOrNull() ?: 0f
         val lineHeight = paint.fontMetrics.run { descent - ascent }
         val pad = 16f
-        val boxLeft = atom.x + atom.radius + 14f
-        val boxTop = atom.y - atom.radius - 14f - lines.size * lineHeight - pad
+        val boxLeft = anchorX + anchorR + 14f
+        val boxTop = anchorY - anchorR - 14f - lines.size * lineHeight - pad
         val boxRight = boxLeft + maxWidth + pad * 2
-        val boxBottom = atom.y - atom.radius - 14f + pad
+        val boxBottom = anchorY - anchorR - 14f + pad
         val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = if (locked) Color.argb((0.82f * 255).toInt(), 153, 102, 204) else Color.argb((0.65f * 255).toInt(), 0, 0, 0)
             style = Paint.Style.FILL
