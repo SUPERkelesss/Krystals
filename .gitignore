@@ -27,3 +27,6 @@ app/release/
 # Activation code secrets — never commit (paid module).
 activation-codes.txt
 activation-secrets.gradle.kts
+
+# Hermes agent plans/session artifacts
+.hermes/
