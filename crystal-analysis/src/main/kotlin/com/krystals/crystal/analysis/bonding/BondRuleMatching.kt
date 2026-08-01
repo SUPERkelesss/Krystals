@@ -65,7 +65,7 @@ object BondRuleMatching {
         // Cs in CsCl). The grid cannot represent "an atom to its own non-zero lattice translation",
         // so this path is handled directly with the minimum-image convention.
         if (rule.siteA == rule.siteB) {
-            val offsets = structure.latticeOffsets()
+            val offsets = structure.latticeOffsets
             fun minImage(x: Vec3, y: Vec3): Double {
                 var best = Double.POSITIVE_INFINITY
                 for (off in offsets) {
@@ -94,7 +94,7 @@ object BondRuleMatching {
         if (max > grid.cellSize) {
             val b = atoms.filter { it.siteId == rule.siteB }
             if (b.isEmpty()) return false
-            val offsets = structure.latticeOffsets()
+            val offsets = structure.latticeOffsets
             fun minImage(x: Vec3, y: Vec3): Double {
                 var best = Double.POSITIVE_INFINITY
                 for (off in offsets) {
@@ -161,7 +161,7 @@ class BondGrid(
         }
         map.mapValues { it.value.toList() }
     }
-    private val latticeOffsets: List<Vec3> = structure.latticeOffsets()
+    private val latticeOffsets: List<Vec3> = structure.latticeOffsets
 
     /** Atoms of [siteId] near any of [center]'s 27 periodic-image positions (within cellSize). */
     fun nearbyOfSite(center: Vec3, siteId: String): List<AtomImage> {
@@ -193,22 +193,10 @@ class BondGrid(
     )
 }
 
-/** The 27 lattice-image offsets {-1,0,1}³ × (a,b,c) for [structure]'s cell. */
-private fun CrystalStructure.latticeOffsets(): List<Vec3> {
-    val la = lattice.matrix.a
-    val lb = lattice.matrix.b
-    val lc = lattice.matrix.c
-    val offsets = ArrayList<Vec3>(27)
-    for (dx in -1..1) for (dy in -1..1) for (dz in -1..1) {
-        offsets += la * dx.toDouble() + lb * dy.toDouble() + lc * dz.toDouble()
-    }
-    return offsets
-}
-
 /** Minimum-image distance between [x] and [y] across [structure]'s 27 lattice offsets. */
 private fun minImageDistance(x: Vec3, y: Vec3, structure: CrystalStructure): Double {
     var best = Double.POSITIVE_INFINITY
-    for (off in structure.latticeOffsets()) {
+    for (off in structure.latticeOffsets) {
         val d = distance(x, y + off)
         if (d < best) best = d
     }

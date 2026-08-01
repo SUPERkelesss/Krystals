@@ -49,8 +49,9 @@ object PeriodicTableData {
 
     fun mass(symbol: String) = masses[symbol] ?: symbols.indexOf(symbol).takeIf { it >= 0 }?.let { (it + 1) * 2.25 }
     fun covalentRadius(symbol: String) = radii[symbol] ?: 1.25
+    private val elementPattern = Regex("[A-Z][a-z]?")
     fun normalizeElement(value: String): String {
-        val match = Regex("[A-Z][a-z]?").find(value.trim()) ?: return "X"
+        val match = elementPattern.find(value.trim()) ?: return "X"
         return match.value.takeIf { it in symbols } ?: "X"
     }
 

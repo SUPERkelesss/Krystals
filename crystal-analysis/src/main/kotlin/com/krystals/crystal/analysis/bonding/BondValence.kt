@@ -10,14 +10,23 @@ import com.krystals.crystal.data.PeriodicTableData
 import kotlin.math.abs
 import kotlin.math.exp
 
-/** Per v0.6.5: classify an element as metal (true) or non-metal (false). */
-private fun isMetal(symbol: String): Boolean = symbol !in setOf(
+/** Per v0.6.5: elements classified as non-metals. Hoisted to a single shared set so [isMetal] does
+ *  not rebuild the set on every call (kept in sync with the identical set in editing/CrystalEditor.kt). */
+private val NON_METALS: Set<String> = setOf(
     "H", "He", "B", "C", "N", "O", "F", "Ne",
     "Si", "P", "S", "Cl", "Ar",
     "Ge", "As", "Se", "Br", "Kr",
     "Sb", "Te", "I", "Xe",
     "At", "Rn", "Po",
 )
+
+/** Per v0.6.5: classify an element as metal (true) or non-metal (false). */
+private fun isMetal(symbol: String): Boolean = symbol !in NON_METALS
+
+/** Atomic-number index lookup for [PeriodicTableData.symbols], built once instead of an O(118)
+ *  `indexOf` scan per comparison. */
+private val symbolIndex: Map<String, Int> =
+    PeriodicTableData.symbols.withIndex().associate { it.value to it.index }
 
 /** Per v0.6.5: order a site pair so that metal comes first; if both same type, larger atomic number first. */
 private fun orderedSites(siteA: Site, siteB: Site): Pair<Site, Site> {
@@ -27,8 +36,8 @@ private fun orderedSites(siteA: Site, siteB: Site): Pair<Site, Site> {
         aMetal && !bMetal -> siteA to siteB
         !aMetal && bMetal -> siteB to siteA
         else -> {
-            val aNum = PeriodicTableData.symbols.indexOf(siteA.species.symbol)
-            val bNum = PeriodicTableData.symbols.indexOf(siteB.species.symbol)
+            val aNum = symbolIndex[siteA.species.symbol] ?: -1
+            val bNum = symbolIndex[siteB.species.symbol] ?: -1
             if (aNum >= bNum) siteA to siteB else siteB to siteA
         }
     }
@@ -79,9 +88,18 @@ object BondValence {
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,
         epsilon: Double = 0.45,
+    ): SmartIonicResult = smartIonicRules(structure, bondConfiguration, epsilon, SymmetryExpander.expand(structure))
+
+    /** Internal overload that reuses pre-expanded atoms so callers that expanded for a size guard
+     *  (e.g. CrystalEditor.smartOrBondingRules) don't expand the same structure a second time. */
+    internal fun smartIonicRules(
+        structure: CrystalStructure,
+        bondConfiguration: BondConfiguration,
+        epsilon: Double,
+        atoms: List<AtomImage>,
     ): SmartIonicResult {
         val analysis = try {
-            analyze(structure)
+            analyze(atoms, structure)
         } catch (_: VoronoiSearchLimitExceededException) {
             return SmartIonicResult(emptyList(), success = false)
         }
@@ -121,9 +139,12 @@ object BondValence {
         // Per v0.5.2b: large cells would make this synchronous BVS computation (called from a
         // remember() in the viewer) stall the UI. Skip it above the smart-ionic atom limit; the
         // atom-info window then simply omits "s = X.XX" for those structures.
-        if (SymmetryExpander.expand(structure).size > SMART_IONIC_ATOM_LIMIT) return emptyMap()
+        // Expand once and reuse the atoms for both the size guard and the analysis (previously the
+        // guard expanded again inside analyze()).
+        val atoms = SymmetryExpander.expand(structure)
+        if (atoms.size > SMART_IONIC_ATOM_LIMIT) return emptyMap()
         val analysis = try {
-            analyze(structure)
+            analyze(atoms, structure)
         } catch (_: VoronoiSearchLimitExceededException) {
             return emptyMap()
         } ?: return emptyMap()
@@ -174,8 +195,12 @@ object BondValence {
         val anyResolved: Boolean,
     )
 
-    private fun analyze(structure: CrystalStructure): Analysis? {
-        val atoms = SymmetryExpander.expand(structure)
+    private fun analyze(structure: CrystalStructure): Analysis? =
+        analyze(SymmetryExpander.expand(structure), structure)
+
+    /** Analysis over pre-expanded atoms so callers that already expanded (e.g. for a size guard)
+     *  don't expand the same structure twice. */
+    private fun analyze(atoms: List<AtomImage>, structure: CrystalStructure): Analysis? {
         if (atoms.size < 2) return null
         val atomById = atoms.associateBy { it.id }
         val atomsBySiteId = atoms.groupBy { it.siteId }

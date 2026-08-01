@@ -17,7 +17,7 @@ data class BondRule(
         require(minAngstrom >= 0.0 && maxAngstrom >= minAngstrom)
     }
 
-    val key: String get() = listOf(siteA, siteB).sorted().joinToString("\u0000")
+    val key: String = listOf(siteA, siteB).sorted().joinToString("\u0000")
 
     /** True if this rule allows extending across the cell boundary when the atom of [insideSiteId]
      *  is inside the unit cell and the other atom is an external shell. */

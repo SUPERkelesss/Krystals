@@ -15,10 +15,13 @@ object SpaceGroupCatalog {
         SpaceGroup(symbol, number, crystalSystem(number), pointGroup(number))
     }
 
-    fun find(name: String): SpaceGroup? {
-        val normalized = normalize(name)
-        return all.firstOrNull { normalize(it.symbol) == normalized }
-    }
+    /** Pre-normalised lookup so [find] is O(1) instead of scanning all 230 symbols per call. */
+    private val byNormalizedName: Map<String, SpaceGroup> = all.associateBy { normalize(it.symbol) }
+
+    /** Parsed symmetry operations per space-group number, filled lazily on first use. */
+    private val operationsCache = mutableMapOf<Int, List<SymmetryOperation>>()
+
+    fun find(name: String): SpaceGroup? = byNormalizedName[normalize(name)]
 
     fun resolve(symbol: String, number: Int? = null): SpaceGroup {
         // Per v0.6.5: strip COD hex/rhombohedral setting suffixes (:H, :R).
@@ -37,8 +40,10 @@ object SpaceGroupCatalog {
 
     fun operations(name: String): List<SymmetryOperation> {
         val number = find(name)?.number ?: return listOf(SymmetryOperation.IDENTITY)
-        return SpaceGroupData.operationsTable[number]?.map(SymmetryOperation::parse)
-            ?: listOf(SymmetryOperation.IDENTITY)
+        return operationsCache.getOrPut(number) {
+            SpaceGroupData.operationsTable[number]?.map(SymmetryOperation::parse)
+                ?: listOf(SymmetryOperation.IDENTITY)
+        }
     }
 
     val RHOMBOHEDRAL_GROUPS: Set<Int> = setOf(146, 148, 155, 160, 161, 166, 167)

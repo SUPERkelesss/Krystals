@@ -2,7 +2,6 @@ package com.krystals.crystal.io
 
 import com.krystals.crystal.analysis.bonding.BondConfiguration
 import com.krystals.crystal.analysis.bonding.BondRule
-import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.editing.CrystalEditor
 import com.krystals.crystal.analysis.model.PeriodicTable
 import com.krystals.crystal.core.coordinate.CartesianCoordinate
@@ -39,8 +38,10 @@ data class CifLoop(
     override val end: Int,
 ) : CifItem {
     val rowCount: Int get() = if (tags.isEmpty()) 0 else values.size / tags.size
+    /** Tag → column index, built once so per-row lookups are O(1) instead of a linear scan. */
+    private val tagIndex: Map<String, Int> = tags.mapIndexed { index, tag -> tag.lowercase() to index }.toMap()
     fun value(row: Int, tag: String): String? {
-        val column = tags.indexOfFirst { it.equals(tag, ignoreCase = true) }
+        val column = tagIndex[tag.lowercase()] ?: -1
         if (column < 0 || row !in 0 until rowCount) return null
         return values[row * tags.size + column]
     }
@@ -97,6 +98,8 @@ private val replacementPrefixes = listOf(
         "_symmetry_space_group_name_h-m", "_space_group_name_h-m_alt", "_symmetry_int_tables_number",
         "_space_group_it_number",
     )
+    /** Trailing parenthesized uncertainty like `1.234(5)` stripped before numeric parsing. */
+    private val numericParenRegex = Regex("\\([0-9]+\\)$")
 
     fun parse(source: String): CifDocument {
         val tokens = tokenize(source)
@@ -282,42 +285,9 @@ private val replacementPrefixes = listOf(
             )
         }
 
-        val ruleLoop = block.loopContaining("_krystals_bond_rule_site_a")
-        val vestaLoop = block.loopContaining("_vesta_bond_site_a")
-        val geomLoop = block.loopContaining("_geom_bond_atom_site_label_1")
-        val krystalsRules = if (ruleLoop == null) emptyList() else (0 until ruleLoop.rowCount).mapNotNull { row ->
-            val labelA = ruleLoop.firstValue(row, "_krystals_bond_rule_site_a") ?: return@mapNotNull null
-            val labelB = ruleLoop.firstValue(row, "_krystals_bond_rule_site_b") ?: return@mapNotNull null
-            val siteA = sites.firstOrNull { it.label == labelA }?.id ?: labelA
-            val siteB = sites.firstOrNull { it.label == labelB }?.id ?: labelB
-            val min = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_min_distance")) ?: return@mapNotNull null
-            val max = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_max_distance")) ?: return@mapNotNull null
-val extendAtoB = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_extend_a_to_b"))?.let { it >= 0.5 }
-    ?: numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_extend"))?.let { it >= 0.5 } // backward compat
-    ?: false
-val extendBtoA = numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_extend_b_to_a"))?.let { it >= 0.5 }
-    ?: numeric(ruleLoop.firstValue(row, "_krystals_bond_rule_extend"))?.let { it >= 0.5 } // backward compat
-    ?: false
-runCatching { BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extendAtoB, extendBtoA) }.getOrNull()
-        }
-        val vestaRules = if (vestaLoop == null) emptyList() else (0 until vestaLoop.rowCount).mapNotNull { row ->
-            val labelA = vestaLoop.firstValue(row, "_vesta_bond_site_a") ?: return@mapNotNull null
-            val labelB = vestaLoop.firstValue(row, "_vesta_bond_site_b") ?: return@mapNotNull null
-            val siteA = sites.firstOrNull { it.label == labelA }?.id ?: labelA
-            val siteB = sites.firstOrNull { it.label == labelB }?.id ?: labelB
-            val min = numeric(vestaLoop.firstValue(row, "_vesta_bond_min_distance")) ?: 0.1
-            val max = numeric(vestaLoop.firstValue(row, "_vesta_bond_max_distance"))
-                ?: (numeric(vestaLoop.firstValue(row, "_vesta_bond_distance"))?.plus(0.2) ?: return@mapNotNull null)
-            runCatching { BondRule(siteA, siteB, min, max, BondRuleSource.EXPLICIT) }.getOrNull()
-        }
-        val geomRules = if (geomLoop == null) emptyList() else (0 until geomLoop.rowCount).mapNotNull { row ->
-            val labelA = geomLoop.firstValue(row, "_geom_bond_atom_site_label_1") ?: return@mapNotNull null
-            val labelB = geomLoop.firstValue(row, "_geom_bond_atom_site_label_2") ?: return@mapNotNull null
-            val siteA = sites.firstOrNull { it.label == labelA }?.id ?: labelA
-            val siteB = sites.firstOrNull { it.label == labelB }?.id ?: labelB
-            val distance = numeric(geomLoop.firstValue(row, "_geom_bond_distance")) ?: return@mapNotNull null
-            runCatching { BondRule(siteA, siteB, 0.1, distance, BondRuleSource.EXPLICIT) }.getOrNull()
-        }
+        // Per v0.7.1: bond rules are never read back from CIF (always regenerated via
+        // smart-ionic/bonding radii after parsing), so the _krystals_bond_rule_*/_vesta_bond_*/
+        // _geom_bond_* loops are intentionally skipped here.
 
         val colorLoop = block.loopContaining("_krystals_element_color_symbol")
         val colorOverrides = if (colorLoop == null) emptyMap() else (0 until colorLoop.rowCount).mapNotNull { row ->
@@ -492,7 +462,7 @@ runCatching { BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extendAtoB
     }
     private fun numeric(value: String?): Double? {
         if (value == null || value == "." || value == "?") return null
-        val central = unquote(value).replace(Regex("\\([0-9]+\\)$"), "")
+        val central = unquote(value).replace(numericParenRegex, "")
         return runCatching { parseFraction(central) }.getOrNull()
     }
     private fun uniqueSiteId(label: String, row: Int) = "${label.trim()}#${row + 1}"

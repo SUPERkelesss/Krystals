@@ -13,6 +13,8 @@ import com.krystals.crystal.core.periodic.PeriodicBoundary
 
 object BondDetector {
     const val MAX_RENDERED_ATOMS = 100_000
+    /** Shared zero-cell-offset constant, avoids allocating an Int3 per candidate pair. */
+    private val ZERO_OFFSET = Int3(0, 0, 0)
 
     // Per v0.5.3b: shell materialisation is the OOM hot spot. A 2-cell-thick shell covers
     // (ex+4)(ey+4)(ez+4) cells worth of atoms; a 1-cell-thick shell covers (ex+2)(ey+2)(ez+2). The
@@ -35,10 +37,12 @@ object BondDetector {
         return baseSize.toLong() * (ex + 4).toLong() * (ey + 4).toLong() * (ez + 4).toLong()
     }
 
-    /** Convenience overload that expands once; prefer the (baseSize, expansion) form when the
-     *  caller already has the expanded asymmetric unit. */
+    /** Convenience overload: expands once; prefer the (baseSize, expansion) form when the caller
+     *  already has the expanded asymmetric unit. Uses sites × operations as a safe upper bound for
+     *  the expanded count (special positions produce fewer images), avoiding a full expansion just
+     *  to count atoms — overestimating only makes the shell-size guard more conservative. */
     fun estimatePeakAtomCount(structure: CrystalStructure, expansion: Expansion): Long =
-        estimatePeakAtomCount(SymmetryExpander.expand(structure).size, expansion)
+        estimatePeakAtomCount(structure.sites.size * structure.effectiveSymmetryOperations.size, expansion)
 
     /** Choose the shell thickness for a structure. FULL unless its peak overflows
      *  [SHELL_DEGRADE_THRESHOLD]; then ONE_CELL unless that too overflows [SHELL_HARD_LIMIT]
@@ -235,10 +239,12 @@ object BondDetector {
         // the outward external neighbour — no ±2 materialisation needed. Candidates q are primary
         // atoms near c.cartesian - lat·off_b (so that |c − (q+off_b)| = |X − q| ≤ cellSize).
         for (c in centers) {
+            // Per v0.7.1: the centre's Cartesian vector is loop-invariant across the 27 neighbour-cell
+            // offsets; convert once per centre instead of once per (centre, delta) pair.
+            val cCartesian = c.cartesianCoordinate.toVec3()
             for (dxx in -1..1) for (dyy in -1..1) for (dzz in -1..1) {
                 val offB = Int3(c.cellOffset.x + dxx, c.cellOffset.y + dyy, c.cellOffset.z + dzz)
                 val latOff = la * offB.x.toDouble() + lb * offB.y.toDouble() + lc * offB.z.toDouble()
-                val cCartesian = c.cartesianCoordinate.toVec3()
                 val qx = cCartesian.x - latOff.x
                 val qy = cCartesian.y - latOff.y
                 val qz = cCartesian.z - latOff.z
@@ -251,6 +257,21 @@ object BondDetector {
                         val bCartesian = q.cartesianCoordinate.toVec3() + latOff
                         val d = distance(cCartesian, bCartesian)
                         if (d <= 0.0) continue
+                        // Quick reject: a pair beyond the auto covalent-radius window can only bond
+                        // through an explicit custom rule, so skip the string-key/map/BondRule
+                        // construction that the distance check below would discard anyway. This
+                        // avoids the expensive work for the common non-bond pair (typically the
+                        // large majority of candidates).
+                        val autoMaxD = PeriodicTable.covalentRadius(c.species.symbol) +
+                            PeriodicTable.covalentRadius(q.species.symbol) + 0.45
+                        if (d > autoMaxD) {
+                            val key = if (c.siteId < q.siteId) "${c.siteId}\u0000${q.siteId}" else "${q.siteId}\u0000${c.siteId}"
+                            if (key in disabledPairs) continue
+                            val customRule = custom[key]
+                            if (customRule == null || d < customRule.minAngstrom || d > customRule.maxAngstrom) continue
+                            // A custom rule extends the window and covers d; fall through to the
+                            // normal path below, which re-resolves the same customRule and bonds it.
+                        }
                         // Per v0.5.3b: BondRule.key sorts the two site ids and joins with NUL; reuse
                         // it so custom-rule + disabled-pair lookups match the rest of the engine (the
                         // legacy path built the same key inline — a plain-space join would miss rules).
@@ -267,7 +288,7 @@ object BondDetector {
                             BondRuleSource.AUTO,
                         )
                         if (d < rule.minAngstrom || d > rule.maxAngstrom) continue
-                        val bIsShell = offB != Int3(0, 0, 0)
+                        val bIsShell = offB != ZERO_OFFSET
                         val bAtom = if (bIsShell) getShellAtom(q, offB) else q
                         // Per v0.3.43: orient so the shell atom (when exactly one endpoint is shell) is atomB.
                         val (atomA, atomB) = when {
@@ -277,7 +298,7 @@ object BondDetector {
                         }
                         val bk = if (atomA.id < atomB.id) atomA.id to atomB.id else atomB.id to atomA.id
                         if (!seenBonds.add(bk)) continue
-                        result += Bond(atomA.id, atomB.id, d, rule, Int3(0, 0, 0))
+                        result += Bond(atomA.id, atomB.id, d, rule, ZERO_OFFSET)
                     }
                 }
             }
@@ -372,7 +393,7 @@ object BondDetector {
                             b.isShell && !a.isShell -> a to b
                             else -> a to b
                         }
-                        result += Bond(atomA.id, atomB.id, d, rule, Int3(0, 0, 0))
+                        result += Bond(atomA.id, atomB.id, d, rule, ZERO_OFFSET)
                     }
                 }
             }

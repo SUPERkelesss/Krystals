@@ -21,13 +21,30 @@ import com.krystals.crystal.data.BravaisLatticeData
 import com.krystals.crystal.data.PeriodicTableData
 import kotlin.math.abs
 
-/** Per v0.6.5: classify an element as metal (true) or non-metal (false). */
-private fun isMetal(symbol: String): Boolean = symbol !in setOf(
+/** Per v0.6.5: elements classified as non-metals. Hoisted to a single shared set so [isMetal] does
+ *  not rebuild the set on every call (kept in sync with the identical set in bonding/BondValence.kt). */
+private val NON_METALS: Set<String> = setOf(
     "H", "He", "B", "C", "N", "O", "F", "Ne",
     "Si", "P", "S", "Cl", "Ar",
     "Ge", "As", "Se", "Br", "Kr",
     "Sb", "Te", "I", "Xe",
     "At", "Rn", "Po",
+)
+
+/** Per v0.6.5: classify an element as metal (true) or non-metal (false). */
+private fun isMetal(symbol: String): Boolean = symbol !in NON_METALS
+
+/** Atomic-number index lookup for [PeriodicTableData.symbols], built once instead of an O(118)
+ *  `indexOf` scan per comparison. */
+private val symbolIndex: Map<String, Int> =
+    PeriodicTableData.symbols.withIndex().associate { it.value to it.index }
+
+/** Shared rule-sort comparator: metal sites first, then larger atomic number first within a type. */
+private fun bondRuleComparator(siteSpecies: Map<String, String>): Comparator<BondRule> = compareBy(
+    { !isMetal(siteSpecies[it.siteA] ?: "") },
+    { !isMetal(siteSpecies[it.siteB] ?: "") },
+    { -(symbolIndex[siteSpecies[it.siteA] ?: ""] ?: -1) },
+    { -(symbolIndex[siteSpecies[it.siteB] ?: ""] ?: -1) },
 )
 
 /** Per v0.6.5: order a site pair so that metal comes first; if both same type, larger atomic number first. */
@@ -38,8 +55,8 @@ private fun orderedSites(siteA: Site, siteB: Site): Pair<Site, Site> {
         aMetal && !bMetal -> siteA to siteB
         !aMetal && bMetal -> siteB to siteA
         else -> {
-            val aNum = PeriodicTableData.symbols.indexOf(siteA.species.symbol)
-            val bNum = PeriodicTableData.symbols.indexOf(siteB.species.symbol)
+            val aNum = symbolIndex[siteA.species.symbol] ?: -1
+            val bNum = symbolIndex[siteB.species.symbol] ?: -1
             if (aNum >= bNum) siteA to siteB else siteB to siteA
         }
     }
@@ -184,8 +201,11 @@ object CrystalEditor {
         bondConfiguration: BondConfiguration,
         epsilon: Double,
     ): List<BondRule> {
-        if (SymmetryExpander.expand(structure).size <= BondValence.SMART_IONIC_ATOM_LIMIT) {
-            val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon)
+        // Expand once: reuse the atoms for both the smart-ionic size guard and the rule
+        // generation, so smartIonicRules doesn't expand the same structure a second time.
+        val atoms = SymmetryExpander.expand(structure)
+        if (atoms.size <= BondValence.SMART_IONIC_ATOM_LIMIT) {
+            val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon, atoms)
             if (result.success) return result.rules
         }
         return bondingRules(structure, epsilon)
@@ -205,12 +225,7 @@ object CrystalEditor {
                     BondRuleSource.CUSTOM,
                 )
             }
-        }.sortedWith(compareBy(
-            { !isMetal(siteSpecies[it.siteA] ?: "") },
-            { !isMetal(siteSpecies[it.siteB] ?: "") },
-            { -(PeriodicTableData.symbols.indexOf(siteSpecies[it.siteA] ?: "")) },
-            { -(PeriodicTableData.symbols.indexOf(siteSpecies[it.siteB] ?: "")) },
-        ))
+        }.sortedWith(bondRuleComparator(siteSpecies))
     }
 
     fun rebuildBondRules(
@@ -242,12 +257,7 @@ object CrystalEditor {
                     BondRuleSource.CUSTOM,
                 )
             }
-        }.sortedWith(compareBy(
-            { !isMetal(siteSpecies[it.siteA] ?: "") },
-            { !isMetal(siteSpecies[it.siteB] ?: "") },
-            { -(PeriodicTableData.symbols.indexOf(siteSpecies[it.siteA] ?: "")) },
-            { -(PeriodicTableData.symbols.indexOf(siteSpecies[it.siteB] ?: "")) },
-        ))
+        }.sortedWith(bondRuleComparator(siteSpecies))
         val filteredRules = rules.filter { it.key !in bondConfiguration.disabledPairs }
         return EditResult(structure, bondConfiguration.copy(rules = filteredRules))
     }
@@ -419,6 +429,9 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         }
         // 1. Expand all atoms using symmetry operations.
         val expanded = SymmetryExpander.expand(structure)
+        // Pre-count images per siteId so label disambiguation below is O(1) instead of O(N) per
+        // expanded atom (previously a full scan of `expanded` for every atom — O(N²) overall).
+        val siteIdCounts = expanded.groupingBy { it.siteId }.eachCount()
         // 2. Create new Site objects from expanded atoms (dedup by position+species).
         val seen = mutableSetOf<Pair<String, Triple<Double, Double, Double>>>()
         val labelCounts = HashMap<String, Int>()
@@ -433,7 +446,7 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
             seen.add(key)
             val n = labelCounts.getOrDefault(atom.species.symbol, 0) + 1
             labelCounts[atom.species.symbol] = n
-            val label = if (expanded.count { it.siteId == atom.siteId } > 1) "${atom.species.symbol}${n}" else atom.siteLabel
+            val label = if (siteIdCounts.getOrDefault(atom.siteId, 0) > 1) "${atom.species.symbol}${n}" else atom.siteLabel
             Site(
                 id = "${atom.siteId}:C$n",
                 label = label,

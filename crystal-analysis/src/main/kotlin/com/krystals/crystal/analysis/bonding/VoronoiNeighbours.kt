@@ -56,6 +56,9 @@ internal object VoronoiNeighbours {
     fun find(structure: CrystalStructure, atoms: List<AtomImage>): List<Triple<Long, Long, Double>> {
         if (atoms.isEmpty()) return emptyList()
         val lattice = structure.lattice.matrix
+        // The lattice is identical for every centre; compute its inverse once instead of
+        // re-inverting per centre (Mat3.inverse allocates ~10 Vec3 and does 3 cross products).
+        val latticeInverse = lattice.inverse()
         val edges = LinkedHashMap<EdgeKey, Double>()
 
         for (center in atoms) {
@@ -73,10 +76,9 @@ internal object VoronoiNeighbours {
                 .maxOfOrNull { it.length() }
                 ?: continue
             val relevantDistance = 2.0 * cellRadius + EPS
-            val inverse = lattice.inverse()
-            val shellX = ceil(Vec3(inverse.a.x, inverse.b.x, inverse.c.x).length() * relevantDistance + 1.0).toInt()
-            val shellY = ceil(Vec3(inverse.a.y, inverse.b.y, inverse.c.y).length() * relevantDistance + 1.0).toInt()
-            val shellZ = ceil(Vec3(inverse.a.z, inverse.b.z, inverse.c.z).length() * relevantDistance + 1.0).toInt()
+            val shellX = ceil(Vec3(latticeInverse.a.x, latticeInverse.b.x, latticeInverse.c.x).length() * relevantDistance + 1.0).toInt()
+            val shellY = ceil(Vec3(latticeInverse.a.y, latticeInverse.b.y, latticeInverse.c.y).length() * relevantDistance + 1.0).toInt()
+            val shellZ = ceil(Vec3(latticeInverse.a.z, latticeInverse.b.z, latticeInverse.c.z).length() * relevantDistance + 1.0).toInt()
             // Per v0.7.1: pass maxDistance into candidates() so far-away images are skipped during
             // generation, avoiding unnecessary object creation and reducing the sort cost from
             // O(M log M) to O(m log m) where m << M is the post-filter count.
@@ -110,20 +112,25 @@ internal object VoronoiNeighbours {
         val lattice = structure.lattice.matrix
         val centerPosition = center.cartesianCoordinate.toVec3()
         val maxDistSq = maxDistance * maxDistance
+        // Translation vectors depend only on the lattice and the (dx,dy,dz) shell offset — not on
+        // `other`. Precompute all shell³ translations once instead of rebuilding them per atom.
+        val translations = ArrayList<Pair<Vec3, Int3>>((2 * shellX + 1) * (2 * shellY + 1) * (2 * shellZ + 1))
+        for (dx in -shellX..shellX) for (dy in -shellY..shellY) for (dz in -shellZ..shellZ) {
+            val translation = lattice.a * dx.toDouble() +
+                lattice.b * dy.toDouble() + lattice.c * dz.toDouble()
+            translations += translation to Int3(dx, dy, dz)
+        }
         return buildList {
             for (other in atoms) {
                 val otherPosition = other.cartesianCoordinate.toVec3()
-                for (dx in -shellX..shellX) for (dy in -shellY..shellY) for (dz in -shellZ..shellZ) {
-                    if (center.id == other.id && dx == 0 && dy == 0 && dz == 0) continue
-                    val translation = lattice.a * dx.toDouble() +
-                        lattice.b * dy.toDouble() + lattice.c * dz.toDouble()
+                for ((translation, offset) in translations) {
+                    if (center.id == other.id && offset.x == 0 && offset.y == 0 && offset.z == 0) continue
                     val displacement = otherPosition + translation - centerPosition
                     val distSq = displacement.lengthSquared()
                     // Per v0.7.1: skip far-away images during generation (distance² comparison
                     // avoids sqrt for rejected candidates) and avoid creating Candidate objects
                     // that would only be filtered out later.
                     if (distSq > EPS * EPS && distSq <= maxDistSq) {
-                        val offset = Int3(dx, dy, dz)
                         add(Candidate(other.id, offset, displacement, kotlin.math.sqrt(distSq)))
                     }
                 }

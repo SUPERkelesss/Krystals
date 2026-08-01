@@ -53,13 +53,17 @@ data class Lattice(
         return Mat3(av, bv, Vec3(cx, cy, cz))
     }
 
-    val volume: Double get() = abs(matrix.determinant())
+    /** Cell volume = |det(matrix)|, computed once at construction (data-class copy re-runs init). */
+    val volume: Double = abs(matrix.determinant())
+
+    /** Inverse of [matrix], lazily computed on first use (e.g. [toFractional]). */
+    val inverse: Mat3 by lazy { matrix.inverse() }
 
     fun toCartesian(fractional: FractionalCoordinate): CartesianCoordinate =
         CartesianCoordinate.fromVec3(matrix * fractional.toVec3())
 
     fun toFractional(cartesian: CartesianCoordinate): FractionalCoordinate =
-        FractionalCoordinate.fromVec3(matrix.inverse() * cartesian.toVec3())
+        FractionalCoordinate.fromVec3(inverse * cartesian.toVec3())
 
     companion object {
         private const val MIN_CELL_VOLUME = 1e-12
