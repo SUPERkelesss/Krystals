@@ -349,7 +349,8 @@ private val replacementPrefixes = listOf(
         }
         if (rules.isNotEmpty()) {
             append("loop_\n _krystals_bond_rule_site_a\n _krystals_bond_rule_site_b\n _krystals_bond_rule_min_distance\n _krystals_bond_rule_max_distance\n _krystals_bond_rule_extend_a_to_b\n _krystals_bond_rule_extend_b_to_a\n")
-            rules.sortedBy { it.key }.forEach { rule ->
+            // Per v0.8.1: Hbond rules are regenerated on every smart-ionic run — don't persist them.
+            rules.filter { !it.isHBond }.sortedBy { it.key }.forEach { rule ->
                 val labelA = structure.sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
                 val labelB = structure.sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
                 append(" ${quoteIfNeeded(labelA)} ${quoteIfNeeded(labelB)} ${format(rule.minAngstrom)} ${format(rule.maxAngstrom)} ${if (rule.extendAtoB) 1 else 0} ${if (rule.extendBtoA) 1 else 0}\n")

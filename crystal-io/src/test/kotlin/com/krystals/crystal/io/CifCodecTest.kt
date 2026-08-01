@@ -1,5 +1,7 @@
 package com.krystals.crystal.io
 
+import com.krystals.crystal.analysis.bonding.BondConfiguration
+import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.model.Site
@@ -179,5 +181,25 @@ class CifCodecTest {
         assertEquals(4.62909281, parsed.structure.lattice.b, 1e-6, "lattice b must stay conventional")
         assertEquals(1, parsed.structure.sites.size, "ASU site must not be converted")
         assertTrue(parsed.structure.isConventional)
+    }
+
+    @Test
+    fun hbondRulesAreNotPersistedInCifLoop() {
+        val parsed = CifCodec.parseStructure(simple)
+        val normal = BondRule("C", "O", 0.1, 1.5)
+        val hbond = BondRule("C", "O", 1.0, 2.5, isHBond = true)
+        val config = BondConfiguration(listOf(normal, hbond))
+        val written = CifCodec.write(parsed, parsed.structure, config, parsed.displayMetadata)
+        // The loop header must be present.
+        assertTrue("_krystals_bond_rule_" in written, "bond rule loop header must be present")
+        // Only one data row: the normal rule. Count non-meta lines after the header.
+        val afterHeader = written.substringAfterLast("_krystals_bond_rule_extend_b_to_a")
+        val dataRows = afterHeader.trim().lines().filter { line ->
+            val t = line.trim()
+            t.isNotEmpty() && !t.startsWith("#") && !t.startsWith("loop_") && !t.startsWith("data_")
+        }
+        assertEquals(1, dataRows.size, "only the normal rule should be persisted")
+        // The normal rule's distance values must appear in the output.
+        assertTrue("1.5" in written, "normal rule maxAngstrom must appear")
     }
 }
