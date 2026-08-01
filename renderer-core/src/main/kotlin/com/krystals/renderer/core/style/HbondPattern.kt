@@ -12,7 +12,7 @@ import com.krystals.renderer.core.material.Material
  */
 object HbondPattern {
     /** Cylinder radius in Å. */
-    const val RADIUS: Double = 0.2
+    const val RADIUS: Double = 0.1
 
     /** Translucent gray (front-end backends may restyle, e.g. legacy uses dotted lines). */
     val COLOR: Long = 0xFF808080
