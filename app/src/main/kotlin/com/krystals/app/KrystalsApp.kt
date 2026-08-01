@@ -2505,14 +2505,14 @@ private fun CommentsPanel(tab: DocumentTab, onDismiss: () -> Unit) {
                 Modifier.fillMaxWidth().height(24.dp)
             }
             val dividerModifier = if (landscape) {
-                Modifier.fillMaxHeight().width(12.dp)
+                Modifier.fillMaxHeight().width(18.dp)
             } else {
-                Modifier.fillMaxWidth().height(12.dp)
+                Modifier.fillMaxWidth().height(18.dp)
             }
             val handle = @Composable {
-                // Per v0.8.1: 24.dp drag hit target around the original 12.dp visible divider so
-                // the resize handle is easier to grab; persist the ratio once when the drag ends
-                // (or is cancelled) instead of writing SharedPreferences on every drag frame.
+                // Per v0.8.1: 24.dp drag hit target (the visible divider stays pinned to the panel
+                // edge, pre-v0.8.1 style); persist the ratio once when the drag ends (or is
+                // cancelled) instead of writing SharedPreferences on every drag frame.
                 Box(
                     Modifier
                         .then(handleModifier)
@@ -2530,9 +2530,18 @@ private fun CommentsPanel(tab: DocumentTab, onDismiss: () -> Unit) {
                                 },
                             )
                         },
-                    contentAlignment = Alignment.Center,
                 ) {
-                    Box(Modifier.then(dividerModifier).background(MaterialTheme.colorScheme.outlineVariant))
+                    // Per v0.8.1: pin the visible divider to the panel edge (as pre-v0.8.1) so no
+                    // background strip shows above it; only the drag hit target is 24.dp.
+                    Box(
+                        Modifier.then(dividerModifier)
+                            // In Compose 1.11 the 1-D Alignment.Start is an Alignment.Horizontal that
+                            // is NOT an Alignment, so BoxScope.align() rejects it. CenterStart/TopStart
+                            // are declared Alignment; the divider fills the other axis so its
+                            // alignment on that axis is irrelevant.
+                            .align(if (landscape) Alignment.CenterStart else Alignment.TopStart)
+                            .background(MaterialTheme.colorScheme.outlineVariant)
+                    )
                 }
             }
             val content = @Composable {
@@ -2598,9 +2607,14 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
         BondGrid(atoms, tab.structure, BondRuleMatching.estimateCellSize(tab.structure)) to atoms
     }
     val allSitesVisible = siteIds.isNotEmpty() && tab.visibility.hiddenSites.intersect(siteIds).isEmpty()
-    val allBondsVisible = tab.visibility.showBonds && tab.visibility.hiddenBondPairs.none { key -> rules.any { it.key == key } }
+    val normalRules = remember(rules) { rules.filter { !it.isHBond } }
+    val hbondRules = remember(rules) { rules.filter { it.isHBond } }
+    val allBondsVisible = tab.visibility.showBonds && tab.visibility.hiddenBondPairs.none { key -> normalRules.any { it.key == key } }
+    val allHbondsVisible = tab.visibility.showBonds && tab.visibility.hiddenBondPairs.none { key -> hbondRules.any { it.key == key } }
     val allPolyhedraEnabled = siteIds.isNotEmpty() && siteIds.all { it in tab.visibility.polyhedronSites }
     var selected by remember { mutableStateOf(DisplayTab.ATOMS) }
+    // Per v0.8.1: if HBONDS tab is selected but no hbond rules exist anymore, fall back to BONDS.
+    if (selected == DisplayTab.HBONDS && hbondRules.isEmpty()) selected = DisplayTab.BONDS
     // Per v0.3.44: per-group collapse state for the ATOMS/POLYHEDRA/BONDS grouped lists. Keyed by
     // element (ATOMS/POLYHEDRA) or element-pair (BONDS). A group is expanded when its key is absent
     // (default expanded); toggling inserts/removes the key.
@@ -2655,14 +2669,14 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                 Modifier.fillMaxWidth().height(24.dp)
             }
             val dividerModifier = if (landscape) {
-                Modifier.fillMaxHeight().width(12.dp)
+                Modifier.fillMaxHeight().width(18.dp)
             } else {
-                Modifier.fillMaxWidth().height(12.dp)
+                Modifier.fillMaxWidth().height(18.dp)
             }
             val handle = @Composable {
-                // Per v0.8.1: 24.dp drag hit target around the original 12.dp visible divider so
-                // the resize handle is easier to grab; persist the ratio once when the drag ends
-                // (or is cancelled) instead of writing SharedPreferences on every drag frame.
+                // Per v0.8.1: 24.dp drag hit target (the visible divider stays pinned to the panel
+                // edge, pre-v0.8.1 style); persist the ratio once when the drag ends (or is
+                // cancelled) instead of writing SharedPreferences on every drag frame.
                 Box(
                     Modifier
                         .then(handleModifier)
@@ -2680,19 +2694,30 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                 },
                             )
                         },
-                    contentAlignment = Alignment.Center,
                 ) {
-                    Box(Modifier.then(dividerModifier).background(MaterialTheme.colorScheme.outlineVariant))
+                    // Per v0.8.1: pin the visible divider to the panel edge (as pre-v0.8.1) so no
+                    // background strip shows above it; only the drag hit target is 24.dp.
+                    Box(
+                        Modifier.then(dividerModifier)
+                            // In Compose 1.11 the 1-D Alignment.Start is an Alignment.Horizontal that
+                            // is NOT an Alignment, so BoxScope.align() rejects it. CenterStart/TopStart
+                            // are declared Alignment; the divider fills the other axis so its
+                            // alignment on that axis is irrelevant.
+                            .align(if (landscape) Alignment.CenterStart else Alignment.TopStart)
+                            .background(MaterialTheme.colorScheme.outlineVariant)
+                    )
                 }
             }
             val content = @Composable {
                 Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
                     Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        listOf(
-                            DisplayTab.ATOMS to localized("原子", "Atoms"),
-                            DisplayTab.BONDS to localized("化学键", "Bonds"),
-                            DisplayTab.POLYHEDRA to localized("多面体", "Polyhedra"),
-                        ).forEach { (kind, label) -> FilterChip(selected == kind, onClick = { selected = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
+                        val tabEntries = buildList {
+                            add(DisplayTab.ATOMS to localized("原子", "Atoms"))
+                            add(DisplayTab.BONDS to localized("化学键", "Bonds"))
+                            add(DisplayTab.POLYHEDRA to localized("多面体", "Polyhedra"))
+                            if (hbondRules.isNotEmpty()) add(DisplayTab.HBONDS to localized("氢键", "H-Bonds"))
+                        }
+                        tabEntries.forEach { (kind, label) -> FilterChip(selected == kind, onClick = { selected = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
                         Spacer(Modifier.weight(1f)); IconButton(onClick = { doDismiss() }) { Icon(Icons.Default.Close, null) }
                     }
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
@@ -2760,8 +2785,8 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                 }
                             }
                             DisplayTab.BONDS -> {
-                                // Per v0.2.2: only list rules whose two sites still exist (others don't affect rendering).
-                                val visibleRules = rules.filter { rule ->
+                                // Per v0.8.1: BONDS tab lists only non-hbond rules; hbonds have their own tab.
+                                val normalWithMatch = normalRules.filter { rule ->
                                     BondRuleMatching.hasMatchingBond(
                                         rule,
                                         tab.structure,
@@ -2778,22 +2803,22 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                         tab.recordHistory()
                                         tab.visibility = tab.visibility.copy(
                                             showBonds = checked,
-                                            hiddenBondPairs = if (checked) emptySet() else visibleRules.map { it.key }.toSet(),
+                                            hiddenBondPairs = if (checked) emptySet() else normalWithMatch.map { it.key }.toSet(),
                                         )
                                     })
                                     Text(stringResource(R.string.select_all))
                                     Spacer(Modifier.width(4.dp))
                                     TextButton(onClick = {
-                                        val allKeys = visibleRules.map { it.key }.toSet()
+                                        val allKeys = normalWithMatch.map { it.key }.toSet()
                                         tab.recordHistory()
                                         tab.visibility = tab.visibility.copy(showBonds = true, hiddenBondPairs = allKeys - tab.visibility.hiddenBondPairs)
                                     }) { Text(localized("反选", "Invert")) }
                                     Spacer(Modifier.weight(1f))
                                     // Per v0.6.5: "Extend outside cell" checkbox — toggles all bond rules' extend flags.
-                                    val allExtended = visibleRules.isNotEmpty() && visibleRules.all { it.extendAtoB && it.extendBtoA }
+                                    val allExtended = normalWithMatch.isNotEmpty() && normalWithMatch.all { it.extendAtoB && it.extendBtoA }
                                     Checkbox(allExtended, onCheckedChange = { checked ->
                                         var working = tab.bondConfiguration
-                                        visibleRules.forEach { rule ->
+                                        normalWithMatch.forEach { rule ->
                                             val updated = rule.copy(extendAtoB = checked, extendBtoA = checked)
                                             working = CrystalEditor.apply(tab.structure, working, EditCommand.SetBondRule(updated)).bondConfiguration
                                         }
@@ -2802,14 +2827,14 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                     Text(localized("扩展到晶胞外", "Extend Outside Cell"), style = MaterialTheme.typography.bodySmall)
                                 }
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                                if (visibleRules.isEmpty()) {
+                                if (normalWithMatch.isEmpty()) {
                                     Text(localized("无化学键规则", "No bond rules"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
                                 } else {
                                     // Per v0.3.44: group bond rules by element pair (e.g. C-O, Cs-Cl). Each
                                     // group is a collapsible header (group visibility checkbox) + per-rule rows.
                                     val elementOf = remember(sites) { sites.associate { it.id to it.species.symbol } }
-                                    val groupedRules = remember(visibleRules, elementOf) {
-                                        visibleRules.groupBy { rule ->
+                                    val groupedRules = remember(normalWithMatch, elementOf) {
+                                        normalWithMatch.groupBy { rule ->
                                             val ea = elementOf[rule.siteA] ?: "?"
                                             val eb = elementOf[rule.siteB] ?: "?"
                                             // Per v0.7.1: metal first in pair label; if same type, larger atomic number first.
@@ -2953,6 +2978,84 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
                                     }
                                 }
                             }
+                            DisplayTab.HBONDS -> {
+                                // Per v0.8.1: simplified bond-rule list for hbonds (no extend-outside-cell controls).
+                                val hbondWithMatch = hbondRules.filter { rule ->
+                                    BondRuleMatching.hasMatchingBond(
+                                        rule,
+                                        tab.structure,
+                                        tab.bondConfiguration,
+                                        bondGrid.second,
+                                        bondGrid.first,
+                                    )
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(allHbondsVisible, onCheckedChange = { checked ->
+                                        tab.recordHistory()
+                                        tab.visibility = tab.visibility.copy(
+                                            showBonds = checked,
+                                            hiddenBondPairs = if (checked) emptySet() else hbondWithMatch.map { it.key }.toSet(),
+                                        )
+                                    })
+                                    Text(stringResource(R.string.select_all))
+                                    Spacer(Modifier.width(4.dp))
+                                    TextButton(onClick = {
+                                        val allKeys = hbondWithMatch.map { it.key }.toSet()
+                                        tab.recordHistory()
+                                        tab.visibility = tab.visibility.copy(showBonds = true, hiddenBondPairs = allKeys - tab.visibility.hiddenBondPairs)
+                                    }) { Text(localized("反选", "Invert")) }
+                                }
+                                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                                if (hbondWithMatch.isEmpty()) {
+                                    Text(localized("无氢键", "No H-bonds"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                                } else {
+                                    val elementOf = remember(sites) { sites.associate { it.id to it.species.symbol } }
+                                    val groupedRules = remember(hbondWithMatch, elementOf) {
+                                        hbondWithMatch.groupBy { rule ->
+                                            val ea = elementOf[rule.siteA] ?: "?"
+                                            val eb = elementOf[rule.siteB] ?: "?"
+                                            val (first, second) = if (ea <= eb) ea to eb else eb to ea
+                                            "$first—$second"
+                                        }.toSortedMap(compareBy { it })
+                                    }
+                                    groupedRules.forEach { (pairLabel, groupRules) ->
+                                        val expanded = collapsedGroups["H:$pairLabel"] != true
+                                        val allGroupVisible = groupRules.all { it.key !in tab.visibility.hiddenBondPairs }
+                                        CollapsibleGroupHeader(
+                                            title = "$pairLabel (${groupRules.size})",
+                                            expanded = expanded,
+                                            onToggle = { collapsedGroups["H:$pairLabel"] = expanded },
+                                            checked = allGroupVisible,
+                                            onCheckChange = { checked ->
+                                                tab.recordHistory()
+                                                tab.visibility = tab.visibility.copy(
+                                                    showBonds = true,
+                                                    hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - groupRules.map { it.key }.toSet()
+                                                    else tab.visibility.hiddenBondPairs + groupRules.map { it.key }.toSet(),
+                                                )
+                                            },
+                                        ) { /* no extend controls for hbonds */ }
+                                        if (expanded) {
+                                            groupRules.forEach { rule ->
+                                                val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
+                                                val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
+                                                val label = "$labelA—$labelB"
+                                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(start = 28.dp)) {
+                                                    val visible = tab.visibility.showBonds && rule.key !in tab.visibility.hiddenBondPairs
+                                                    Checkbox(visible, onCheckedChange = { checked ->
+                                                        tab.recordHistory()
+                                                        tab.visibility = tab.visibility.copy(
+                                                            showBonds = true,
+                                                            hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - rule.key else tab.visibility.hiddenBondPairs + rule.key,
+                                                        )
+                                                    })
+                                                    Text(label, modifier = Modifier.weight(1f))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             DisplayTab.POLYHEDRA -> {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(allPolyhedraEnabled, onCheckedChange = { checked ->
@@ -3052,7 +3155,7 @@ private fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDismi
     }
 }
 
-private enum class DisplayTab { ATOMS, BONDS, POLYHEDRA }
+private enum class DisplayTab { ATOMS, BONDS, POLYHEDRA, HBONDS }
 
 /**
  * Per v0.3.44: a collapsible group header used by the ATOMS/POLYHEDRA/BONDS sub-menus. A row with an
