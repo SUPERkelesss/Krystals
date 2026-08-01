@@ -669,11 +669,12 @@ private fun LegacyCanvasViewport(
         drawMeasurement(projected, selectedAtomIds, measurementMode, false)?.let { bounds += Triple(it, false, -1) }
         hitState.measurementBounds = bounds
         val infoBounds = mutableListOf<Triple<Rect, Boolean, Long>>()
+        fun gatheredFor(a: Long?) = a?.let { groupByMemberId[it]?.memberAtomIds }.orEmpty()
         lockedInspectedAtomIds.forEach { id ->
-            drawAtomInfo(projected, id, true, appearance, bondValenceBySite)?.let { infoBounds += Triple(it, true, id) }
+            drawAtomInfo(projected, id, true, appearance, bondValenceBySite, gatheredFor(id))?.let { infoBounds += Triple(it, true, id) }
         }
         if (inspectedAtomId != null && inspectedAtomId !in lockedInspectedAtomIds) {
-            drawAtomInfo(projected, inspectedAtomId, false, appearance, bondValenceBySite)?.let { infoBounds += Triple(it, false, inspectedAtomId) }
+            drawAtomInfo(projected, inspectedAtomId, false, appearance, bondValenceBySite, gatheredFor(inspectedAtomId))?.let { infoBounds += Triple(it, false, inspectedAtomId) }
         }
         hitState.atomInfoBounds = infoBounds
         // Per v0.8.1: projectedAtoms was already set at line ~531-533 above; this duplicate
@@ -1144,13 +1145,30 @@ private fun DrawScope.drawAtomInfo(
     locked: Boolean,
     appearance: ViewerAppearance,
     bondValenceBySite: Map<String, Double> = emptyMap(),
+    gatheredMemberIds: List<Long> = emptyList(),
 ): Rect? {
-    val atom = inspectedAtomId?.let { id -> projected.firstOrNull { it.atom.id == id } } ?: return null
-    // Per v0.5.0: append the atom's bond-valence sum (s = X.XX) after occupancy when available.
-    val bvs = bondValenceBySite[atom.atom.siteId]
-    val bvsText = bvs?.let { "  s = %.2f".format(it) } ?: ""
-    val fractional = atom.atom.fractionalCoordinate
-    val label = "${atom.atom.species.symbol}  ${atom.atom.siteLabel}  occ ${atom.atom.occupancy}$bvsText\n(${fractional.x.formatFract()}, ${fractional.y.formatFract()}, ${fractional.z.formatFract()})"
+    val label: String
+    val anchorX: Float; val anchorY: Float; val anchorR: Float
+    // Per v0.8.2: gathered group info window — up to 3 member sites, "---" separated.
+    if (gatheredMemberIds.isNotEmpty()) {
+        val members = gatheredMemberIds.mapNotNull { id -> projected.firstOrNull { it.atom.id == id } }
+        val first = members.firstOrNull() ?: return null
+        anchorX = first.point.x; anchorY = first.point.y; anchorR = first.radius
+        val display = members.take(3)
+        label = display.joinToString("\n---\n") { m ->
+            val b = bondValenceBySite[m.atom.siteId]
+            val bt = b?.let { "  s = %.2f".format(it) } ?: ""
+            val f = m.atom.fractionalCoordinate
+            "${m.atom.species.symbol}  ${m.atom.siteLabel}  occ ${m.atom.occupancy}$bt\n(${f.x.formatFract()}, ${f.y.formatFract()}, ${f.z.formatFract()})"
+        } + if (members.size > 3) "\n..." else ""
+    } else {
+        val atom = inspectedAtomId?.let { id -> projected.firstOrNull { it.atom.id == id } } ?: return null
+        anchorX = atom.point.x; anchorY = atom.point.y; anchorR = atom.radius
+        val bvs = bondValenceBySite[atom.atom.siteId]
+        val bvsText = bvs?.let { "  s = %.2f".format(it) } ?: ""
+        val fractional = atom.atom.fractionalCoordinate
+        label = "${atom.atom.species.symbol}  ${atom.atom.siteLabel}  occ ${atom.atom.occupancy}$bvsText\n(${fractional.x.formatFract()}, ${fractional.y.formatFract()}, ${fractional.z.formatFract()})"
+    }
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.WHITE
         textSize = 40f
@@ -1161,10 +1179,10 @@ private fun DrawScope.drawAtomInfo(
     val maxWidth = widths.maxOrNull() ?: 0f
     val lineHeight = paint.fontMetrics.run { descent - ascent }
     val pad = 16f
-    val boxLeft = atom.point.x + atom.radius + 14f
-    val boxTop = atom.point.y - atom.radius - 14f - lines.size * lineHeight - pad
+    val boxLeft = anchorX + anchorR + 14f
+    val boxTop = anchorY - anchorR - 14f - lines.size * lineHeight - pad
     val boxRight = boxLeft + maxWidth + pad * 2
-    val boxBottom = atom.point.y - atom.radius - 14f + pad
+    val boxBottom = anchorY - anchorR - 14f + pad
     val boxColor = if (locked) Color(0xFF9966CC).copy(alpha = 0.82f) else Color.Black.copy(alpha = 0.65f)
     drawRoundRect(boxColor, topLeft = Offset(boxLeft, boxTop), size = androidx.compose.ui.geometry.Size(boxRight - boxLeft, boxBottom - boxTop), cornerRadius = androidx.compose.ui.geometry.CornerRadius(14f, 14f))
     lines.forEachIndexed { index, line ->
