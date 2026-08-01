@@ -69,7 +69,15 @@ class InstanceManager {
                 startAtom?.takeIf { it.visible }?.radius,
                 endAtom?.takeIf { it.visible }?.radius,
             )
-            val middle = (clippedStart + clippedEnd) * 0.5
+            // Per v0.8.1: H-bonds are a single translucent cylinder (no two-half split).
+            if (bond.bond.rule.isHBond) {
+                next[bond.id] = InstanceRecord(
+                    bond.id, pickId(bond.id),
+                    BatchKey(GeometryKind.CYLINDER, MaterialKey(bond.startMaterial)),
+                    cylinderTransform(clippedStart, clippedEnd, bond.radius),
+                )
+            } else {
+                val middle = (clippedStart + clippedEnd) * 0.5
                 val halves: List<Pair<String, Triple<Vec3, Vec3, Material>>> = listOf(
                     "${bond.id}:a" to Triple(clippedStart, middle, bond.startMaterial),
                     "${bond.id}:b" to Triple(middle, clippedEnd, bond.endMaterial),
@@ -80,6 +88,7 @@ class InstanceManager {
                         cylinderTransform(half.first, half.second, bond.radius),
                     )
                 }
+            }
         }
         scene.meshes.asSequence().filter(MeshInstance::visible).forEach { mesh ->
             next[mesh.id] = InstanceRecord(mesh.id, pickId(mesh.id), BatchKey(GeometryKind.POLYHEDRON, MaterialKey(mesh.material)), identity())
