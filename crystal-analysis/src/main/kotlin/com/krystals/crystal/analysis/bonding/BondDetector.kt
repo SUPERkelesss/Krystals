@@ -165,6 +165,12 @@ object BondDetector {
 
         val centers = primaryAtoms + boundaryImages
         val custom = bondConfiguration.rules.associateBy { it.key }
+        // Per v0.8.1: Hbond rules carry a discriminated key ("pair\0hbond") so plain-key
+        // lookups below don't find them. Index hbond rules separately and consult them
+        // alongside custom when the normal-rule lookup returns null for a pair.
+        val hbondByPair = bondConfiguration.rules
+            .filter { it.isHBond }
+            .associateBy { listOf(it.siteA, it.siteB).sorted().joinToString(" ") }
         val disabledPairs = bondConfiguration.disabledPairs
         val cellSize = BondRuleMatching.estimateCellSize(structure)
         // Spatial hash of primary atoms by floor(cartesian / cellSize).
@@ -267,7 +273,7 @@ object BondDetector {
                         if (d > autoMaxD) {
                             val key = if (c.siteId < q.siteId) "${c.siteId}\u0000${q.siteId}" else "${q.siteId}\u0000${c.siteId}"
                             if (key in disabledPairs) continue
-                            val customRule = custom[key]
+                            val customRule = custom[key] ?: hbondByPair[key]
                             if (customRule == null || d < customRule.minAngstrom || d > customRule.maxAngstrom) continue
                             // A custom rule extends the window and covers d; fall through to the
                             // normal path below, which re-resolves the same customRule and bonds it.
@@ -277,7 +283,7 @@ object BondDetector {
                         // legacy path built the same key inline — a plain-space join would miss rules).
                         val key = if (c.siteId < q.siteId) "${c.siteId}\u0000${q.siteId}" else "${q.siteId}\u0000${c.siteId}"
                         if (key in disabledPairs) continue
-                        val customRule = custom[key]
+                        val customRule = custom[key] ?: hbondByPair[key]
                         val isPeriodicSameSite = c.siteId == q.siteId &&
                             PeriodicBoundary.isIntegerTranslation(c.fractionalCoordinate - (q.fractionalCoordinate + offB))
                         if (customRule == null && isPeriodicSameSite) continue
@@ -408,6 +414,11 @@ object BondDetector {
     ): List<Bond> {
         if (atoms.size < 2) return emptyList()
         val custom = bondConfiguration.rules.associateBy { it.key }
+        // Per v0.8.1: Hbond rules carry a discriminated key ("pair\u0000hbond") so plain-key
+        // lookups below don't find them; index them separately alongside custom.
+        val hbondByPair = bondConfiguration.rules
+            .filter { it.isHBond }
+            .associateBy { listOf(it.siteA, it.siteB).sorted().joinToString("\u0000") }
         // Per v0.3.2: minimum-image convention. For each atom pair consider all 27 periodic images
         // (offset in {-1,0,1}^3) of B and take the closest one, so corner/edge neighbour bonds are
         // found without materialising 26 neighbour-cell atoms. O(N^2 * 27) - fine for N up to a few
@@ -429,7 +440,7 @@ object BondDetector {
                 val key = listOf(atom.siteId, other.siteId).sorted().joinToString("\u0000")
                 // Per v0.2.3: a pair the user explicitly deleted is not redrawn via the fallback.
                 if (key in bondConfiguration.disabledPairs) continue
-                val rule = custom[key] ?: BondRule(
+                val rule = custom[key] ?: hbondByPair[key] ?: BondRule(
                     atom.siteId, other.siteId, 0.1,
                     PeriodicTable.covalentRadius(atom.species.symbol) +
                         PeriodicTable.covalentRadius(other.species.symbol) + 0.45,

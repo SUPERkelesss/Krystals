@@ -433,4 +433,49 @@ class AnalysisTest {
         assertEquals(30, SymmetryExpander.expand(restored).size, "expanded atom count")
         assertSameExpandedAtoms(conventional, restored)
     }
+
+    // ── Per v0.8.1: Hbond rule coexistence ────────────────────────────────────
+
+    @Test fun hbondRuleKeyDiffersFromNormalKey() {
+        val normal = BondRule("H1", "O1", 0.1, 1.2)
+        val hbond = BondRule("H1", "O1", 1.0, 2.5, isHBond = true)
+        assertTrue(normal.key != hbond.key, "hbond rule must have a distinct key")
+        assertTrue(hbond.key.endsWith("hbond"), "hbond key should carry the discriminator")
+    }
+
+    @Test fun normalAndHbondRulesCoexistInConfiguration() {
+        val normal = BondRule("H1", "O1", 0.1, 1.2)
+        val hbond = BondRule("H1", "O1", 1.0, 2.5, isHBond = true)
+        val config = BondConfiguration().add(normal).add(hbond)
+        assertEquals(2, config.rules.size, "both rules must coexist")
+        assertTrue(config.rules.any { it.isHBond })
+        assertTrue(config.rules.any { !it.isHBond })
+    }
+
+    @Test fun hbondRuleReplacesExistingHbondRuleForSamePair() {
+        val first = BondRule("H1", "O1", 1.0, 2.0, isHBond = true)
+        val second = BondRule("H1", "O1", 1.5, 2.5, isHBond = true)
+        val config = BondConfiguration().add(first).add(second)
+        assertEquals(1, config.rules.size)
+        assertEquals(2.5, config.rules.single().maxAngstrom)
+    }
+
+    @Test fun bondDetectorFindsBondViaHbondRule() {
+        // Layered HF chain: H at (0,0,0), F at (0,0,1.5) — no covalent window covers
+        // 1.5 Å between H and F of different molecules, but an hbond rule (1.4–2.5 Å) does.
+        val structure = CrystalStructure(
+            blockName = "hf-chain",
+            lattice = Lattice(5.0, 5.0, 5.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(
+                Site("H", "H1", Species("H"), FractionalCoordinate(0.5, 0.5, 0.2)),
+                Site("F", "F1", Species("F"), FractionalCoordinate(0.5, 0.5, 0.5)),
+            ),
+        )
+        val hbond = BondRule("H", "F", 1.4, 2.5, isHBond = true)
+        val network = BondDetector.buildNetwork(structure, BondConfiguration(listOf(hbond)))
+        assertTrue(network.bonds.isNotEmpty(), "hbond rule should produce bonds")
+        assertTrue(network.bonds.all { it.rule.isHBond })
+    }
 }
