@@ -101,13 +101,15 @@ class InstanceManagerTest {
 
         val halfA = diff.batches.values.flatten().first { it.objectId == "bond:test:a" }
         val halfB = diff.batches.values.flatten().first { it.objectId == "bond:test:b" }
-        // Both halves should have moved inward by 0.3 along the bond axis.
-        assertEquals(0.0f, halfA.transform[12], 1e-4f) // start x stays at atom 0
-        assertEquals(0.0f, halfA.transform[13], 1e-4f) // start y stays at 0
-        assertEquals(0.7f, halfA.transform[5], 1e-4f)  // length shortened to 1.0 - 2*0.3
-        assertEquals(0.0f, halfB.transform[12], 1e-4f) // start x
-        assertEquals(0.3f, halfB.transform[13], 1e-4f) // start y shifted by atom0 radius
-        assertEquals(0.7f, halfB.transform[5], 1e-4f)  // remaining length
+        // Both endpoints are visible, so each is clipped inward by min(0.3*0.98, 0.5) = 0.294.
+        // The clipped bond spans 0.294..0.706, split at the 0.5 midpoint into two 0.206 halves.
+        // transform[12]=start.x, transform[13]=start.y, transform[5]=yAxis.y*length.
+        assertEquals(0.0f, halfA.transform[12], 1e-4f) // start x stays on the bond axis
+        assertEquals(0.294f, halfA.transform[13], 1e-4f) // start clipped inward by 0.294
+        assertEquals(0.206f, halfA.transform[5], 1e-4f)  // half A length = 0.5 - 0.294
+        assertEquals(0.0f, halfB.transform[12], 1e-4f) // start x stays on the bond axis
+        assertEquals(0.5f, halfB.transform[13], 1e-4f) // half B starts at the midpoint
+        assertEquals(0.206f, halfB.transform[5], 1e-4f)  // half B length = 0.706 - 0.5
     }
 
     @Test
@@ -118,13 +120,14 @@ class InstanceManagerTest {
 
         val halfA = diff.batches.values.flatten().first { it.objectId == "bond:test:a" }
         val halfB = diff.batches.values.flatten().first { it.objectId == "bond:test:b" }
-        // Hidden atom => no clipping; cylinder spans the full 0..1 range.
-        assertEquals(0.0f, halfA.transform[12], 1e-4f)
-        assertEquals(0.0f, halfA.transform[13], 1e-4f)
-        assertEquals(0.5f, halfA.transform[5], 1e-4f)
-        assertEquals(0.0f, halfB.transform[12], 1e-4f)
-        assertEquals(0.5f, halfB.transform[13], 1e-4f)
-        assertEquals(0.5f, halfB.transform[5], 1e-4f)
+        // Only the visible start atom is clipped (inward 0.294); the hidden end atom is not, so the
+        // bond spans 0.294..1.0, split at the 0.647 midpoint into two 0.353 halves.
+        assertEquals(0.0f, halfA.transform[12], 1e-4f) // start x stays on the bond axis
+        assertEquals(0.294f, halfA.transform[13], 1e-4f) // start clipped to visible atom radius
+        assertEquals(0.353f, halfA.transform[5], 1e-4f)  // half A length = 0.647 - 0.294
+        assertEquals(0.0f, halfB.transform[12], 1e-4f) // start x stays on the bond axis
+        assertEquals(0.647f, halfB.transform[13], 1e-4f) // half B starts at the midpoint
+        assertEquals(0.353f, halfB.transform[5], 1e-4f)  // half B reaches the un-clipped end (1.0)
     }
 
     @Test

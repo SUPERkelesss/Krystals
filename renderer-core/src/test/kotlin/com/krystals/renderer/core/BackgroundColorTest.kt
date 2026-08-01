@@ -22,11 +22,12 @@ class BackgroundColorTest {
 
     @Test
     fun midGrayLinearIsBrighterThanSrgbInput() {
-        // 0.5 in sRGB => roughly 0.214 in linear
+        // 0x80 = 128/255 ≈ 0.50196 in sRGB => ~0.2159 in linear (the old expected 0.21404
+        // corresponded to exactly 0.5, not to the byte value actually passed in).
         val color = backgroundColor(0xFF808080L)
-        assertEquals(0.21404f, color.linearRgb[0], 1e-4f)
-        assertEquals(0.21404f, color.linearRgb[1], 1e-4f)
-        assertEquals(0.21404f, color.linearRgb[2], 1e-4f)
+        assertEquals(0.2158605f, color.linearRgb[0], 1e-4f)
+        assertEquals(0.2158605f, color.linearRgb[1], 1e-4f)
+        assertEquals(0.2158605f, color.linearRgb[2], 1e-4f)
     }
 
     @Test

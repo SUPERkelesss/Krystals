@@ -27,8 +27,10 @@ class LegacyRenderMathTest {
     }
 
     @Test fun highlightMovesFromRimToCenterWithElevation() {
+        // v0.6.4: the world-light x component is defined as -cos(φ)·cos(θ), so at azimuth=0 the
+        // highlight displacement points to the -x rim (the y component carries no sign inversion).
         val grazing = legacyHighlightOffset(10.0, 0f, 0f)
-        assertEquals(9.5, grazing.x, 1e-9)
+        assertEquals(-9.5, grazing.x, 1e-9)
         assertEquals(0.0, grazing.y, 1e-9)
 
         val quarterTurn = legacyHighlightOffset(10.0, 90f, 0f)

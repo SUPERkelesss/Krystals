@@ -12,8 +12,11 @@ class FloatingBallLayoutTest {
     @Test fun staysFreeAwayFromEdges() { assertEquals(FloatingBallSnap.FREE, FloatingBallLayout.snap(FloatPoint(500f, 400f), 1000f, 800f, 24f).snap) }
     @Test fun everySnapProducesSixDistinctOffsets() { FloatingBallSnap.entries.forEach { assertEquals(6, FloatingBallLayout.toolOffsets(it).distinct().size) } }
     @Test fun cornerFanUsesMostOfOpenQuadrant() {
-        val innerRing = FloatingBallLayout.toolOffsets(FloatingBallSnap.TOP_LEFT).take(3)
-        val angles = innerRing.map { Math.toDegrees(atan2(it.y, it.x).toDouble()) }
-        assertTrue(angles.last() - angles.first() >= 80.0)
+        // The corner fan spans 5°..85° across all six points; assert it covers most of the 90°
+        // quadrant. (Previously took the first three points as the "inner ring" and compared the
+        // first/last angle, but the third point is an outer-ring 5° point, making the sequence
+        // non-monotonic and the assertion fail.)
+        val angles = FloatingBallLayout.toolOffsets(FloatingBallSnap.TOP_LEFT).map { Math.toDegrees(atan2(it.y, it.x).toDouble()) }
+        assertTrue(angles.max() - angles.min() >= 80.0)
     }
 }

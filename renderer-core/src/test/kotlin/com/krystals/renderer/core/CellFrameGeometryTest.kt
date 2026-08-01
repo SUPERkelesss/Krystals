@@ -25,12 +25,15 @@ class CellFrameGeometryTest {
     fun allCellsReturnsEdgesForFullGrid() {
         val lattice = Lattice.DEFAULT
         val edges = CellFrameGeometry.edges(lattice, Expansion(2, 1, 1), FrameMode.ALL_CELLS)
-        // 2x1x1 grid => 3 cells along x, 2 along y, 2 along z (including boundaries).
-        // Edges parallel to x: (2+1) * 2 * 2 = 12
-        // Edges parallel to y: (2+1) * 2 * 2 = 12
-        // Edges parallel to z: (2+1) * 2 * 2 = 12
-        // But shared edges are deduplicated by the linked set.
-        assertEquals(36, edges.size)
+        // 2x1x1 grid: 2 cells along x, 1 along y, 1 along z (3x2x2 grid lines).
+        // The geometry emits one segment per grid line, with the x-parallel lines spanning
+        // the full grid width (2 cells) rather than being split per cell:
+        //   x-parallel: (Ny+1) * (Nz+1) = 2 * 2 = 4
+        //   y-parallel: (Nx+1) * (Nz+1) = 3 * 2 = 6
+        //   z-parallel: (Nx+1) * (Ny+1) = 3 * 2 = 6
+        // These cover every boundary of the grid; the count is 16, not 20, because the
+        // x-parallel edges are merged into full-width segments.
+        assertEquals(16, edges.size)
     }
 
     @Test
