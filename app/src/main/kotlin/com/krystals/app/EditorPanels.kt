@@ -828,15 +828,27 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
         }
         Text(epsilonHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        // Per v0.8.2: compute co-located site groups for border coloring.
+        val gatheredSiteInfo = remember(tab.structure) { computeGatheredSiteInfo(sites) }
         LazyColumn(Modifier.fillMaxSize()) {
             items(visibleRules, key = { it.key }) { rule ->
                 val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
                 val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
-                // Per v0.8.1: hbond rules get a gray dashed-style border + label chip.
+                // Per v0.8.2: border precedence — red (Σocc>1) > mixedColor > hbond-gray.
+                val gatherA = gatheredSiteInfo[rule.siteA]
+                val gatherB = gatheredSiteInfo[rule.siteB]
+                val anyNormalized = (gatherA?.wasNormalized == true) || (gatherB?.wasNormalized == true)
+                val anyGathered = gatherA != null || gatherB != null
+                val borderColor = when {
+                    anyNormalized -> Color.Red
+                    anyGathered -> Color(0xFF808080) // placeholder mixedColor
+                    rule.isHBond -> Color.Gray
+                    else -> null
+                }
                 val rowModifier = Modifier.fillMaxWidth()
                     .clickable { editingRule = rule }
                     .padding(vertical = 6.dp, horizontal = 4.dp)
-                    .let { if (rule.isHBond) it.border(BorderStroke(1.dp, Color.Gray), RoundedCornerShape(4.dp)) else it }
+                    .let { if (borderColor != null) it.border(BorderStroke(1.dp, borderColor), RoundedCornerShape(4.dp)) else it }
                 Row(rowModifier, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("$labelA — $labelB")
@@ -1553,4 +1565,24 @@ private fun DropdownField(label: String, value: String, options: List<String>, o
 
 private fun eval(value: String) = ExpressionParser(value).evaluate()
 private fun fmt(value: Double) = "%.4f".format(value)
+
+/** Per v0.8.2: identifies sites sharing the same fractional coordinates (disorder). */
+private data class GatheredSiteInfo(val wasNormalized: Boolean)
+private fun computeGatheredSiteInfo(sites: List<com.krystals.crystal.core.model.Site>): Map<String, GatheredSiteInfo> {
+    val tol = 1e-4
+    val byPos = linkedMapOf<Triple<Int, Int, Int>, MutableList<com.krystals.crystal.core.model.Site>>()
+    for (s in sites) {
+        val key = Triple((s.fractionalCoordinate.x / tol).toInt(), (s.fractionalCoordinate.y / tol).toInt(), (s.fractionalCoordinate.z / tol).toInt())
+        byPos.getOrPut(key) { mutableListOf() }.add(s)
+    }
+    val result = mutableMapOf<String, GatheredSiteInfo>()
+    for ((_, bucket) in byPos) {
+        val distinctIds = bucket.map { it.id }.distinct()
+        if (distinctIds.size < 2) continue
+        val rawSum = bucket.sumOf { it.occupancy }
+        val info = GatheredSiteInfo(wasNormalized = rawSum > 1.0)
+        for (site in bucket) result[site.id] = info
+    }
+    return result
+}
 private fun colorFromArgb(value: Long) = Color(value)
