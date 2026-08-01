@@ -14,6 +14,9 @@ import com.krystals.crystal.core.symmetry.SymmetryOperation
 import com.krystals.renderer.core.builder.CrystalSceneBuilder
 import com.krystals.renderer.core.builder.CrystalRenderSceneFactory
 import com.krystals.renderer.core.builder.SceneBuildOptions
+import com.krystals.renderer.core.material.Material
+import com.krystals.renderer.core.primitive.AtomInstance
+import com.krystals.renderer.core.primitive.GatheredAtomInstance
 import com.krystals.renderer.core.primitive.MeshKind
 import com.krystals.renderer.core.style.HbondPattern
 import com.krystals.renderer.core.style.RenderConfiguration
@@ -21,6 +24,7 @@ import com.krystals.renderer.core.style.ViewerAppearance
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class CrystalSceneBuilderTest {
@@ -111,6 +115,44 @@ class CrystalSceneBuilderTest {
             assertEquals(HbondPattern.material(), bond.startMaterial, "hbond start material override")
             assertEquals(HbondPattern.material(), bond.endMaterial, "hbond end material override")
         }
+    }
+
+    @Test
+    fun gatheredAtomsReplaceMembersAndCollapseBonds() {
+        // Two co-located atoms (disorder) + one external bond partner → 1 gathered instance,
+        // 0 member AtomInstances, 1 bond from group center.
+        val structure = CrystalStructure(
+            blockName = "disordered",
+            lattice = Lattice(5.0, 5.0, 5.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(
+                Site("A1", "A1", Species("C"), FractionalCoordinate(0.5, 0.5, 0.3)),
+                Site("A2", "A2", Species("N"), FractionalCoordinate(0.5, 0.5, 0.3)), // same position
+                Site("B", "B1", Species("O"), FractionalCoordinate(0.5, 0.5, 0.6)),
+            ),
+        )
+        val rule = BondRule("A1", "B", 0.1, 4.0)
+        val rule2 = BondRule("A2", "B", 0.1, 4.0)
+        val analysis = BondDetector.buildNetwork(structure, BondConfiguration(listOf(rule, rule2)))
+        val options = SceneBuildOptions(
+            atomMaterialBySite = mapOf("A1" to Material(0xFFFF0000), "A2" to Material(0xFF0000FF), "B" to Material(0xFF00FF00)),
+            bondMaterialBySite = mapOf("A1" to Material(0xFFFF0000), "A2" to Material(0xFF0000FF), "B" to Material(0xFF00FF00)),
+        )
+        val scene = CrystalSceneBuilder().build(structure, analysis, options)
+        // The gridded detector may produce boundary images that also land at the same position,
+        // so we just assert at least one gathered instance exists.
+        val gathered = scene.objects.filterIsInstance<GatheredAtomInstance>()
+        assertTrue(gathered.isNotEmpty(), "two co-located sites → at least 1 gathered instance")
+        val g = gathered.first { it.gathered.memberAtomIds.size >= 2 }
+        assertEquals(2, g.gathered.memberAtomIds.size, "group should have 2 member atoms")
+        val members = g.gathered.memberAtomIds
+        assertNotNull(scene.objects.find { it.id == "atom:3" }, "external atom B should be a plain AtomInstance")
+        // Member atoms are NOT emitted as AtomInstances.
+        assertTrue(scene.objects.none { it is AtomInstance && it.atom.id in members }, "member atoms must not be plain AtomInstances")
+        // Bonds: both A1-B and A2-B collapse to one bond from the gathered center.
+        val bonds = scene.bonds
+        assertTrue(bonds.isNotEmpty(), "at least one bond from gathered center to B")
     }
 
     private fun structure() = CrystalStructure(

@@ -9,8 +9,10 @@ import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
+import com.krystals.renderer.core.primitive.GatheredAtomInstance
 import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.primitive.MeshKind
+import com.krystals.renderer.core.scene.GatheredAtomGrouper
 import com.krystals.renderer.core.scene.RenderObject
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.style.BondColorMode
@@ -51,9 +53,7 @@ class CrystalSceneBuilder {
 
         val atomById = analysis.atoms.associateBy { it.id }
         // Per v0.6.5: only make an external-shell atom visible if the bond's directional extend
-        // flag allows it. Previously used `extendAtoB || extendBtoA` which incorrectly showed
-        // external atoms from the non-extended direction (e.g. B→A external A atoms when only
-        // extendAtoB was set, even though the B→A bond itself was hidden).
+        // flag allows it.
         val externallyVisible = analysis.bonds.asSequence()
             .filter { it.rule.key !in options.hiddenBondKeys }
             .mapNotNull { bond ->
@@ -80,8 +80,32 @@ class CrystalSceneBuilder {
             BondColorMode.UNICOLOR -> options.defaultBondMaterial
         }
 
+        // Per v0.8.2: build gathered-atom groups for co-located atoms of different sites.
+        val colorBySite = options.atomMaterialBySite.mapValues { it.value.argb }
+        val groups = GatheredAtomGrouper.group(analysis.atoms, colorBySite)
+        val groupByMemberId = GatheredAtomGrouper.groupByAtomId(analysis.atoms, colorBySite)
+
         val objects = mutableListOf<RenderObject>()
-        analysis.atoms.forEach { atom ->
+
+        // Atom pass: emit plain AtomInstance for ungrouped visible atoms; skip grouped members.
+        val groupCenterById = linkedMapOf<String, Vec3>()
+        for (g in groups) {
+            val maxRadius = g.memberAtomIds.mapNotNull { id -> atomById[id]?.let { options.atomRadiusByElement[it.species.symbol] ?: options.defaultAtomRadius } }.maxOrNull() ?: options.defaultAtomRadius
+            val anyVisible = g.memberAtomIds.any { id -> atomById[id]?.let { atomVisible(it) } ?: false }
+            val remainderMat = Material(argb = g.mixedColor, opacity = 0.25, reflective = false)
+            val gatheredId = "gathered:${g.memberAtomIds.sorted().joinToString(",")}"
+            groupCenterById[gatheredId] = g.center
+            objects += GatheredAtomInstance(
+                id = gatheredId,
+                gathered = g,
+                radius = maxRadius,
+                remainderMaterial = remainderMat,
+                visible = anyVisible,
+            )
+        }
+        val groupAtomIds = groupByMemberId.keys
+        for (atom in analysis.atoms) {
+            if (atom.id in groupAtomIds) continue  // handled by GatheredAtomInstance
             objects += AtomInstance(
                 id = "atom:${atom.id}",
                 atom = atom,
@@ -91,20 +115,35 @@ class CrystalSceneBuilder {
             )
         }
 
-            analysis.bonds.forEachIndexed { index, bond ->
+        // Bond pass: drop intra-group bonds, remap positions, dedupe per (groupKey|atomId, groupKey|atomId, offsetB).
+        val seenBondKeys = mutableSetOf<Triple<Any, Any, Triple<Int, Int, Int>>>()
+
+        analysis.bonds.forEachIndexed { index, bond ->
             val start = atomById[bond.atomA]
                 ?: error("bond ${bond.atomA}-${bond.atomB} references missing atom ${bond.atomA}")
             val end = atomById[bond.atomB]
                 ?: error("bond ${bond.atomA}-${bond.atomB} references missing atom ${bond.atomB}")
+
+            val startGroup = groupByMemberId[bond.atomA]
+            val endGroup = groupByMemberId[bond.atomB]
+
+            // Drop intra-group bonds.
+            if (startGroup != null && endGroup != null && startGroup == endGroup) return@forEachIndexed
+
+            val startKey: Any = startGroup?.let { "gathered:${it.memberAtomIds.sorted().joinToString(",")}" } ?: bond.atomA
+            val endKey: Any = endGroup?.let { "gathered:${it.memberAtomIds.sorted().joinToString(",")}" } ?: bond.atomB
+            val dedupeKey = Triple(startKey, endKey, Triple(bond.offsetB.x, bond.offsetB.y, bond.offsetB.z))
+            if (!seenBondKeys.add(dedupeKey)) return@forEachIndexed
+
+            val startPos = startGroup?.center ?: start.cartesianCoordinate.toVec3()
+            val endPos = endGroup?.center ?: end.cartesianCoordinate.toVec3()
             val externalAllowed = !end.isExternalShell || bond.rule.shouldExtendAcrossCell(start.siteId, end.isExternalShell)
-            // Per v0.8.1: H-bonds override the user's bond style — single translucent
-            // gray cylinder, both ends identical.
             val isHBond = bond.rule.isHBond
             objects += BondInstance(
                 id = "bond:${bond.atomA}:${bond.atomB}:${bond.offsetB.x}:${bond.offsetB.y}:${bond.offsetB.z}:$index",
                 bond = bond,
-                start = start.cartesianCoordinate.toVec3(),
-                end = end.cartesianCoordinate.toVec3(),
+                start = startPos,
+                end = endPos,
                 radius = if (isHBond) HbondPattern.RADIUS else options.bondRadius,
                 startMaterial = if (isHBond) HbondPattern.material() else bondMaterial(start),
                 endMaterial = if (isHBond) HbondPattern.material() else bondMaterial(end),
@@ -112,8 +151,7 @@ class CrystalSceneBuilder {
             )
         }
 
-        // Polyhedron faces are only built for sites in polyhedronSiteIds; skip the full
-        // coordination-neighbour table when none are selected (the common case).
+        // Polyhedra pass (unchanged).
         val neighbors = if (options.polyhedronSiteIds.isEmpty()) {
             emptyMap()
         } else {
