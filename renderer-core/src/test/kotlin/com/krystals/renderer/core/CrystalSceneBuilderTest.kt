@@ -15,6 +15,7 @@ import com.krystals.renderer.core.builder.CrystalSceneBuilder
 import com.krystals.renderer.core.builder.CrystalRenderSceneFactory
 import com.krystals.renderer.core.builder.SceneBuildOptions
 import com.krystals.renderer.core.primitive.MeshKind
+import com.krystals.renderer.core.style.HbondPattern
 import com.krystals.renderer.core.style.RenderConfiguration
 import com.krystals.renderer.core.style.ViewerAppearance
 import kotlin.test.Test
@@ -84,6 +85,32 @@ class CrystalSceneBuilderTest {
 
         assertFalse(scene.bonds.any { it.visible })
         assertTrue(scene.meshes.isNotEmpty())
+    }
+
+    @Test
+    fun hbondBondsGetFixedGrayTranslucentAppearance() {
+        // H and F with an hbond rule — scene must override radius, start/end material.
+        val structure = CrystalStructure(
+            blockName = "hf",
+            lattice = Lattice(5.0, 5.0, 5.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(
+                Site("H", "H1", Species("H"), FractionalCoordinate(0.5, 0.5, 0.2)),
+                Site("F", "F1", Species("F"), FractionalCoordinate(0.5, 0.5, 0.5)),
+            ),
+        )
+        val hbondRule = BondRule("H", "F", 1.0, 2.5, isHBond = true)
+        val analysis = BondDetector.buildNetwork(structure, BondConfiguration(listOf(hbondRule)))
+        val scene = CrystalSceneBuilder().build(structure, analysis, SceneBuildOptions())
+
+        val hbonds = scene.bonds.filter { it.bond.rule.isHBond }
+        assertTrue(hbonds.isNotEmpty(), "scene must contain hbond instances")
+        hbonds.forEach { bond ->
+            assertEquals(HbondPattern.RADIUS, bond.radius, "hbond radius override")
+            assertEquals(HbondPattern.material(), bond.startMaterial, "hbond start material override")
+            assertEquals(HbondPattern.material(), bond.endMaterial, "hbond end material override")
+        }
     }
 
     private fun structure() = CrystalStructure(

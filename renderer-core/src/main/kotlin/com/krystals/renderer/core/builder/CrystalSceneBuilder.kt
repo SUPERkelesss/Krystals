@@ -14,6 +14,7 @@ import com.krystals.renderer.core.primitive.MeshKind
 import com.krystals.renderer.core.scene.RenderObject
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.style.BondColorMode
+import com.krystals.renderer.core.style.HbondPattern
 import com.krystals.renderer.core.style.RenderEnvironment
 
 data class SceneBuildOptions(
@@ -96,14 +97,17 @@ class CrystalSceneBuilder {
             val end = atomById[bond.atomB]
                 ?: error("bond ${bond.atomA}-${bond.atomB} references missing atom ${bond.atomB}")
             val externalAllowed = !end.isExternalShell || bond.rule.shouldExtendAcrossCell(start.siteId, end.isExternalShell)
+            // Per v0.8.1: H-bonds override the user's bond style — single translucent
+            // gray cylinder, both ends identical.
+            val isHBond = bond.rule.isHBond
             objects += BondInstance(
                 id = "bond:${bond.atomA}:${bond.atomB}:${bond.offsetB.x}:${bond.offsetB.y}:${bond.offsetB.z}:$index",
                 bond = bond,
                 start = start.cartesianCoordinate.toVec3(),
                 end = end.cartesianCoordinate.toVec3(),
-                radius = options.bondRadius,
-                startMaterial = bondMaterial(start),
-                endMaterial = bondMaterial(end),
+                radius = if (isHBond) HbondPattern.RADIUS else options.bondRadius,
+                startMaterial = if (isHBond) HbondPattern.material() else bondMaterial(start),
+                endMaterial = if (isHBond) HbondPattern.material() else bondMaterial(end),
                 visible = options.showBonds && bond.rule.key !in options.hiddenBondKeys && externalAllowed,
             )
         }
