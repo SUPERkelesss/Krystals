@@ -118,7 +118,9 @@ class MaterialFactory(
 
     override fun close() {
         instances.asReversed().forEach(engine::destroyMaterialInstance)
-        materials.values.toList().asReversed().forEach(engine::destroyMaterial)
+        // Per v0.8.1: destroyMaterial does not mutate the materials map — forward iteration avoids
+        // the toList() snapshot (reverse order within a shutdown pass is irrelevant).
+        materials.values.forEach(engine::destroyMaterial)
         instances.clear()
         instanceCache.clear()
         materials.clear()

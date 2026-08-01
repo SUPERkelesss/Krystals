@@ -78,6 +78,12 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private val pickingRenderer = PickingRenderer()
     private var swapChain: SwapChain? = null
     private var submittedScene: RenderScene? = null
+    // Per v0.8.1: cache the bond-radius-scaled copy of the last submitted scene. Camera-only
+    // interactions reuse the same raw RenderScene reference, so without this cache submit() would
+    // copy the scene (and allocate a full new objects list) and then fail the identity early-return,
+    // running the entire GPU sync pipeline every frame.
+    private var lastRawScene: RenderScene? = null
+    private var cachedScaledScene: RenderScene? = null
     private var interaction = InteractionState()
     private var frameScheduled = false
     private val frameBudget = DirtyFrameBudget()
@@ -134,11 +140,19 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         checkOpen()
         // 4× bond mapping: Filament multiplies bond radius by 0.5 (4× thinner than the
         // previous 2.0×) so that at the same slider value, bonds render thinner.
-        val scaledScene = scene.copy(
-            objects = scene.objects.map { obj ->
-                if (obj is BondInstance) obj.copy(radius = obj.radius * 0.5) else obj
-            }
-        )
+        // Per v0.8.1: reuse the cached scaled scene when the raw scene reference is unchanged, so
+        // camera-only interactions (pans/zooms/rotations) short-circuit at the identity check below
+        // instead of re-copying the scene and re-running the GPU sync every frame.
+        val scaledScene = if (lastRawScene === scene && cachedScaledScene != null) {
+            cachedScaledScene!!
+        } else {
+            lastRawScene = scene
+            scene.copy(
+                objects = scene.objects.map { obj ->
+                    if (obj is BondInstance) obj.copy(radius = obj.radius * 0.5) else obj
+                }
+            ).also { cachedScaledScene = it }
+        }
         if (submittedScene === scaledScene) return
         submittedScene = scaledScene
         sceneSubmissions++
@@ -299,6 +313,8 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
 
     override fun clear() {
         submittedScene = null
+        lastRawScene = null
+        cachedScaledScene = null
         sceneBounds = null
         allSceneBounds = null
         sceneCenter = Vec3.ZERO

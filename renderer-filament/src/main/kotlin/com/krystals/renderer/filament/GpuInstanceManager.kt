@@ -32,8 +32,10 @@ class GpuInstanceManager(
     private val materials: MaterialFactory,
 ) : AutoCloseable {
     private val entities = linkedMapOf<String, Int>()
+    // Per v0.8.1: objectByEntity is only ever touched on the Filament render thread (sync/clear/
+    // destroy all run inside submit()). The lock was dead overhead — if pickGpu() is ever wired
+    // into production it reads objectIdForEntity() cross-thread and the lock must be restored.
     private val objectByEntity = linkedMapOf<Int, String>()
-    private val entityLock = Any()
     private val ownedMeshByEntity = linkedMapOf<Int, UploadedMesh>()
     private val auxiliaryIds = linkedSetOf<String>()
     private val sceneAuxiliaryIds = linkedSetOf<String>()
@@ -56,21 +58,25 @@ class GpuInstanceManager(
         if (lastSnapshot === snapshot) return
         atomsById = snapshot.atoms.associateBy { it.atom.id }
         val diff = model.sync(snapshot)
-        (diff.removed + diff.updated).forEach(::destroy)
-        val records = diff.batches.values.flatten().associateBy { it.objectId }
-        (diff.added + diff.updated).forEach { id ->
+        // Per v0.8.1: sequenceOf(...).flatten() avoids the intermediate set/list allocations of the
+        // old set-union (+) and flatten() — sync() now allocates nothing beyond the records map.
+        sequenceOf(diff.removed, diff.updated).flatten().forEach(::destroy)
+        val records = diff.batches.values.asSequence().flatten().associateBy { it.objectId }
+        sequenceOf(diff.added, diff.updated).flatten().forEach { id ->
             val record = records[id] ?: return@forEach
             if (record.batch.geometry == GeometryKind.POLYHEDRON) return@forEach
             create(record, snapshot)?.let { entity ->
                 entities[id] = entity
-                synchronized(entityLock) { objectByEntity[entity] = id.substringBeforeLast(":a").substringBeforeLast(":b") }
+                objectByEntity[entity] = id.substringBeforeLast(":a").substringBeforeLast(":b")
             }
         }
-        polyhedronBatchIds.toList().asReversed().forEach(::destroy)
+        // Per v0.8.1: destroy() removes from entities/objectByEntity, never from these sets, so
+        // forward iteration avoids the toList() snapshot (destroy order within a batch is irrelevant).
+        polyhedronBatchIds.forEach(::destroy)
         polyhedronBatchIds.clear()
-        polyhedronOutlineIds.toList().asReversed().forEach(::destroy)
+        polyhedronOutlineIds.forEach(::destroy)
         polyhedronOutlineIds.clear()
-        sceneAuxiliaryIds.toList().asReversed().forEach(::destroy)
+        sceneAuxiliaryIds.forEach(::destroy)
         sceneAuxiliaryIds.clear()
         meshes.mergePolyhedra(snapshot.meshes).forEachIndexed { index, merged ->
             val id = "polyhedron-batch:$index"
@@ -78,7 +84,7 @@ class GpuInstanceManager(
             val record = InstanceRecord(id, 0, BatchKey(GeometryKind.POLYHEDRON, MaterialKey(merged.material)), identity())
             create(record, snapshot)?.let { entity ->
                 entities[id] = entity
-                synchronized(entityLock) { objectByEntity[entity] = merged.objectIds.firstOrNull().orEmpty() }
+                objectByEntity[entity] = merged.objectIds.firstOrNull().orEmpty()
                 polyhedronBatchIds += id
             }
         }
@@ -103,12 +109,15 @@ class GpuInstanceManager(
         lastSnapshot = snapshot
     }
 
-    fun objectIdForEntity(entity: Int): String? = synchronized(entityLock) { objectByEntity[entity] }
+    // Per v0.8.1: only read from PickingRenderer.pickGpu(), which is not wired into production
+    // (picking runs the CPU projection path). If GPU picking is ever enabled cross-thread, the
+    // lock around objectByEntity must be restored.
+    fun objectIdForEntity(entity: Int): String? = objectByEntity[entity]
 
     fun updateInteraction(snapshot: RenderScene, state: InteractionState) {
         if (lastDocumentState == state.document) return
         lastDocumentState = state.document
-        auxiliaryIds.toList().asReversed().forEach(::destroy)
+        auxiliaryIds.forEach(::destroy)
         auxiliaryIds.clear()
         auxiliaryMeshes.keys.removeAll { it.startsWith("aux:") }
         // P8: 3D highlight spheres removed — selection rings are now drawn as 2D overlays
@@ -328,7 +337,7 @@ class GpuInstanceManager(
 
     private fun destroy(id: String) {
         val entity = entities.remove(id) ?: return
-        synchronized(entityLock) { objectByEntity.remove(entity) }
+        objectByEntity.remove(entity)
         ownedMeshByEntity.remove(entity)?.let(meshes::destroy)
         scene.removeEntity(entity)
         engine.destroyEntity(entity)
