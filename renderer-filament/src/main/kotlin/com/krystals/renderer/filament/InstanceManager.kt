@@ -3,6 +3,7 @@ package com.krystals.renderer.filament
 import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
+import com.krystals.renderer.core.primitive.GatheredAtomInstance
 import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.crystal.core.math.Vec3
@@ -55,7 +56,26 @@ class InstanceManager {
         val next = linkedMapOf<String, InstanceRecord>()
         val sphereGeometry = sphereGeometryForVisibleAtoms(scene.atoms.count(AtomInstance::visible))
         val atomsByImageId = scene.atoms.associateBy { it.atom.id }
+
+        // Per v0.8.2: gather co-located mixed-occupancy atoms into single spheres.
+        // Member atoms are individually skipped; the gathered instance renders instead.
+        val gatheredByMemberId = linkedMapOf<Long, String>()  // member atomId -> gatheredInstance.id
+        scene.objects.asSequence().filterIsInstance<GatheredAtomInstance>().filter(GatheredAtomInstance::visible).forEach { gInst ->
+            val g = gInst.gathered
+            val memberIds = g.memberAtomIds.sorted().joinToString(",")
+            val id = "gathered:$memberIds"
+            // Use the first member's atom id for picking — a tap on the pie returns that member.
+            val pickAtomId = g.memberAtomIds.first()
+            next[id] = InstanceRecord(
+                id, pickId("atom:${pickAtomId}"),
+                BatchKey(sphereGeometry, MaterialKey(Material(argb = g.mixedColor, reflective = false), 1.0)),
+                transform(g.center.x, g.center.y, g.center.z, gInst.radius, gInst.radius, gInst.radius),
+            )
+            g.memberAtomIds.forEach { gatheredByMemberId[it] = id }
+        }
+
         scene.atoms.asSequence().filter(AtomInstance::visible).forEach { atom ->
+            if (atom.atom.id in gatheredByMemberId) return@forEach // rendered as gathered pie
             next[atom.id] = InstanceRecord(
                 atom.id, pickId(atom.id), BatchKey(sphereGeometry, MaterialKey(atom.material, atom.atom.occupancy)),
                 transform(atom.atom.cartesianCoordinate.x, atom.atom.cartesianCoordinate.y, atom.atom.cartesianCoordinate.z, atom.radius, atom.radius, atom.radius),
