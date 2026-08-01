@@ -118,7 +118,17 @@ object BondValence {
             }
         }
 
-        return SmartIonicResult(rules, success = true)
+        // Per v0.8.1: collect H sites whose BVS resolved to valence 1 (protons) and append
+        // H-bond rules for proton···acceptor contacts beyond the normal covalent windows.
+        val protonSiteIds = analysis.siteValence
+            .filter { (_, sv) -> sv.valence == 1 && !sv.isAnion && !sv.isNeutral }
+            .keys.filter { siteId -> structure.sites.any { it.id == siteId && it.species.symbol == "H" } }
+            .toSet()
+        val hbondRules = HbondChecking.hbondRules(
+            structure, atoms, analysis.neighboursByAtomId, protonSiteIds, rules,
+        )
+
+        return SmartIonicResult(rules + hbondRules, success = true)
     }
 
     /**
