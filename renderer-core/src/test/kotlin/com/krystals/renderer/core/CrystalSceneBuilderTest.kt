@@ -148,8 +148,9 @@ class CrystalSceneBuilderTest {
         assertEquals(2, g.gathered.memberAtomIds.size, "group should have 2 member atoms")
         val members = g.gathered.memberAtomIds
         assertNotNull(scene.objects.find { it.id == "atom:3" }, "external atom B should be a plain AtomInstance")
-        // Member atoms are NOT emitted as AtomInstances.
-        assertTrue(scene.objects.none { it is AtomInstance && it.atom.id in members }, "member atoms must not be plain AtomInstances")
+        // Member atoms ARE still emitted as AtomInstances (backward compat for BondNetwork adapter).
+        val memberAtomInstances = scene.objects.filter { it is AtomInstance && it.atom.id in members }
+        assertEquals(2, memberAtomInstances.size, "member atoms must still be plain AtomInstances")
         // Bonds: both A1-B and A2-B collapse to one bond from the gathered center.
         val bonds = scene.bonds
         assertTrue(bonds.isNotEmpty(), "at least one bond from gathered center to B")

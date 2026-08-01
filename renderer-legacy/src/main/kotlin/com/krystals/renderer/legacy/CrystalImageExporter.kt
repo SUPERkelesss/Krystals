@@ -12,6 +12,9 @@ import android.graphics.LinearGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import com.krystals.crystal.analysis.bonding.BondNetwork
+import com.krystals.renderer.core.primitive.GatheredAtomInstance
+import com.krystals.renderer.core.scene.GatheredAtomGrouper
+import com.krystals.renderer.core.scene.GatherSlice
 import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
 import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
@@ -42,6 +45,14 @@ object CrystalImageExporter {
 
     private data class AtomPrimitive(val point: Point) : RenderPrimitive {
         override val depth = point.z
+        override val depthLayer = 2
+    }
+
+    private data class GatherPrimitive(
+        val x: Float, val y: Float, private val zDepth: Double, val radius: Float,
+        val slices: List<GatherSlice>, val remainderFraction: Double, val mixedColor: Long,
+    ) : RenderPrimitive {
+        override val depth get() = zDepth
         override val depthLayer = 2
     }
 
@@ -195,6 +206,7 @@ object CrystalImageExporter {
         bondValenceBySite: Map<String, Double> = emptyMap(),
     ): Bitmap = renderLegacy(
         snapshot = LegacyRenderSceneAdapter.toBondNetwork(scene),
+        sceneGathered = scene.objects.filterIsInstance<GatheredAtomInstance>(),
         appearance = appearance,
         renderConfiguration = renderConfiguration,
         controller = controller,
@@ -210,6 +222,7 @@ object CrystalImageExporter {
 
     private fun renderLegacy(
         snapshot: BondNetwork,
+        sceneGathered: List<GatheredAtomInstance>,
         appearance: ViewerAppearance,
         renderConfiguration: RenderConfiguration,
         controller: ViewerController,
@@ -306,9 +319,21 @@ object CrystalImageExporter {
                 )
             }
         }
+        // Per v0.8.2: gathered-atom groups rendered as pie-chart spheres.
+        val groupByMemberId = GatheredAtomGrouper.groupByAtomId(snapshot.atoms, linkedMapOf())
+
         val renderables = buildList<RenderPrimitive> {
             addAll(dihedralPlanes)
-            visiblePoints.forEach { add(AtomPrimitive(it)) }
+            sceneGathered.forEach { gInst ->
+                val g = gInst.gathered
+                val depth = legacyCameraDepth(controller.rotation * g.center)
+                val screen = screen(controller.rotation * g.center)
+                val r = ((gInst.radius * scale).coerceIn(9.0, 84.0)).toFloat()
+                add(GatherPrimitive(screen.first, screen.second, zDepth = depth, radius = r, slices = g.slices, remainderFraction = g.remainderFraction, mixedColor = g.mixedColor))
+            }
+            visiblePoints
+                .filter { groupByMemberId[it.atomId] == null }
+                .forEach { add(AtomPrimitive(it)) }
             if (visibility.showBonds) {
                 snapshot.bonds.forEach { bond ->
                     val a = byId[bond.atomA] ?: return@forEach
@@ -366,6 +391,7 @@ object CrystalImageExporter {
                 // Per v0.5.3a: each object's colour blends toward the background by its fog amount;
                 // opacity is unchanged. Bonds split at the midpoint (each half by its endpoint's fog).
                 is AtomPrimitive -> drawAtom(canvas, primitive.point, appearance, highlightedAtomIds, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, dofFog(primitive.depth), bgArgb)
+                is GatherPrimitive -> drawGatheredAtom(canvas, primitive, ::dofFog, bgArgb)
                 is BondPrimitive -> drawBond(canvas, primitive.a, primitive.b, primitive.width, primitive.isHBond, appearance, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, visibility.hiddenSites, ::dofFog, bgArgb)
                 is PolyhedronFacePrimitive -> drawPolyhedronFacePrimitive(canvas, primitive, appearance, renderConfiguration.elementArgbOverrides, renderConfiguration.siteArgbOverrides, controller.rotation, dofFog(primitive.depth), bgArgb)
                 is DihedralPlanePrimitive -> drawDihedralPlanePrimitive(canvas, primitive, appearance, dofFog(primitive.depth), bgArgb)
@@ -408,6 +434,36 @@ object CrystalImageExporter {
             Shader.TileMode.CLAMP,
         )
         canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.shader = shader })
+    }
+
+    private fun drawGatheredAtom(canvas: Canvas, primitive: GatherPrimitive, dofFog: (Double) -> Float, bgArgb: Int) {
+        val fog = (1f - dofFog(primitive.depth)).coerceIn(0f, 1f)
+        val cx = primitive.x; val cy = primitive.y; val r = primitive.radius
+        if (primitive.slices.isEmpty()) return
+        val rect = RectF(cx - r, cy - r, cx + r, cy + r)
+        var startAngle = -90f
+        primitive.slices.forEach { slice ->
+            val sweep = (slice.fraction * 360f).toFloat().coerceAtLeast(1f)
+            val argb = slice.color.toInt()
+            val alpha = (argb ushr 24 and 0xFF).toInt()
+            val sliceArgb = ((alpha * fog).toInt().coerceIn(0, 255) shl 24) or (argb and 0x00FFFFFF)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = sliceArgb; style = Paint.Style.FILL }
+            canvas.drawArc(rect, startAngle, sweep, true, paint)
+            startAngle += sweep
+        }
+        if (primitive.remainderFraction > 0.001f) {
+            val sweep = (primitive.remainderFraction * 360f).toFloat().coerceAtLeast(1f)
+            val mixed = primitive.mixedColor.toInt()
+            val alpha = (mixed ushr 24 and 0xFF).toInt()
+            val remArgb = ((alpha * 0.25f * fog).toInt().coerceIn(0, 255) shl 24) or (mixed and 0x00FFFFFF)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = remArgb; style = Paint.Style.FILL }
+            canvas.drawArc(rect, startAngle, sweep, true, paint)
+        }
+        val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb((0.3f * fog * 255f).toInt(), 128, 128, 128)
+            style = Paint.Style.STROKE; strokeWidth = 1f
+        }
+        canvas.drawCircle(cx, cy, r, outline)
     }
 
     private fun drawAtom(canvas: Canvas, point: Point, appearance: ViewerAppearance, selectedAtomIds: Collection<Long>, elementArgbOverrides: Map<String, Long>, siteArgbOverrides: Map<String, Long> = emptyMap(), fog: Float = 0f, bgArgb: Int = 0xFF101014.toInt()) {

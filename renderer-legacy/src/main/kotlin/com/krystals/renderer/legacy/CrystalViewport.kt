@@ -32,6 +32,10 @@ import androidx.compose.ui.layout.onSizeChanged
 import com.krystals.crystal.analysis.bonding.BondNetwork
 import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
 import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
+import com.krystals.renderer.core.primitive.GatheredAtomInstance
+import com.krystals.renderer.core.scene.GatheredAtom
+import com.krystals.renderer.core.scene.GatheredAtomGrouper
+import com.krystals.renderer.core.scene.GatherSlice
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
 import com.krystals.crystal.core.math.Mat3
@@ -79,6 +83,16 @@ private data class AtomRenderable(
     val lockedHighlight: Boolean = false,
 ) : Renderable {
     override val depth = atom.depth
+    override val depthLayer = 2
+}
+
+private data class GatheredAtomRenderable(
+    val center: ProjectedAtom,
+    val slices: List<GatherSlice>,
+    val remainderFraction: Double,
+    val mixedColor: Long,
+) : Renderable {
+    override val depth = center.depth
     override val depthLayer = 2
 }
 
@@ -552,9 +566,25 @@ private fun LegacyCanvasViewport(
                 )
             }
         }
+        // Per v0.8.2: gathered-atom groups (same-position disorder) rendered as pie-chart spheres.
+        val gatheredColorBySite = linkedMapOf<String, Long>() // computed from scene options
+        val sceneGathered = scene?.objects?.filterIsInstance<GatheredAtomInstance>().orEmpty()
+        val groupByMemberId = GatheredAtomGrouper.groupByAtomId(snapshot.atoms, gatheredColorBySite)
+
         val renderables = buildList<Renderable> {
             addAll(dihedralPlanes)
-            visibleProjected.forEach { add(AtomRenderable(it, it.atom.id in highlightedIds, it.atom.id in lockedHighlightIds)) }
+            // Emit gathered-atom pies before individual atoms so depth-sorting works naturally.
+            sceneGathered.forEach { gInst ->
+                val g = gInst.gathered
+                val depth = legacyCameraDepth(controller.rotation * g.center)
+                val pos = project(controller.rotation * g.center)
+                val r = (gInst.radius * scale).coerceIn(9.0, 84.0).toFloat()
+                val rep = snapshot.atoms.first { it.id == g.memberAtomIds.first() }
+                add(GatheredAtomRenderable(ProjectedAtom(rep, pos, depth, r), g.slices, g.remainderFraction, g.mixedColor))
+            }
+            visibleProjected
+                .filter { groupByMemberId[it.atom.id] == null } // member atoms are in the pie
+                .forEach { add(AtomRenderable(it, it.atom.id in highlightedIds, it.atom.id in lockedHighlightIds)) }
             if (visibility.showBonds) {
                 snapshot.bonds.forEach { bond ->
                     val a = byId[bond.atomA] ?: return@forEach
@@ -623,6 +653,7 @@ private fun LegacyCanvasViewport(
                 // fog amount; opacity is unchanged. Bonds split at the midpoint so each half fades by
                 // its endpoint atom's depth (continuous fade into the atoms).
                 is AtomRenderable -> drawAtom(renderable.atom, renderable.selected, renderable.lockedHighlight, appearance, renderConfiguration, dofFog(renderable.depth), bgColor, reflection)
+                is GatheredAtomRenderable -> drawGatheredAtom(renderable, ::dofFog, bgColor)
                 is BondRenderable -> drawBond(renderable.a, renderable.b, renderable.width, renderable.isHBond, appearance, renderConfiguration, visibility.hiddenSites, ::dofFog, bgColor, reflection)
                 is PolyhedronFaceRenderable -> drawPolyhedronFace(renderable, appearance, dofFog(renderable.depth), bgColor, reflection)
                 is DihedralPlaneRenderable -> drawDihedralPlane(renderable, appearance, dofFog(renderable.depth), bgColor)
@@ -648,6 +679,49 @@ private fun LegacyCanvasViewport(
         // Per v0.8.1: projectedAtoms was already set at line ~531-533 above; this duplicate
         // assignment (legacy dead write) is removed.
     }
+}
+
+private fun DrawScope.drawGatheredAtom(
+    renderable: GatheredAtomRenderable,
+    dofFog: (Double) -> Float,
+    bgColor: Color,
+) {
+    val center = renderable.center.point
+    val radius = renderable.center.radius
+    val fog = (1f - dofFog(renderable.depth)).coerceIn(0f, 1f)
+    val slices = renderable.slices
+    if (slices.isEmpty()) return
+
+    // Draw slice sectors clockwise from 12-o'clock (-90°).
+    var startAngle = -90f
+    slices.forEach { slice ->
+        val sweep = (slice.fraction * 360f).toFloat().coerceAtLeast(1f)
+        val argb = slice.color
+        val sliceColor = Color(
+            red = ((argb ushr 16) and 0xFF).toInt() / 255f,
+            green = ((argb ushr 8) and 0xFF).toInt() / 255f,
+            blue = (argb and 0xFF).toInt() / 255f,
+            alpha = fog,
+        )
+        drawArc(color = sliceColor, startAngle = startAngle, sweepAngle = sweep, useCenter = true,
+            topLeft = Offset(center.x - radius, center.y - radius), size = androidx.compose.ui.geometry.Size(radius * 2f, radius * 2f))
+        startAngle += sweep
+    }
+    // Remainder sector (transparent mixedColor).
+    if (renderable.remainderFraction > 0.001f) {
+        val sweep = (renderable.remainderFraction * 360f).toFloat().coerceAtLeast(1f)
+        val mixed = renderable.mixedColor
+        val remColor = Color(
+            red = ((mixed ushr 16) and 0xFF).toInt() / 255f,
+            green = ((mixed ushr 8) and 0xFF).toInt() / 255f,
+            blue = (mixed and 0xFF).toInt() / 255f,
+            alpha = 0.25f * fog,
+        )
+        drawArc(color = remColor, startAngle = startAngle, sweepAngle = sweep, useCenter = true,
+            topLeft = Offset(center.x - radius, center.y - radius), size = androidx.compose.ui.geometry.Size(radius * 2f, radius * 2f))
+    }
+    // Outline circle.
+    drawCircle(Color.Gray.copy(alpha = 0.3f * fog), radius, center)
 }
 
 private fun DrawScope.drawAtom(
