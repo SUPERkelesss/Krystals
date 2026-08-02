@@ -64,12 +64,12 @@ class FilamentCompatibilityTest {
     fun `brighter light raises ambient so atoms brighten instead of darkening`() {
         // v0.8.14 regression: the old formula (0.62 - 0.32*intensity) inverted the
         // brightness slider — raising intensity lowered ambient and dimmed atoms.
-        // v0.8.16: ambient lowered to a dark glass base (0.18 + 0.15i); the positive
-        // correlation is preserved so the brightness slider still works.
+        // v0.8.17: ambient is a faint base (0.12 + 0.10i) under the mirror highlight;
+        // the positive correlation is preserved so the brightness slider still works.
         val low = diffuseAmbient(0.2f)
         val high = diffuseAmbient(0.8f)
         assertTrue(high > low, "ambient must rise with intensity: $low -> $high")
-        assertEquals(0.24f, diffuseAmbient(0.4f), 0.001f) // default intensity: dark glass base
+        assertEquals(0.16f, diffuseAmbient(0.4f), 0.001f) // default intensity: faint base
     }
 
     @Test
@@ -85,10 +85,10 @@ class FilamentCompatibilityTest {
     }
 
     @Test
-    fun `glass atom keeps diffuse share small and mirror highlight bright`() {
-        // v0.8.16: atoms read as glossy glass — the frosted (diffuse) share must be
-        // small and the specular blend full, so atoms are not washed out.
-        assertTrue(atomDiffuseWeight() < 0.7f, "frosted share must stay small, got ${atomDiffuseWeight()}")
+    fun `glass atom uses mirror specular only without frosted diffuse`() {
+        // v0.8.17: the frosted (diffuse) share is fully removed — atoms are lit by the
+        // mirror highlight alone on a faint ambient base, so they never wash out.
+        assertEquals(0.0f, atomDiffuseWeight(), 0.001f, "frosted diffuse must be gone")
         assertEquals(1.0f, atomSpecularBlend(), 0.001f) // highlight blends to full white
     }
 }

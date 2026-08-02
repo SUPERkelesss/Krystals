@@ -29,18 +29,14 @@ fragment {
         // giving spheres and cylinders stronger volume.
         float edge = clamp(length(viewN.xy), 0.0, 1.0);
         float edgeShade = 1.0 - materialParams.reflectionEnabled * edge * 0.25;
-        vec3 L = normalize(materialParams.lightDirection);
-        float NdotL = max(dot(viewN, L), 0.0);
-        // v0.8.16: dark glass base (0.18 + 0.15i) — atoms are glossy, not washed out;
-        // the brightness slider still brightens them monotonically.
-        float ambient = clamp(0.18 + 0.15 * materialParams.highlightIntensity, 0.18, 0.40);
-        // Frosted (diffuse) share kept small: the mirror highlight does the work.
-        float diffuseShade = ambient + (1.0 - ambient) * NdotL * 0.55;
-        vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);
-        // v0.8.16: mirror-glass look — tight Blinn-Phong highlight (NdotH, base 4.0)
+        // v0.8.17: no frosted diffuse — a faint ambient base (0.12 + 0.10i) keeps the
+        // element color visible; the mirror highlight does all the lighting.
+        float ambient = clamp(0.12 + 0.10 * materialParams.highlightIntensity, 0.12, 0.30);
+        vec4 color = vec4(materialParams.baseColor.rgb * ambient * edgeShade, materialParams.baseColor.a);
+        // v0.8.17: mirror-glass look — tight Blinn-Phong highlight (NdotH, base 4.0)
         // blended to full white, plus a faint Fresnel rim on the silhouette.
         vec3 V = vec3(0.0, 0.0, 1.0);
-        vec3 H = normalize(L + V);
+        vec3 H = normalize(materialParams.lightDirection + V);
         float NdotH = max(dot(viewN, H), 0.0);
         float shininess = max(4.0 / (materialParams.highlightRadius + 0.01), 3.0);
         float specular = materialParams.reflectionEnabled * materialParams.highlightIntensity * pow(NdotH, shininess);

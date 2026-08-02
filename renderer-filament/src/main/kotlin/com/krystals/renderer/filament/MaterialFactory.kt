@@ -166,11 +166,11 @@ internal fun viewSpaceLightDirection(
  *
  * v0.8.14: intensity now RAISES ambient (brightness slider brightens atoms). The old
  * formula (0.62 - 0.32*intensity) inverted the slider — higher intensity dimmed atoms.
- * v0.8.16: baseline lowered to a dark glass base (0.18 + 0.15i) so atoms read as
- * glossy glass, not washed-out plastic; the positive correlation is preserved.
+ * v0.8.17: ambient is a faint base (0.12 + 0.10i) under the mirror highlight — atoms
+ * are lit by specular alone, never washed out; the positive correlation is preserved.
  */
 internal fun diffuseAmbient(intensity: Float): Float =
-    (0.18f + 0.15f * intensity).coerceIn(0.18f, 0.40f)
+    (0.12f + 0.10f * intensity).coerceIn(0.12f, 0.30f)
 
 /**
  * Blinn-Phong shininess from the highlight radius (0.35 + 1.15*diffusion), mirroring
@@ -183,13 +183,13 @@ internal fun specularShininess(highlightRadius: Float): Float =
 
 /**
  * Frosted (diffuse) share of the atom glass shading — mirrors the NdotL weight in the
- * atom_opaque / atom_transparent payloads. Kept small so atoms stay glossy; the mirror
- * highlight does the work instead of a bright diffuse wash.
+ * atom_opaque / atom_transparent payloads. v0.8.17: fully removed (0.0) — atoms are
+ * lit by the mirror highlight alone on the faint ambient base.
  */
-internal fun atomDiffuseWeight(): Float = 0.55f
+internal fun atomDiffuseWeight(): Float = 0.0f
 
 /**
  * Specular blend factor for the atom glass shading — mirrors the `specular * X` mix in
- * the atom payloads. Full white makes the mirror highlight pop on the dark glass base.
+ * the atom payloads. Full white makes the mirror highlight pop on the faint base.
  */
 internal fun atomSpecularBlend(): Float = 1.0f
