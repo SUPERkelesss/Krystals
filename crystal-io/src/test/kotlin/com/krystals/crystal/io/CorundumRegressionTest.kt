@@ -9,14 +9,17 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Regression: v0.8.3 — corundum (Al2O3) must not produce Al–Al rules or Al–Al bonds.
+ * Regression: v0.8.4 — corundum (Al2O3) must not render Al–Al BONDS, even though an Al–Al
+ * rule legitimately exists.
  *
- * Root cause (recurring class): the smart-ionic generator only skipped anion–anion pairs, so
- * cation–cation pairs (Al³⁺–Al³⁺) generated rules; worse, BondDetector's covalent auto fallback
- * resurrected same-polarity contacts whose distance fell inside the covalent-radius window
- * (Al–Al 2.68-2.82 Å vs covalent window 2.97 Å) even when the pair's own rule window missed.
- * Fix: skip same-polarity pairs in smartIonicRules, make an existing pair rule authoritative in
- * BondDetector, and suppress the covalent auto fallback for same-element pairs.
+ * Root cause (v0.8.2 regression): BondDetector's hbond rework gated `customRule` on the
+ * distance falling inside the rule window, so when the Al–Al rule window (ionic radii:
+ * [0.1, 1.52]) did not cover a real Al–Al contact (2.68-2.82 Å), customRule became null
+ * and the covalent auto fallback ([0.1, 2.97]) resurrected the pair as a bond.
+ *
+ * Same-polarity rules (cation–cation / anion–anion) are intentionally NOT disabled — such
+ * bonding is physically valid when the rule window covers the distance; only the
+ * out-of-window fallback resurrection is wrong.
  */
 class CorundumRegressionTest {
     private fun corundum() = sequenceOf(File("../res/cifs_example"), File("res/cifs_example"))
@@ -25,38 +28,30 @@ class CorundumRegressionTest {
         ?: error("Sample CIF corpus not found")
 
     @Test
-    fun smartIonicGeneratesNoAlAlRule() {
+    fun smartIonicKeepsAlAlRuleButBondNetworkHasNoAlAlBonds() {
         val parsed = CifCodec.parseStructure(corundum().readText(), 0)
-        val result = BondValence.smartIonicRules(parsed.structure, BondConfiguration(), 0.45)
+        val structure = parsed.structure
+        val result = BondValence.smartIonicRules(structure, BondConfiguration(), 0.45)
         assertTrue(result.success, "smartIonic should succeed for Al2O3")
-        val alAl = result.rules.filter { rule ->
-            val siteIds = setOf(rule.siteA, rule.siteB)
-            siteIds.size == 1 && parsed.structure.sites.any { it.id == siteIds.first() && it.species.symbol == "Al" }
-        }
-        assertTrue(alAl.isEmpty(), "no Al–Al rule expected, got ${alAl.map { "${it.siteA}-${it.siteB}" }}")
-        assertTrue(
-            result.rules.any { rule ->
-                val ids = setOf(rule.siteA, rule.siteB)
-                ids.size == 2 && parsed.structure.sites.filter { it.id in ids }.map { it.species.symbol }.toSet() == setOf("Al", "O")
-            },
-            "Al–O rule expected",
-        )
-    }
 
-    @Test
-    fun bondNetworkHasNoAlAlBonds() {
-        val parsed = CifCodec.parseStructure(corundum().readText(), 0)
-        val smartIonic = BondValence.smartIonicRules(parsed.structure, BondConfiguration(), 0.45)
-        assertTrue(smartIonic.success)
+        // The Al–Al rule itself is legitimate (ionic window, max ~1.52 Å) and must be kept.
+        val alAlRules = result.rules.filter { rule ->
+            val ids = setOf(rule.siteA, rule.siteB)
+            ids.size == 1 && structure.sites.any { it.id == ids.first() && it.species.symbol == "Al" }
+        }
+        assertTrue(alAlRules.isNotEmpty(), "Al–Al rule expected (same-polarity rules stay enabled)")
+
         val network = BondDetector.buildNetwork(
-            parsed.structure,
-            BondConfiguration(rules = smartIonic.rules),
+            structure,
+            BondConfiguration(rules = result.rules),
         )
         val symbolById = network.atoms.associate { it.id to it.species.symbol }
+        // Real Al–Al contacts (2.68-2.82 Å) lie outside the ionic rule window; the covalent
+        // auto fallback must NOT resurrect them.
         val alAl = network.bonds.filter { bond ->
             symbolById[bond.atomA] == "Al" && symbolById[bond.atomB] == "Al"
         }
-        assertEquals(0, alAl.size, "no Al–Al bond expected (covalent fallback must not resurrect same-element pairs)")
+        assertEquals(0, alAl.size, "no Al–Al bond expected (out-of-window pair must not fall back to covalent radii)")
         val alO = network.bonds.count { bond ->
             setOf(symbolById[bond.atomA], symbolById[bond.atomB]) == setOf("Al", "O")
         }

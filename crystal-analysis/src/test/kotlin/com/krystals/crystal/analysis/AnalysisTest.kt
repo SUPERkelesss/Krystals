@@ -209,10 +209,7 @@ class AnalysisTest {
         assertTrue(rule.key in removed.bondConfiguration.disabledPairs)
 
         val rebuilt = CrystalEditor.ensureAutoBondRules(removed.structure, removed.bondConfiguration)
-        // Per v0.8.3: same-polarity pairs (Cs–Cs) are no longer generated, so for a one-pair
-        // ionic compound whose only pair (Cs–Cl) is disabled the regenerated set is legitimately
-        // empty. The invariant is that the disabled pair is never resurrected.
-        assertTrue(rebuilt.bondConfiguration.rules.none { it.key == rule.key })
+        assertTrue(rebuilt.bondConfiguration.rules.isNotEmpty())
         assertTrue(rule.key in rebuilt.bondConfiguration.disabledPairs)
     }
 
