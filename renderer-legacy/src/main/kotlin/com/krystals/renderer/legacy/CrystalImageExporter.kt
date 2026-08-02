@@ -338,15 +338,18 @@ object CrystalImageExporter {
                 snapshot.bonds.forEach { bond ->
                     val a = byId[bond.atomA] ?: return@forEach
                     val b = byId[bond.atomB] ?: return@forEach
+                    // Per v0.8.8: skip radius clip for gathered group endpoints.
+                    val ca = if (bond.atomA in groupByMemberId) a.copy(radius = 0f) else a
+                    val cb = if (bond.atomB in groupByMemberId) b.copy(radius = 0f) else b
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
                     val externalBond = b.isExternalShell
-                    if (externalBond && !bond.rule.shouldExtendAcrossCell(a.siteId, true)) return@forEach
+                    if (externalBond && !bond.rule.shouldExtendAcrossCell(ca.siteId, true)) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(3f, 32f)
                     // Per v0.8.1: H-bonds are a single gray dotted line (no split-cylinder).
                     if (bond.rule.isHBond) {
-                        add(BondPrimitive(a, b, width, isHBond = true))
+                        add(BondPrimitive(ca, cb, width, isHBond = true))
                     } else {
-                        addAll(splitBondPrimitives(a, b, width))
+                        addAll(splitBondPrimitives(ca, cb, width))
                     }
                 }
             }

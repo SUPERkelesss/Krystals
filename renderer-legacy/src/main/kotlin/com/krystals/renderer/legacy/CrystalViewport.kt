@@ -589,15 +589,19 @@ private fun LegacyCanvasViewport(
                 snapshot.bonds.forEach { bond ->
                     val a = byId[bond.atomA] ?: return@forEach
                     val b = byId[bond.atomB] ?: return@forEach
+                    // Per v0.8.8: skip radius clip for gathered group endpoints — the
+                    // scene builder already anchored the bond at the sphere surface.
+                    val ca = if (bond.atomA in groupByMemberId) a.copy(radius = 0f) else a
+                    val cb = if (bond.atomB in groupByMemberId) b.copy(radius = 0f) else b
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
                     val externalBond = b.atom.isExternalShell
-                    if (externalBond && !bond.rule.shouldExtendAcrossCell(a.atom.siteId, true)) return@forEach
+                    if (externalBond && !bond.rule.shouldExtendAcrossCell(ca.atom.siteId, true)) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(3f, 32f)
                     // Per v0.8.1: H-bonds are a single gray dotted line (no split-cylinder).
                     if (bond.rule.isHBond) {
-                        add(BondRenderable(a, b, width, isHBond = true))
+                        add(BondRenderable(ca, cb, width, isHBond = true))
                     } else {
-                        addAll(splitBondRenderables(a, b, width))
+                        addAll(splitBondRenderables(ca, cb, width))
                     }
                 }
             }

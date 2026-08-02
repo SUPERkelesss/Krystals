@@ -57,21 +57,33 @@ class InstanceManager {
         val sphereGeometry = sphereGeometryForVisibleAtoms(scene.atoms.count(AtomInstance::visible))
         val atomsByImageId = scene.atoms.associateBy { it.atom.id }
 
-        // Per v0.8.2: gather co-located mixed-occupancy atoms into single spheres.
-        // Member atoms are individually skipped; the gathered instance renders instead.
+        // Per v0.8.2/8.8: gather co-located mixed-occupancy atoms into per-slice spheres.
+        // Each slice renders as a full sphere in its member color; overlapping slices give
+        // a blended pie-like appearance. Picking returns the first member.
         val gatheredByMemberId = linkedMapOf<Long, String>()  // member atomId -> gatheredInstance.id
         scene.objects.asSequence().filterIsInstance<GatheredAtomInstance>().filter(GatheredAtomInstance::visible).forEach { gInst ->
             val g = gInst.gathered
             val memberIds = g.memberAtomIds.sorted().joinToString(",")
-            val id = "gathered:$memberIds"
-            // Use the first member's atom id for picking — a tap on the pie returns that member.
+            val baseId = "gathered:$memberIds"
             val pickAtomId = g.memberAtomIds.first()
-            next[id] = InstanceRecord(
-                id, pickId("atom:${pickAtomId}"),
-                BatchKey(sphereGeometry, MaterialKey(Material(argb = g.mixedColor, reflective = false), 1.0)),
-                transform(g.center.x, g.center.y, g.center.z, gInst.radius, gInst.radius, gInst.radius),
+            val radius = gInst.radius
+            val tf = transform(g.center.x, g.center.y, g.center.z, radius, radius, radius)
+            // Emit one sphere per slice, each colored with the member's slice color.
+            g.slices.forEachIndexed { i, slice ->
+                val sliceId = "$baseId:s$i"
+                val sliceMat = Material(argb = slice.color, reflective = false)
+                next[sliceId] = InstanceRecord(
+                    sliceId, pickId("atom:${pickAtomId}"),
+                    BatchKey(sphereGeometry, MaterialKey(sliceMat, 1.0)), tf,
+                )
+            }
+            // Optionally emit the remainder slice as the base sphere (mixedColor, translucent).
+            next[baseId] = InstanceRecord(
+                baseId, pickId("atom:${pickAtomId}"),
+                BatchKey(sphereGeometry, MaterialKey(Material(argb = g.mixedColor, opacity = 0.25, reflective = false), 1.0)),
+                tf,
             )
-            g.memberAtomIds.forEach { gatheredByMemberId[it] = id }
+            g.memberAtomIds.forEach { gatheredByMemberId[it] = baseId }
         }
 
         scene.atoms.asSequence().filter(AtomInstance::visible).forEach { atom ->
@@ -84,10 +96,14 @@ class InstanceManager {
         scene.bonds.asSequence().filter(BondInstance::visible).forEach { bond ->
             val startAtom = atomsByImageId[bond.bond.atomA]
             val endAtom = atomsByImageId[bond.bond.atomB]
+            // Per v0.8.8: skip radius clip for gathered group endpoints — the scene
+            // builder already anchored the bond at the sphere surface.
+            val startRadius = if (startAtom?.atom?.id in gatheredByMemberId) 0.0
+                else startAtom?.takeIf { it.visible }?.radius
+            val endRadius = if (endAtom?.atom?.id in gatheredByMemberId) 0.0
+                else endAtom?.takeIf { it.visible }?.radius
             val (clippedStart, clippedEnd) = clipBondEndpoints(
-                bond.start, bond.end,
-                startAtom?.takeIf { it.visible }?.radius,
-                endAtom?.takeIf { it.visible }?.radius,
+                bond.start, bond.end, startRadius, endRadius,
             )
             // Per v0.8.1: H-bonds are a single translucent cylinder (no two-half split).
             if (bond.bond.rule.isHBond) {
