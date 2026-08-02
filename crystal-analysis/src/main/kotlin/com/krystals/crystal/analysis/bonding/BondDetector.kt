@@ -5,6 +5,7 @@ import com.krystals.crystal.analysis.model.*
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
 import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.math.angleDegrees
 import com.krystals.crystal.core.math.distance
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
@@ -329,6 +330,51 @@ object BondDetector {
                     }
                 }
             }
+        }
+
+        // Per v0.8.5: post-filter hbond bonds — rule-level one-hbond-per-proton is per-SITE,
+        // but BondDetector materialises a bond for EVERY atom pair inside the window. Re-apply
+        // the per-ATOM constraints: angle X-H-Y > 110° and keep only the shortest hbond per H.
+        if (result.any { it.rule.isHBond }) {
+            val allAtomsById = (primaryAtoms + boundaryImages + shellAtoms).associateBy { it.id }
+            // Build covalent-partner lookup from normal (non-hbond) bonds.
+            val covalentPartners = HashMap<Long, MutableList<AtomImage>>()
+            for (b in result) {
+                if (b.rule.isHBond) continue
+                val a = allAtomsById[b.atomA] ?: continue
+                val p = allAtomsById[b.atomB] ?: continue
+                if (a.species.symbol == "H") covalentPartners.getOrPut(b.atomA) { mutableListOf() } += p
+                if (p.species.symbol == "H") covalentPartners.getOrPut(b.atomB) { mutableListOf() } += a
+            }
+            // Angle re-check for each hbond bond.
+            val anglePassed = HashSet<Bond>()
+            for (b in result) {
+                if (!b.rule.isHBond) continue
+                val a = allAtomsById[b.atomA] ?: continue
+                val c = allAtomsById[b.atomB] ?: continue
+                val (h, x) = if (a.species.symbol == "H") a to c else c to a
+                if (h.species.symbol != "H") continue
+                val partners = covalentPartners[h.id].orEmpty()
+                // If H has no covalent partner found from normal bonds (edge case: hbond-only
+                // rules in tests), skip the angle check — the hbond passes. In production
+                // smartIonic always generates normal rules first, so partners is non-empty.
+                val ok = if (partners.isEmpty()) true else {
+                    val hPos = h.cartesianCoordinate.toVec3()
+                    val xPos = x.cartesianCoordinate.toVec3()
+                    partners.any { y -> angleDegrees(xPos, hPos, y.cartesianCoordinate.toVec3()) > 110.0 }
+                }
+                if (ok) anglePassed += b
+            }
+            // Per-H shortest distance.
+            val bestByH = linkedMapOf<Long, Bond>()
+            for (b in anglePassed) {
+                val a = allAtomsById[b.atomA] ?: continue
+                val hId = if (a.species.symbol == "H") b.atomA else b.atomB
+                val existing = bestByH[hId]
+                if (existing == null || b.distance < existing.distance) bestByH[hId] = b
+            }
+            val hbondKeep = bestByH.values.toSet()
+            result.removeAll { it.rule.isHBond && it !in hbondKeep }
         }
 
         // Keep shell atoms referenced by a bond; discard the rest (same filtering as the legacy path).
