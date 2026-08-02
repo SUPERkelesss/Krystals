@@ -411,7 +411,11 @@ class GpuInstanceManager(
          *  billboard matrix. [cameraPosition] is the world-space eye position.
          *  [cameraUp] is the screen-up direction in world space (camera local +Y).
          *  right = cross(cameraUp, normal); up = normal × right, so the pie's
-         *  12-o'clock locks to screen 12-o'clock regardless of camera roll. */
+         *  12-o'clock locks to screen 12-o'clock regardless of camera roll.
+         *  Per v0.8.12: the local +Y column is NEGATED (-up) so the disk's slice
+         *  start (local -90°, i.e. local -Y) lands on screen UP (12 o'clock) and
+         *  the counterclockwise local sweep renders clockwise on screen — matching
+         *  the legacy 2D pie (start -90°, positive sweep). */
         fun billboardTransform(cameraPosition: Vec3, cameraUp: Vec3): (Vec3, Double) -> FloatArray {
             return { center: Vec3, radius: Double ->
                 val toCam = cameraPosition - center
@@ -421,7 +425,7 @@ class GpuInstanceManager(
                 val up = normal.cross(right).normalized()
                 floatArrayOf(
                     (right.x * radius).toFloat(), (right.y * radius).toFloat(), (right.z * radius).toFloat(), 0f,
-                    (up.x * radius).toFloat(), (up.y * radius).toFloat(), (up.z * radius).toFloat(), 0f,
+                    (-up.x * radius).toFloat(), (-up.y * radius).toFloat(), (-up.z * radius).toFloat(), 0f,
                     normal.x.toFloat(), normal.y.toFloat(), normal.z.toFloat(), 0f,
                     center.x.toFloat(), center.y.toFloat(), center.z.toFloat(), 1f,
                 )

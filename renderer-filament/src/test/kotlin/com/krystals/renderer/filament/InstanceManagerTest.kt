@@ -356,6 +356,27 @@ class InstanceManagerTest {
     }
 
     @Test
+    fun billboardSliceStartPointsAtScreenUp() {
+        // Per v0.8.12 regression: the disk's slice start (local -90° = local -Y) must land on
+        // screen UP. Camera above (+Z), cameraUp = world +Y → the local +Y column (m[4..6])
+        // must be -cameraUp, so a vertex at local (0,-1) maps to +cameraUp (12 o'clock).
+        val f = GpuInstanceManager.billboardTransform(
+            com.krystals.crystal.core.math.Vec3(0.0, 0.0, 10.0),
+            com.krystals.crystal.core.math.Vec3(0.0, 1.0, 0.0),
+        )
+        val m = f(com.krystals.crystal.core.math.Vec3(0.0, 0.0, 0.0), 0.5)
+        // local (0,-1,0) → right*0 + col1*(-1) + normal*0 → local -Y maps to -col1.
+        val localMinusY = com.krystals.crystal.core.math.Vec3(
+            -m[4].toDouble(), -m[5].toDouble(), -m[6].toDouble(),
+        ).normalized()
+        val cameraUp = com.krystals.crystal.core.math.Vec3(0.0, 1.0, 0.0)
+        assertTrue(
+            (localMinusY - cameraUp).length() < 0.05,
+            "slice start must point at screen up, got $localMinusY",
+        )
+    }
+
+    @Test
     fun billboardDegenerateCameraBackToZAxis() {
         // Camera at same position as center → degenerate → fallback Z axis
         val f = GpuInstanceManager.billboardTransform(com.krystals.crystal.core.math.Vec3(0.0, 0.0, 0.0), com.krystals.crystal.core.math.Vec3(0.0, 1.0, 0.0))
