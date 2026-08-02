@@ -219,32 +219,16 @@ object CrystalEditor {
     }
 
     /** Per v0.8.6: append hbond rules to the bonding-radius rule set.
-     *  Proton criterion for the bonding path: H site bonded through exactly ONE
-     *  single bond to O/N/F/S/P/Cl (counted from the generated bonding rules).
-     *  The smartIonic path keeps its BVS==1 proton criterion unchanged. */
+     *  Proton criterion for the bonding path: an expanded H atom whose Voronoi
+     *  neighbours within the covalent (bonding-radius) window include exactly
+     *  ONE O/N/F/S/P/Cl partner. Site-level rules count every site pair
+     *  (even distant ones), so we use Voronoi distances instead. */
     private fun bondingRulesWithHbonds(
         structure: CrystalStructure,
         atoms: List<com.krystals.crystal.core.model.AtomImage>,
         rules: List<BondRule>,
     ): List<BondRule> {
-        // Compute protons from the bonding rules: H sites with exactly 1 bond.
-        val hbondAcceptorElements = setOf("O", "N", "F", "S", "P", "Cl")
-        val hBondCount = linkedMapOf<String, Int>()
-        val hPartners = linkedMapOf<String, MutableSet<String>>()
-        for (rule in rules) {
-            val pair = listOf(rule.siteA, rule.siteB)
-            val hSite = pair.find { siteId -> structure.sites.any { it.id == siteId && it.species.symbol == "H" } }
-            if (hSite == null) continue
-            val other = pair.first { it != hSite }
-            val otherElem = structure.sites.firstOrNull { it.id == other }?.species?.symbol ?: continue
-            if (otherElem !in hbondAcceptorElements) continue
-            hBondCount[hSite] = (hBondCount[hSite] ?: 0) + 1
-            hPartners.getOrPut(hSite) { mutableSetOf() }.add(otherElem)
-        }
-        val protonSiteIds = hBondCount.filter { it.value == 1 }.keys.toSet()
-        if (protonSiteIds.isEmpty()) return rules
-
-        // Run Voronoi for neighbour lookup (same pipeline as smartIonic).
+        // Run Voronoi first.
         val neighboursByAtomId = try {
             val neighbours = VoronoiNeighbours.find(structure, atoms)
             val map = linkedMapOf<Long, MutableList<Pair<Long, Double>>>()
@@ -256,6 +240,27 @@ object CrystalEditor {
         } catch (_: VoronoiSearchLimitExceededException) {
             return rules
         }
+
+        // Compute covalent-max thresholds per element pair using bonding radii.
+        val covRadius = { sym: String -> PeriodicTable.radius(sym, RadiusSource.BONDING) }
+        val hbondAcceptorElements = setOf("O", "N", "F", "S", "P", "Cl")
+        val atomById = atoms.associateBy { it.id }
+
+        // Find H atoms with exactly 1 Voronoi neighbour in {O,N,F,S,P,Cl} within covalent distance.
+        val protonAtomIds = mutableSetOf<Long>()
+        for (atom in atoms) {
+            if (atom.species.symbol != "H") continue
+            val neighbours = neighboursByAtomId[atom.id] ?: continue
+            val covBondedAcceptors = neighbours.mapNotNull { (nId, dist) ->
+                val n = atomById[nId] ?: return@mapNotNull null
+                if (n.species.symbol !in hbondAcceptorElements) return@mapNotNull null
+                val covMax = covRadius("H") + covRadius(n.species.symbol) + 0.45
+                if (dist <= covMax) n.species.symbol else null
+            }.distinct()
+            if (covBondedAcceptors.size == 1) protonAtomIds += atom.id
+        }
+        val protonSiteIds = protonAtomIds.mapNotNull { atomById[it]?.siteId }.toSet()
+        if (protonSiteIds.isEmpty()) return rules
 
         val hbondRules = HbondChecking.hbondRules(
             structure, atoms, neighboursByAtomId, protonSiteIds, rules,
