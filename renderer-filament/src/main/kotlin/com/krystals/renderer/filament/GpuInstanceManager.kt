@@ -105,48 +105,50 @@ class GpuInstanceManager(
                 polyhedronOutlineIds += id
             }
         }
-        // Per v0.8.8: render gathered-atom groups as per-slice sector-sphere meshes.
+        // Per v0.8.9: render gathered-atom groups as billboard disk sectors (faces camera).
         val gatheredInstances = snapshot.objects.asSequence().filterIsInstance<GatheredAtomInstance>().filter(GatheredAtomInstance::visible).toList()
-        gatheredInstances.forEachIndexed { gIdx, gInst ->
-            val g = gInst.gathered
-            val center = g.center
-            val radius = gInst.radius
-            // Generate one sector mesh per slice, plus remainder.
-            var accumAngle = -90f // start at 12-o'clock (-90° from +X)
-            g.slices.forEachIndexed { sIdx, slice ->
-                val sweep = (slice.fraction * 360f).toFloat().coerceAtLeast(1f)
-                val mesh = meshes.sectorSphere(accumAngle, sweep)
-                val meshId = "gathered-pie:$gIdx:s$sIdx"
-                auxiliaryMeshes[meshId] = mesh
-                val sliceMat = Material(argb = slice.color, reflective = false)
-                val record = InstanceRecord(
-                    meshId, 0,
-                    BatchKey(GeometryKind.POLYHEDRON, MaterialKey(sliceMat)),
-                    sphereTransform(center, radius),
-                )
-                create(record, snapshot)?.let { entity ->
-                    entities[meshId] = entity
-                    objectByEntity[entity] = g.memberAtomIds.firstOrNull()?.toString().orEmpty()
-                    sceneAuxiliaryIds += meshId
+        if (gatheredInstances.isNotEmpty()) {
+            val cameraNormal = snapshot.camera.rotation.c // camera local +Z in world space
+            val billboard = billboardTransform(cameraNormal)
+            gatheredInstances.forEachIndexed { gIdx, gInst ->
+                val g = gInst.gathered
+                val center = g.center
+                val radius = gInst.radius
+                var accumAngle = -90f // start at 12-o'clock
+                g.slices.forEachIndexed { sIdx, slice ->
+                    val sweep = (slice.fraction * 360f).toFloat().coerceAtLeast(1f)
+                    val mesh = meshes.diskSector(accumAngle, sweep)
+                    val meshId = "gathered-pie:$gIdx:s$sIdx"
+                    auxiliaryMeshes[meshId] = mesh
+                    val sliceMat = Material(argb = slice.color, reflective = false)
+                    val record = InstanceRecord(
+                        meshId, 0,
+                        BatchKey(GeometryKind.POLYHEDRON, MaterialKey(sliceMat)),
+                        billboard(center, radius),
+                    )
+                    create(record, snapshot)?.let { entity ->
+                        entities[meshId] = entity
+                        objectByEntity[entity] = g.memberAtomIds.firstOrNull()?.toString().orEmpty()
+                        sceneAuxiliaryIds += meshId
+                    }
+                    accumAngle += sweep
                 }
-                accumAngle += sweep
-            }
-            // Remainder sector
-            if (g.remainderFraction > 0.001f) {
-                val sweep = (g.remainderFraction * 360f).toFloat().coerceAtLeast(1f)
-                val mesh = meshes.sectorSphere(accumAngle, sweep)
-                val meshId = "gathered-pie:$gIdx:rem"
-                auxiliaryMeshes[meshId] = mesh
-                val remMat = Material(argb = g.mixedColor, opacity = 0.25, reflective = false)
-                val record = InstanceRecord(
-                    meshId, 0,
-                    BatchKey(GeometryKind.POLYHEDRON, MaterialKey(remMat)),
-                    sphereTransform(center, radius),
-                )
-                create(record, snapshot)?.let { entity ->
-                    entities[meshId] = entity
-                    objectByEntity[entity] = g.memberAtomIds.firstOrNull()?.toString().orEmpty()
-                    sceneAuxiliaryIds += meshId
+                if (g.remainderFraction > 0.001f) {
+                    val sweep = (g.remainderFraction * 360f).toFloat().coerceAtLeast(1f)
+                    val mesh = meshes.diskSector(accumAngle, sweep)
+                    val meshId = "gathered-pie:$gIdx:rem"
+                    auxiliaryMeshes[meshId] = mesh
+                    val remMat = Material(argb = g.mixedColor, opacity = 0.25, reflective = false)
+                    val record = InstanceRecord(
+                        meshId, 0,
+                        BatchKey(GeometryKind.POLYHEDRON, MaterialKey(remMat)),
+                        billboard(center, radius),
+                    )
+                    create(record, snapshot)?.let { entity ->
+                        entities[meshId] = entity
+                        objectByEntity[entity] = g.memberAtomIds.firstOrNull()?.toString().orEmpty()
+                        sceneAuxiliaryIds += meshId
+                    }
                 }
             }
         }
@@ -378,6 +380,25 @@ class GpuInstanceManager(
             (z.x * radius).toFloat(), (z.y * radius).toFloat(), (z.z * radius).toFloat(), 0f,
             start.x.toFloat(), start.y.toFloat(), start.z.toFloat(), 1f,
         )
+    }
+
+    companion object {
+        /** Per v0.8.9: returns a closure that builds a column-major 4×4 billboard matrix.
+         *  [cameraNormal] is the camera's view direction in world space (Mat3 column c).
+         *  The disk faces the camera with [worldUp] as the reference up direction. */
+        fun billboardTransform(cameraNormal: Vec3, worldUp: Vec3 = Vec3(0.0, 1.0, 0.0)): (Vec3, Double) -> FloatArray {
+        val normal = if (cameraNormal.lengthSquared() < 1e-12) Vec3(0.0, 0.0, 1.0) else cameraNormal.normalized()
+        val right = worldUp.cross(normal).let { if (it.lengthSquared() < 1e-12) Vec3(1.0, 0.0, 0.0).cross(normal) else it }.normalized()
+        val up = normal.cross(right).normalized()
+        return { center: Vec3, radius: Double ->
+            floatArrayOf(
+                (right.x * radius).toFloat(), (right.y * radius).toFloat(), (right.z * radius).toFloat(), 0f,
+                (up.x * radius).toFloat(), (up.y * radius).toFloat(), (up.z * radius).toFloat(), 0f,
+                normal.x.toFloat(), normal.y.toFloat(), normal.z.toFloat(), 0f,
+                center.x.toFloat(), center.y.toFloat(), center.z.toFloat(), 1f,
+            )
+        }
+    }
     }
 
     private fun identity() = sphereTransform(Vec3.ZERO, 1.0)

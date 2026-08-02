@@ -328,6 +328,44 @@ class InstanceManagerTest {
         )
     }
 
+    // ── v0.8.9 billboard tests (pure companion function, no GPU needed) ─────────
+
+    @Test
+    fun billboardNormalPointsTowardCamera() {
+        val f = GpuInstanceManager.billboardTransform(com.krystals.crystal.core.math.Vec3(0.0, 0.0, 1.0))
+        val m = f(com.krystals.crystal.core.math.Vec3(1.0, 2.0, 3.0), 0.5)
+        assertEquals(0.0f, m[8], 0.01f)
+        assertEquals(0.0f, m[9], 0.01f)
+        assertEquals(1.0f, m[10], 0.01f)
+        assertEquals(1.0f, m[12], 0.01f)
+        assertEquals(2.0f, m[13], 0.01f)
+        assertEquals(3.0f, m[14], 0.01f)
+    }
+
+    @Test
+    fun billboardBasisIsOrthonormal() {
+        val f = GpuInstanceManager.billboardTransform(com.krystals.crystal.core.math.Vec3(0.7, 0.3, 0.6))
+        val m = f(com.krystals.crystal.core.math.Vec3.ZERO, 1.0)
+        val rx = m[0]; val ry = m[1]; val rz = m[2]
+        val ux = m[4]; val uy = m[5]; val uz = m[6]
+        val nx = m[8]; val ny = m[9]; val nz = m[10]
+        // right ⟂ up
+        assertTrue(kotlin.math.abs(rx * ux + ry * uy + rz * uz) < 0.01f, "right dot up = 0")
+        // right ⟂ normal
+        assertTrue(kotlin.math.abs(rx * nx + ry * ny + rz * nz) < 0.01f, "right dot normal = 0")
+        // up ⟂ normal
+        assertTrue(kotlin.math.abs(ux * nx + uy * ny + uz * nz) < 0.01f, "up dot normal = 0")
+    }
+
+    @Test
+    fun billboardDegenerateCameraBackToZAxis() {
+        val f = GpuInstanceManager.billboardTransform(com.krystals.crystal.core.math.Vec3(0.0, 0.0, 0.0))
+        val m = f(com.krystals.crystal.core.math.Vec3.ZERO, 1.0)
+        assertEquals(0.0f, m[8], 0.01f)
+        assertEquals(0.0f, m[9], 0.01f)
+        assertEquals(1.0f, m[10], 0.01f)
+    }
+
     private fun structure() = CrystalStructure(
         blockName = "test",
         lattice = Lattice(4.0, 4.0, 4.0, 90.0, 90.0, 90.0),

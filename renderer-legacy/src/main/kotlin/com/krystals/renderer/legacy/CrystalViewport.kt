@@ -576,8 +576,9 @@ private fun LegacyCanvasViewport(
             // Emit gathered-atom pies before individual atoms so depth-sorting works naturally.
             sceneGathered.forEach { gInst ->
                 val g = gInst.gathered
-                val depth = legacyCameraDepth(controller.rotation * g.center)
-                val pos = project(controller.rotation * g.center)
+                // Per v0.8.9: must subtract center like atom projection (L515).
+                val depth = legacyCameraDepth(controller.rotation * (g.center - center))
+                val pos = project(controller.rotation * (g.center - center))
                 val r = (gInst.radius * scale).coerceIn(9.0, 84.0).toFloat()
                 val rep = snapshot.atoms.first { it.id == g.memberAtomIds.first() }
                 add(GatheredAtomRenderable(ProjectedAtom(rep, pos, depth, r), g.slices, g.remainderFraction, g.mixedColor))
