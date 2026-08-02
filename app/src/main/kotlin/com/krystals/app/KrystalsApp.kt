@@ -545,7 +545,10 @@ fun KrystalsRoot(
                 Result.success(
                     withContext(Dispatchers.Default) {
                         val expandedSize = SymmetryExpander.expand(structure).size
-                        if (expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
+                        // Per v0.8.12: all-non-metal structures default to the bonding path and
+                        // ignore the smartIonic result (v0.8.7) — skip the expensive smartIonic
+                        // pre-computation (full Voronoi + BVS) entirely for them.
+                        if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
                             CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null)
                         } else {
                         val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
