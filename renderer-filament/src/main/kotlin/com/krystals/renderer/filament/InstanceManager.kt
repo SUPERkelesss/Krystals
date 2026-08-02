@@ -57,32 +57,13 @@ class InstanceManager {
         val sphereGeometry = sphereGeometryForVisibleAtoms(scene.atoms.count(AtomInstance::visible))
         val atomsByImageId = scene.atoms.associateBy { it.atom.id }
 
-        // Per v0.8.2/8.8: gather co-located mixed-occupancy atoms into per-slice spheres.
-        // Each slice renders as a full sphere in its member color; overlapping slices give
-        // a blended pie-like appearance. Picking returns the first member.
-        val gatheredByMemberId = linkedMapOf<Long, String>()  // member atomId -> gatheredInstance.id
+        // Per v0.8.8: gather co-located mixed-occupancy atoms — per-slice sector meshes
+        // are emitted by GpuInstanceManager. InstanceManager only tracks membership.
+        val gatheredByMemberId = linkedMapOf<Long, String>()
         scene.objects.asSequence().filterIsInstance<GatheredAtomInstance>().filter(GatheredAtomInstance::visible).forEach { gInst ->
             val g = gInst.gathered
             val memberIds = g.memberAtomIds.sorted().joinToString(",")
             val baseId = "gathered:$memberIds"
-            val pickAtomId = g.memberAtomIds.first()
-            val radius = gInst.radius
-            val tf = transform(g.center.x, g.center.y, g.center.z, radius, radius, radius)
-            // Emit one sphere per slice, each colored with the member's slice color.
-            g.slices.forEachIndexed { i, slice ->
-                val sliceId = "$baseId:s$i"
-                val sliceMat = Material(argb = slice.color, reflective = false)
-                next[sliceId] = InstanceRecord(
-                    sliceId, pickId("atom:${pickAtomId}"),
-                    BatchKey(sphereGeometry, MaterialKey(sliceMat, 1.0)), tf,
-                )
-            }
-            // Optionally emit the remainder slice as the base sphere (mixedColor, translucent).
-            next[baseId] = InstanceRecord(
-                baseId, pickId("atom:${pickAtomId}"),
-                BatchKey(sphereGeometry, MaterialKey(Material(argb = g.mixedColor, opacity = 0.25, reflective = false), 1.0)),
-                tf,
-            )
             g.memberAtomIds.forEach { gatheredByMemberId[it] = baseId }
         }
 

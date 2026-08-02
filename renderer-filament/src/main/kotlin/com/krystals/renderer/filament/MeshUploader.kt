@@ -173,6 +173,42 @@ class MeshUploader(private val engine: Engine) : AutoCloseable {
         return MeshData(positions.toFloatArray(), normals.toFloatArray(), indices.toIntArray())
     }
 
+    /**
+     * Per v0.8.8: generate a longitude-wedge sector of a UV sphere.
+     * [startAngleDeg] and [sweepAngleDeg] define the longitude range in degrees
+     * (clockwise from +X toward +Z in the XZ plane). The sector spans all
+     * latitudes (pole-to-pole) with [rings] latitude rings and [sectorSteps]
+     * longitude steps. Normals are per-vertex radial for smooth shading.
+     */
+    fun sectorSphere(startAngleDeg: Float, sweepAngleDeg: Float, rings: Int = 10, sectorSteps: Int = 4): MeshData {
+        require(sweepAngleDeg > 0f) { "sweep must be positive" }
+        val startRad = startAngleDeg * PI.toFloat() / 180f
+        val sweepRad = sweepAngleDeg * PI.toFloat() / 180f
+        val positions = ArrayList<Float>()
+        val normals = ArrayList<Float>()
+        for (ring in 0..rings) {
+            val latitude = PI * ring / rings
+            val y = cos(latitude)
+            val r = sin(latitude)
+            for (step in 0..sectorSteps) {
+                val longitude = startRad + sweepRad * step / sectorSteps
+                val x = r * cos(longitude)
+                val z = r * sin(longitude)
+                positions.add3(Vec3(x, y, z))
+                normals.add3(Vec3(x, y, z))
+            }
+        }
+        val indices = ArrayList<Int>()
+        val stride = sectorSteps + 1
+        for (ring in 0 until rings) for (step in 0 until sectorSteps) {
+            val a = ring * stride + step
+            val b = a + stride
+            indices += a; indices += b; indices += a + 1
+            indices += a + 1; indices += b; indices += b + 1
+        }
+        return MeshData(positions.toFloatArray(), normals.toFloatArray(), indices.toIntArray())
+    }
+
     override fun close() {
         uploaded.asReversed().forEach {
             engine.destroyIndexBuffer(it.indexBuffer)

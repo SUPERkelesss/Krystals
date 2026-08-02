@@ -5,6 +5,7 @@ import com.google.android.filament.Engine
 import com.google.android.filament.EntityManager
 import com.google.android.filament.RenderableManager
 import com.google.android.filament.Scene
+import com.krystals.renderer.core.primitive.GatheredAtomInstance
 import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.scene.CellFrameGeometry
@@ -104,6 +105,52 @@ class GpuInstanceManager(
                 polyhedronOutlineIds += id
             }
         }
+        // Per v0.8.8: render gathered-atom groups as per-slice sector-sphere meshes.
+        val gatheredInstances = snapshot.objects.asSequence().filterIsInstance<GatheredAtomInstance>().filter(GatheredAtomInstance::visible).toList()
+        gatheredInstances.forEachIndexed { gIdx, gInst ->
+            val g = gInst.gathered
+            val center = g.center
+            val radius = gInst.radius
+            // Generate one sector mesh per slice, plus remainder.
+            var accumAngle = -90f // start at 12-o'clock (-90° from +X)
+            g.slices.forEachIndexed { sIdx, slice ->
+                val sweep = (slice.fraction * 360f).toFloat().coerceAtLeast(1f)
+                val mesh = meshes.sectorSphere(accumAngle, sweep)
+                val meshId = "gathered-pie:$gIdx:s$sIdx"
+                auxiliaryMeshes[meshId] = mesh
+                val sliceMat = Material(argb = slice.color, reflective = false)
+                val record = InstanceRecord(
+                    meshId, 0,
+                    BatchKey(GeometryKind.POLYHEDRON, MaterialKey(sliceMat)),
+                    sphereTransform(center, radius),
+                )
+                create(record, snapshot)?.let { entity ->
+                    entities[meshId] = entity
+                    objectByEntity[entity] = g.memberAtomIds.firstOrNull()?.toString().orEmpty()
+                    sceneAuxiliaryIds += meshId
+                }
+                accumAngle += sweep
+            }
+            // Remainder sector
+            if (g.remainderFraction > 0.001f) {
+                val sweep = (g.remainderFraction * 360f).toFloat().coerceAtLeast(1f)
+                val mesh = meshes.sectorSphere(accumAngle, sweep)
+                val meshId = "gathered-pie:$gIdx:rem"
+                auxiliaryMeshes[meshId] = mesh
+                val remMat = Material(argb = g.mixedColor, opacity = 0.25, reflective = false)
+                val record = InstanceRecord(
+                    meshId, 0,
+                    BatchKey(GeometryKind.POLYHEDRON, MaterialKey(remMat)),
+                    sphereTransform(center, radius),
+                )
+                create(record, snapshot)?.let { entity ->
+                    entities[meshId] = entity
+                    objectByEntity[entity] = g.memberAtomIds.firstOrNull()?.toString().orEmpty()
+                    sceneAuxiliaryIds += meshId
+                }
+            }
+        }
+
         addFrameAndAxes(snapshot)
         lastDocumentState = null
         lastSnapshot = snapshot
