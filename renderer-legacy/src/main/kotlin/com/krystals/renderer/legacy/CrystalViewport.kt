@@ -567,8 +567,10 @@ private fun LegacyCanvasViewport(
             }
         }
         // Per v0.8.2: gathered-atom groups (same-position disorder) rendered as pie-chart spheres.
+        // Per v0.8.13: respect GatheredAtomInstance.visible — pure boundary-image groups (shell
+        // members only, e.g. the +z images of a face position like (0,0,1)) must NOT render.
         val gatheredColorBySite = linkedMapOf<String, Long>() // computed from scene options
-        val sceneGathered = scene?.objects?.filterIsInstance<GatheredAtomInstance>().orEmpty()
+        val sceneGathered = scene?.objects?.filterIsInstance<GatheredAtomInstance>()?.filter { it.visible }.orEmpty()
         val groupByMemberId = GatheredAtomGrouper.groupByAtomId(snapshot.atoms, gatheredColorBySite)
 
         val renderables = buildList<Renderable> {

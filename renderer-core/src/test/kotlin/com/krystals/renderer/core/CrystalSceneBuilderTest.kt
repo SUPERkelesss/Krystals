@@ -185,6 +185,33 @@ class CrystalSceneBuilderTest {
         assertEquals(1, atOrigin, "shell duplicate at the primary's position must be skipped")
     }
 
+    @Test
+    fun pureBoundaryImageGroupIsNotVisible() {
+        // Regression (v0.8.13): a gathered group whose members are ALL shell atoms (e.g. the +z
+        // boundary images of a face position like (0,0,1)) must be marked invisible — legacy and
+        // filament both skip invisible groups. Only the in-cell group (primary members) renders.
+        val structure = structure() // cubic, c = 4.0
+        fun atom(id: Long, siteId: String, z: Double, shell: Boolean): AtomImage = AtomImage(
+            id = id, siteId = siteId, siteLabel = siteId, species = Species("O"),
+            fractionalCoordinate = FractionalCoordinate(0.0, 0.0, if (z == 4.0) 1.0 else 0.0),
+            cartesianCoordinate = CartesianCoordinate(0.0, 0.0, z),
+            occupancy = 0.5, cellOffset = Int3(0, 0, if (z == 4.0) 1 else 0),
+            isShell = shell, isBoundaryImage = shell,
+        )
+        val atoms = listOf(
+            atom(1, "A1", 0.0, shell = false),
+            atom(2, "A2", 0.0, shell = false),
+            atom(3, "A1", 4.0, shell = true),
+            atom(4, "A2", 4.0, shell = true),
+        )
+        val analysis = BondNetwork(atoms, emptyList(), structure, Expansion())
+        val scene = CrystalSceneBuilder().build(structure, analysis, SceneBuildOptions())
+        val groups = scene.objects.filterIsInstance<GatheredAtomInstance>()
+        assertEquals(2, groups.size)
+        assertTrue(groups.single { it.gathered.center.z == 0.0 }.visible, "in-cell group visible")
+        assertFalse(groups.single { it.gathered.center.z == 4.0 }.visible, "pure boundary-image group hidden")
+    }
+
     private fun structure() = CrystalStructure(
         blockName = "cscl",
         lattice = Lattice(4.0, 4.0, 4.0, 90.0, 90.0, 90.0),
