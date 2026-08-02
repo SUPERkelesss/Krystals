@@ -31,9 +31,9 @@ fragment {
         float edgeShade = 1.0 - materialParams.reflectionEnabled * edge * 0.30;
         vec3 L = normalize(materialParams.lightDirection);
         float NdotL = max(dot(viewN, L), 0.0);
-        // Lower ambient floor: default intensity 0.4 -> ambient ~0.41, much stronger
-        // diffuse contrast than the old 0.64 floor.
-        float ambient = clamp(0.55 - 0.35 * materialParams.highlightIntensity, 0.30, 0.65);
+        // Slightly raised ambient floor (v0.8.13): default intensity 0.4 -> ambient ~0.49,
+        // atoms read a touch brighter while keeping diffuse contrast.
+        float ambient = clamp(0.62 - 0.32 * materialParams.highlightIntensity, 0.35, 0.72);
         float diffuseShade = ambient + (1.0 - ambient) * NdotL;
         vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);
         // Real Blinn-Phong specular: half-vector NdotH makes the highlight follow the
