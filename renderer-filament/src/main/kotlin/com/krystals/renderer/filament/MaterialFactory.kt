@@ -158,3 +158,22 @@ internal fun viewSpaceLightDirection(
         -kotlin.math.sin(phi),
     )
 }
+
+/**
+ * Ambient floor for the unlit shader lighting, as a function of the world-light
+ * intensity. Must mirror the formula compiled into the .mat payloads (atom_opaque,
+ * atom_transparent, opaque, transparent, polyhedron and their unlit variants).
+ *
+ * v0.8.14: intensity now RAISES ambient (brightness slider brightens atoms). The old
+ * formula (0.62 - 0.32*intensity) inverted the slider — higher intensity dimmed atoms.
+ */
+internal fun diffuseAmbient(intensity: Float): Float =
+    (0.35f + 0.30f * intensity).coerceIn(0.35f, 0.65f)
+
+/**
+ * Blinn-Phong shininess from the highlight radius (0.35 + 1.15*diffusion), mirroring
+ * the .mat payloads. v0.8.14: no dead 4.0 lower clamp — the diffusion slider must
+ * visibly widen/narrow the highlight across its full range.
+ */
+internal fun specularShininess(highlightRadius: Float): Float =
+    maxOf(2.0f / (highlightRadius + 0.01f), 1.5f)
