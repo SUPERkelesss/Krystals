@@ -17,7 +17,6 @@ import com.google.android.filament.Camera
 import com.google.android.filament.Engine
 import com.google.android.filament.EntityManager
 import com.google.android.filament.Filament
-import com.google.android.filament.LightManager
 import com.google.android.filament.RenderTarget
 import com.google.android.filament.Renderer
 import com.google.android.filament.Scene
@@ -96,7 +95,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private var interactionUpdates = 0L
     private var framesRendered = 0L
     private var depthPointsEvaluated = 0
-    private val lightEntity: Int
     private val mainHandler = Handler(Looper.getMainLooper())
 
     init {
@@ -114,13 +112,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         meshUploader = MeshUploader(engine)
         materialFactory = MaterialFactory(appContext, engine)
         gpuInstances = GpuInstanceManager(engine, filamentScene, meshUploader, materialFactory)
-        lightEntity = EntityManager.get().create()
-        LightManager.Builder(LightManager.Type.DIRECTIONAL)
-            .direction(0f, -1f, -1f)
-            .intensity(40_000f)
-            .castShadows(false)
-            .build(engine, lightEntity)
-        filamentScene.addEntity(lightEntity)
     }
 
     override fun attach(surface: Surface) = onMain {
@@ -345,9 +336,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         frameBudget.reset()
         detachInternal()
         gpuInstances.close()
-        filamentScene.removeEntity(lightEntity)
-        engine.destroyEntity(lightEntity)
-        EntityManager.get().destroy(lightEntity)
         materialFactory.close()
         meshUploader.close()
         engine.destroyCameraComponent(cameraEntity)
@@ -380,21 +368,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
 
     private fun updateLightingAndDepth() {
         val scene = submittedScene ?: return
-        val light = scene.environment.worldLight
-        // Per v0.6.5: theta (azimuth) around camera forward (+Z); phi (elevation) from viewing axis.
-        val theta = light.azimuthDegrees / 180.0 * PI
-        val phi = light.elevationDegrees / 180.0 * PI
-        // Per v0.6.3: flip phi so 0-90° elevation means light moves closer to camera.
-        // Old: (sin(φ)·cos(θ), sin(φ)·sin(θ), cos(φ)) — 0°=at camera, 90°=at horizon
-        // New: (cos(φ)·cos(θ), cos(φ)·sin(θ), sin(φ)) — 0°=at horizon, 90°=at camera
-        val cosPhi = cos(phi)
-        val surfaceToLight = Vec3(cosPhi * cos(theta), cosPhi * sin(theta), -sin(phi))
-        val travelDir = surfaceToLight * -1.0
-        val worldDirection = interaction.session.camera.rotation.transposed() * travelDir
-        val lightInstance = engine.lightManager.getInstance(lightEntity)
-        engine.lightManager.setDirection(lightInstance, worldDirection.x.toFloat(), worldDirection.y.toFloat(), worldDirection.z.toFloat())
-        engine.lightManager.setIntensity(lightInstance, (light.intensity * 100_000f).coerceAtLeast(1f))
-
         // Depth-cueing range is derived from the visible-atoms AABB, not the preloaded
         // neighbor-cell shell. +3 maps to the nearest visible corner, -3 to the farthest.
         val visibleBounds = scene.visibleBounds()

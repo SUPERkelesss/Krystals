@@ -74,10 +74,8 @@ class MaterialFactory(
         val light = environment.worldLight
         runCatching { instance.setParameter("depthRange", viewRange.first, viewRange.second) }
         runCatching { instance.setParameter("depthCueEnabled", if (cue.enabled) 1f else 0f) }
-        runCatching { instance.setParameter("roughness", light.diffusion.coerceIn(0.04f, 1f)) }
-        runCatching { instance.setParameter("specular", if (key.reflective) light.intensity else 0f) }
-        // Per v0.3: the light is anchored in WORLD space and rotated into view space by the
-        // current camera. Rotating the crystal therefore sweeps the shading across its surface
+        // The light is anchored in WORLD space and rotated into view space by the current
+        // camera. Rotating the crystal therefore sweeps the shading across its surface
         // (correct 3D depth cue). The phi-flip convention is unchanged: 0-90° elevation means
         // the light moves closer to the camera.
         val direction = viewSpaceLightDirection(light.azimuthDegrees, light.elevationDegrees, state.cameraRotation)
