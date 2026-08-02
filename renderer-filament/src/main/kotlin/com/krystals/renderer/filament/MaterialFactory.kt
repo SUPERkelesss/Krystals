@@ -141,3 +141,31 @@ internal fun depthCueViewRange(cue: DepthCueing, visibleNear: Float, visibleFar:
     fun toViewDepth(normalizedDepth: Float): Float = center + normalizedDepth * span / 6f
     return toViewDepth(cue.near) to toViewDepth(cue.far)
 }
+
+/**
+ * World-fixed light direction expressed in view space.
+ *
+ * Keeps the v0.6.3 direction convention (0° elevation = horizon, 90° = at the camera,
+ * phi flipped so lightDirection uses -sin(phi) on Z) but anchors the light in WORLD space:
+ * the returned vector is the world direction rotated into view space by [cameraRotation].
+ * Because [cameraRotation] is the camera's world→view rotation (same convention as
+ * [com.krystals.renderer.core.scene.toCameraDepthRange]), rotating the crystal makes the
+ * shading sweep across its surface — the correct 3D depth cue the old view-fixed light
+ * (which kept the highlight glued to the screen) suppressed.
+ */
+internal fun viewSpaceLightDirection(
+    azimuthDegrees: Float,
+    elevationDegrees: Float,
+    cameraRotation: com.krystals.crystal.core.math.Mat3,
+): com.krystals.crystal.core.math.Vec3 {
+    val theta = Math.toRadians(azimuthDegrees.toDouble())
+    val phi = Math.toRadians(elevationDegrees.coerceIn(0f, 90f).toDouble())
+    val cosPhi = kotlin.math.cos(phi)
+    // Surface-to-light in world space: 0° elevation = horizon, 90° = toward the camera (-Z).
+    val worldDirection = com.krystals.crystal.core.math.Vec3(
+        cosPhi * kotlin.math.cos(theta),
+        cosPhi * kotlin.math.sin(theta),
+        -kotlin.math.sin(phi),
+    )
+    return cameraRotation * worldDirection
+}
