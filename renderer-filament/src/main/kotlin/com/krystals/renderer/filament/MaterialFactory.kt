@@ -166,6 +166,26 @@ internal fun viewSpaceLightDirection(
 }
 
 /**
+ * World-space light TRAVEL direction for Filament's LightManager.setDirection.
+ *
+ * The camera-anchored light is expressed in view space by [viewSpaceLightDirection]
+ * as surface-to-light (the direction from the surface toward the light, used by the
+ * shader's NdotL term). Filament's directional light wants the opposite sign — the
+ * direction the light TRAVELS (from the light toward the scene). Negate, then rotate
+ * from view space into world space via the inverse camera rotation, keeping the
+ * light-to-camera relationship constant as the crystal rotates.
+ */
+internal fun worldLightTravelDirection(
+    azimuthDegrees: Float,
+    elevationDegrees: Float,
+    cameraRotation: com.krystals.crystal.core.math.Mat3,
+): com.krystals.crystal.core.math.Vec3 {
+    val viewSurfaceToLight = viewSpaceLightDirection(azimuthDegrees, elevationDegrees)
+    val viewTravel = viewSurfaceToLight * -1.0
+    return cameraRotation.transposed() * viewTravel
+}
+
+/**
  * Ambient floor for the unlit shader lighting, as a function of the world-light
  * intensity. Must mirror the formula compiled into the .mat payloads (atom_opaque,
  * atom_transparent, opaque, transparent, polyhedron and their unlit variants).

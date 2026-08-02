@@ -49,6 +49,45 @@ class FilamentCompatibilityTest {
     }
 
     @Test
+    fun `world light travel direction is opposite of surface-to-light`() {
+        // v0.8.19 regression: viewSpaceLightDirection returns surface-to-light (the
+        // direction from the surface toward the light, used by the NdotL shader term),
+        // but Filament's LightManager.setDirection wants the light TRAVEL direction
+        // (from the light toward the scene). The two differ by a sign. At identity
+        // camera the world travel direction must be the negated view direction.
+        val travel = worldLightTravelDirection(
+            azimuthDegrees = 35f,
+            elevationDegrees = 60f,
+            cameraRotation = com.krystals.crystal.core.math.Mat3.IDENTITY,
+        )
+        val surfaceToLight = viewSpaceLightDirection(35f, 60f)
+        assertEquals(-surfaceToLight.x, travel.x, 1e-9)
+        assertEquals(-surfaceToLight.y, travel.y, 1e-9)
+        assertEquals(-surfaceToLight.z, travel.z, 1e-9)
+    }
+
+    @Test
+    fun `world light travel direction is camera anchored`() {
+        // The light is anchored to the camera: rotating the camera must rotate the
+        // world-space travel direction by the inverse camera rotation, so the
+        // light-to-camera relationship stays constant.
+        val rot = com.krystals.crystal.core.math.rotY(90.0)
+        val travel = worldLightTravelDirection(
+            azimuthDegrees = 0f,
+            elevationDegrees = 90f,
+            cameraRotation = rot,
+        )
+        // surface-to-light at (az=0, el=90) = (0,0,-1); travel = (0,0,1) in view space.
+        // World = rotY(90).transposed() * (0,0,1). rotY(90) maps world->view, so
+        // view->world is rotY(-90) = transposed(rotY(90)): column c = (sin(-90),0,cos(-90))
+        // = (-1,0,0) applied to (0,0,1) gives... compute explicitly below.
+        val expected = com.krystals.crystal.core.math.rotY(-90.0) * com.krystals.crystal.core.math.Vec3(0.0, 0.0, 1.0)
+        assertEquals(expected.x, travel.x, 1e-9)
+        assertEquals(expected.y, travel.y, 1e-9)
+        assertEquals(expected.z, travel.z, 1e-9)
+    }
+
+    @Test
     fun `default appearance light direction has negative z`() {
         val appearance = com.krystals.renderer.core.style.ViewerAppearance()
         val direction = viewSpaceLightDirection(

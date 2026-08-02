@@ -396,11 +396,15 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
 
     private fun updateLightingAndDepth() {
         val scene = submittedScene ?: return
-        // v0.8.18: drive the real directional light. The light is anchored to the camera
-        // (view space), so convert the view-space direction to world space for Filament.
+        // v0.8.19: viewSpaceLightDirection is surface-to-light (shader NdotL term);
+        // LightManager.setDirection wants the light TRAVEL direction (opposite sign),
+        // in world space, camera-anchored.
         val light = scene.environment.worldLight
-        val viewDir = viewSpaceLightDirection(light.azimuthDegrees, light.elevationDegrees)
-        val worldDir = interaction.session.camera.rotation.transposed() * viewDir
+        val worldDir = worldLightTravelDirection(
+            light.azimuthDegrees,
+            light.elevationDegrees,
+            interaction.session.camera.rotation,
+        )
         val lightInstance = engine.lightManager.getInstance(lightEntity)
         engine.lightManager.setDirection(
             lightInstance,
