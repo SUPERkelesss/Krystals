@@ -17,6 +17,8 @@ import com.google.android.filament.Camera
 import com.google.android.filament.Engine
 import com.google.android.filament.EntityManager
 import com.google.android.filament.Filament
+import com.google.android.filament.IndirectLight
+import com.google.android.filament.LightManager
 import com.google.android.filament.RenderTarget
 import com.google.android.filament.Renderer
 import com.google.android.filament.Scene
@@ -70,6 +72,8 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private val filamentScene: Scene
     private val view: View
     private val cameraEntity: Int
+    private val lightEntity: Int
+    private val indirectLight: IndirectLight
     private val camera: Camera
     private val meshUploader: MeshUploader
     private val materialFactory: MaterialFactory
@@ -108,6 +112,20 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         view = engine.createView()
         cameraEntity = EntityManager.get().create()
         camera = engine.createCamera(cameraEntity)
+        // v0.8.18: atoms are lit (PBR) materials, so the scene needs a real light. The
+        // directional light is anchored to the camera (view-space fixed direction) and a
+        // small constant indirect light prevents the unlit side from going pure black.
+        lightEntity = EntityManager.get().create()
+        LightManager.Builder(LightManager.Type.DIRECTIONAL)
+            .castLight(true)
+            .castShadows(false)
+            .build(engine, lightEntity)
+        filamentScene.addEntity(lightEntity)
+        indirectLight = IndirectLight.Builder()
+            .irradiance(1, floatArrayOf(0.35f, 0.35f, 0.35f))
+            .intensity(30_000f)
+            .build(engine)
+        filamentScene.indirectLight = indirectLight
         view.scene = filamentScene
         view.camera = camera
         view.setPostProcessingEnabled(false)
@@ -342,6 +360,10 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         gpuInstances.close()
         materialFactory.close()
         meshUploader.close()
+        engine.destroyIndirectLight(indirectLight)
+        filamentScene.removeEntity(lightEntity)
+        engine.destroyEntity(lightEntity)
+        EntityManager.get().destroy(lightEntity)
         engine.destroyCameraComponent(cameraEntity)
         EntityManager.get().destroy(cameraEntity)
         engine.destroyView(view)
@@ -374,6 +396,20 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
 
     private fun updateLightingAndDepth() {
         val scene = submittedScene ?: return
+        // v0.8.18: drive the real directional light. The light is anchored to the camera
+        // (view space), so convert the view-space direction to world space for Filament.
+        val light = scene.environment.worldLight
+        val viewDir = viewSpaceLightDirection(light.azimuthDegrees, light.elevationDegrees)
+        val worldDir = interaction.session.camera.rotation.transposed() * viewDir
+        val lightInstance = engine.lightManager.getInstance(lightEntity)
+        engine.lightManager.setDirection(
+            lightInstance,
+            worldDir.x.toFloat(),
+            worldDir.y.toFloat(),
+            worldDir.z.toFloat(),
+        )
+        // Intensity in lux; 1.0 (default 0.4) maps to a comfortable studio key light.
+        engine.lightManager.setIntensity(lightInstance, (light.intensity * 150_000f).coerceAtLeast(1f))
         // Depth-cueing range is derived from the visible-atoms AABB, not the preloaded
         // neighbor-cell shell. +3 maps to the nearest visible corner, -3 to the farthest.
         val visibleBounds = scene.visibleBounds()

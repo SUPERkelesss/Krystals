@@ -91,4 +91,38 @@ class FilamentCompatibilityTest {
         assertEquals(0.0f, atomDiffuseWeight(), 0.001f, "frosted diffuse must be gone")
         assertEquals(1.0f, atomSpecularBlend(), 0.001f) // highlight blends to full white
     }
+
+    @Test
+    fun `atom pbr configuration matches spec`() {
+        // v0.8.18: atoms use a real Filament lit material with these PBR parameters.
+        assertEquals(0.0f, AtomPbr.METALLIC, 0.001f)
+        assertEquals(0.32f, AtomPbr.ROUGHNESS, 0.001f)
+        assertEquals(0.45f, AtomPbr.REFLECTANCE, 0.001f)
+        assertEquals(0.1f, AtomPbr.CLEAR_COAT, 0.001f)
+        assertEquals(0.25f, AtomPbr.CLEAR_COAT_ROUGHNESS, 0.001f)
+        assertEquals(0.95f, AtomPbr.SATURATION_FACTOR, 0.001f)
+    }
+
+    @Test
+    fun `desaturate keeps gray and identity unchanged`() {
+        // Gray has zero saturation: factor must not change it.
+        assertEquals(0xFF808080L, desaturateArgb(0xFF808080L, 0.95f))
+        // Saturation factor 1.0 is identity.
+        assertEquals(0xFFFF0000L, desaturateArgb(0xFFFF0000L, 1.0f))
+        assertEquals(0xFF00A5C8L, desaturateArgb(0xFF00A5C8L, 1.0f))
+    }
+
+    @Test
+    fun `desaturate reduces chroma while keeping hue and lightness`() {
+        // Pure red, 5% desaturation: green and blue channels rise from 0 toward gray,
+        // red stays dominant (hue preserved), overall lightness unchanged.
+        val out = desaturateArgb(0xFFFF0000L, 0.95f)
+        val r = (out ushr 16 and 0xFF).toInt()
+        val g = (out ushr 8 and 0xFF).toInt()
+        val b = (out and 0xFF).toInt()
+        assertTrue(r > 200, "red must stay dominant, got $r")
+        assertTrue(g in 1..16, "green must rise slightly toward gray, got $g")
+        assertTrue(b in 1..16, "blue must rise slightly toward gray, got $b")
+        assertTrue(g > 0 && b > 0, "fully saturated red must gain a little chroma of gray")
+    }
 }
