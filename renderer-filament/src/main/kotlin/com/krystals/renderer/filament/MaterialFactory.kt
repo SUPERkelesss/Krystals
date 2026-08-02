@@ -7,7 +7,6 @@ import com.google.android.filament.Material
 import com.google.android.filament.MaterialInstance
 import com.krystals.renderer.core.style.RenderEnvironment
 import com.krystals.renderer.core.style.DepthCueing
-import com.krystals.crystal.core.math.Mat3
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -62,8 +61,8 @@ class MaterialFactory(
         }
     }
 
-    fun updateDepthCueing(instance: MaterialInstance, environment: RenderEnvironment, near: Float, far: Float, cameraRotation: Mat3 = Mat3.IDENTITY) {
-        applyEnvironment(instance, instanceCache.entries.firstOrNull { it.value === instance }?.key?.second ?: return, DepthState(environment, near, far, cameraRotation))
+    fun updateDepthCueing(instance: MaterialInstance, environment: RenderEnvironment, near: Float, far: Float) {
+        applyEnvironment(instance, instanceCache.entries.firstOrNull { it.value === instance }?.key?.second ?: return, DepthState(environment, near, far))
     }
 
     private fun applyEnvironment(instance: MaterialInstance, key: MaterialKey, state: DepthState) {
@@ -74,11 +73,9 @@ class MaterialFactory(
         val light = environment.worldLight
         runCatching { instance.setParameter("depthRange", viewRange.first, viewRange.second) }
         runCatching { instance.setParameter("depthCueEnabled", if (cue.enabled) 1f else 0f) }
-        // The light is anchored in WORLD space and rotated into view space by the current
-        // camera. Rotating the crystal therefore sweeps the shading across its surface
-        // (correct 3D depth cue). The phi-flip convention is unchanged: 0-90° elevation means
-        // the light moves closer to the camera.
-        val direction = viewSpaceLightDirection(light.azimuthDegrees, light.elevationDegrees, state.cameraRotation)
+        // The light is anchored to the camera (view space): rotating the crystal never
+        // changes the light-to-camera relationship, so the direction is camera-independent.
+        val direction = viewSpaceLightDirection(light.azimuthDegrees, light.elevationDegrees)
         runCatching {
             instance.setParameter(
                 "lightDirection",
@@ -100,8 +97,8 @@ class MaterialFactory(
         }
     }
 
-    fun updateDepthCueing(environment: RenderEnvironment, near: Float, far: Float, cameraRotation: Mat3 = Mat3.IDENTITY) {
-        val state = DepthState(environment, near, far, cameraRotation)
+    fun updateDepthCueing(environment: RenderEnvironment, near: Float, far: Float) {
+        val state = DepthState(environment, near, far)
         if (state == lastDepthState) return
         lastDepthState = state
         instanceCache.forEach { (cacheKey, instance) -> applyEnvironment(instance, cacheKey.second, state) }
@@ -129,7 +126,6 @@ private data class DepthState(
     val environment: RenderEnvironment,
     val near: Float,
     val far: Float,
-    val cameraRotation: com.krystals.crystal.core.math.Mat3 = com.krystals.crystal.core.math.Mat3.IDENTITY,
 )
 
 /** Maps Legacy's normalized visible-depth scale (+3 near, -3 far) to Filament view-space Z. */
@@ -141,29 +137,24 @@ internal fun depthCueViewRange(cue: DepthCueing, visibleNear: Float, visibleFar:
 }
 
 /**
- * World-fixed light direction expressed in view space.
+ * Light direction expressed in view space, fixed relative to the camera.
  *
- * Keeps the v0.6.3 direction convention (0° elevation = horizon, 90° = at the camera,
- * phi flipped so lightDirection uses -sin(phi) on Z) but anchors the light in WORLD space:
- * the returned vector is the world direction rotated into view space by [cameraRotation].
- * Because [cameraRotation] is the camera's world→view rotation (same convention as
- * [com.krystals.renderer.core.scene.toCameraDepthRange]), rotating the crystal makes the
- * shading sweep across its surface — the correct 3D depth cue the old view-fixed light
- * (which kept the highlight glued to the screen) suppressed.
+ * The world light is anchored to the camera: no matter how the crystal is rotated,
+ * the light-to-camera relationship stays constant, so [cameraRotation] must NOT be
+ * applied here. The phi-flip convention is kept (0° elevation = horizon, 90° = at the
+ * camera, -sin(phi) on Z).
  */
 internal fun viewSpaceLightDirection(
     azimuthDegrees: Float,
     elevationDegrees: Float,
-    cameraRotation: com.krystals.crystal.core.math.Mat3,
 ): com.krystals.crystal.core.math.Vec3 {
     val theta = Math.toRadians(azimuthDegrees.toDouble())
     val phi = Math.toRadians(elevationDegrees.coerceIn(0f, 90f).toDouble())
     val cosPhi = kotlin.math.cos(phi)
-    // Surface-to-light in world space: 0° elevation = horizon, 90° = toward the camera (-Z).
-    val worldDirection = com.krystals.crystal.core.math.Vec3(
+    // Surface-to-light in view space: 0° elevation = horizon, 90° = toward the camera (-Z).
+    return com.krystals.crystal.core.math.Vec3(
         cosPhi * kotlin.math.cos(theta),
         cosPhi * kotlin.math.sin(theta),
         -kotlin.math.sin(phi),
     )
-    return cameraRotation * worldDirection
 }

@@ -390,7 +390,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             val centerShift = (interaction.session.camera.rotation * (visibleBounds.center - target)).z
             val near = (depthRange.near - cameraDistance + centerShift).toFloat()
             val far = (depthRange.far - cameraDistance + centerShift).toFloat()
-            materialFactory.updateDepthCueing(scene.environment, near, far, interaction.session.camera.rotation)
+            materialFactory.updateDepthCueing(scene.environment, near, far)
         }
     }
 
