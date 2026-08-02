@@ -1,5 +1,6 @@
 package com.krystals.renderer.core.builder
 
+import com.krystals.crystal.analysis.bonding.Bond
 import com.krystals.crystal.analysis.bonding.BondNetwork
 import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
 import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
@@ -91,12 +92,14 @@ class CrystalSceneBuilder {
         // picking, info windows), then additionally emit GatheredAtomInstances for groups.
         // Backends that understand GatheredAtomInstance skip drawing individual member atoms.
         val groupCenterById = linkedMapOf<String, Vec3>()
+        val groupRadiusById = linkedMapOf<String, Double>()  // for surface-anchored bonds
         for (g in groups) {
             val maxRadius = g.memberAtomIds.mapNotNull { id -> atomById[id]?.let { options.atomRadiusByElement[it.species.symbol] ?: options.defaultAtomRadius } }.maxOrNull() ?: options.defaultAtomRadius
             val anyVisible = g.memberAtomIds.any { id -> atomById[id]?.let { atomVisible(it) } ?: false }
             val remainderMat = Material(argb = g.mixedColor, opacity = 0.25, reflective = false)
             val gatheredId = "gathered:${g.memberAtomIds.sorted().joinToString(",")}"
             groupCenterById[gatheredId] = g.center
+            groupRadiusById[gatheredId] = maxRadius
             objects += GatheredAtomInstance(
                 id = gatheredId,
                 gathered = g,
@@ -116,8 +119,14 @@ class CrystalSceneBuilder {
         }
 
         // Bond pass: drop intra-group bonds, remap positions, dedupe per (groupKey|atomId, groupKey|atomId, offsetB).
+        // Per v0.8.5: groups anchor bonds at the sphere SURFACE; duplicate member→same-target
+        // bonds collapse with occ-weighted mixedColor at the group end.
         val seenBondKeys = mutableSetOf<Triple<Any, Any, Triple<Int, Int, Int>>>()
+        // Collect per-dedupe-key bonding members for mixed-color collapse (amendment B.3).
+        val bondMembersByKey = linkedMapOf<Triple<Any, Any, Triple<Int, Int, Int>>, MutableList<Triple<Long, Material, Material>>>()
 
+        // First pass: collect all bonds, track dedupe membership.
+        val bondEntries = mutableListOf<Triple<Int, Bond, Triple<Any, Any, Triple<Int, Int, Int>>>>() // (index, bond, dedupeKey)
         analysis.bonds.forEachIndexed { index, bond ->
             val start = atomById[bond.atomA]
                 ?: error("bond ${bond.atomA}-${bond.atomB} references missing atom ${bond.atomA}")
@@ -133,20 +142,65 @@ class CrystalSceneBuilder {
             val startKey: Any = startGroup?.let { "gathered:${it.memberAtomIds.sorted().joinToString(",")}" } ?: bond.atomA
             val endKey: Any = endGroup?.let { "gathered:${it.memberAtomIds.sorted().joinToString(",")}" } ?: bond.atomB
             val dedupeKey = Triple(startKey, endKey, Triple(bond.offsetB.x, bond.offsetB.y, bond.offsetB.z))
-            if (!seenBondKeys.add(dedupeKey)) return@forEachIndexed
-
-            val startPos = startGroup?.center ?: start.cartesianCoordinate.toVec3()
-            val endPos = endGroup?.center ?: end.cartesianCoordinate.toVec3()
-            val externalAllowed = !end.isExternalShell || bond.rule.shouldExtendAcrossCell(start.siteId, end.isExternalShell)
             val isHBond = bond.rule.isHBond
+            if (!isHBond) {
+                bondMembersByKey.getOrPut(dedupeKey) { mutableListOf() } += Triple(bond.atomA, bondMaterial(start), bondMaterial(end))
+            }
+            bondEntries += Triple(index, bond, dedupeKey)
+        }
+
+        // Second pass: emit one BondInstance per dedupeKey, with surface anchoring + blended materials.
+        val emittedKeys = mutableSetOf<Triple<Any, Any, Triple<Int, Int, Int>>>()
+        for ((index, bond, dedupeKey) in bondEntries) {
+            if (!emittedKeys.add(dedupeKey)) continue // skip duplicates
+
+            val start = atomById[bond.atomA] ?: continue
+            val end = atomById[bond.atomB] ?: continue
+            val startGroup = groupByMemberId[bond.atomA]
+            val endGroup = groupByMemberId[bond.atomB]
+            val startKey = dedupeKey.first
+            val endKey = dedupeKey.second
+            val isHBond = bond.rule.isHBond
+
+            // Per v0.8.5: anchor bonds at sphere SURFACE, not center.
+            val rawStart = startGroup?.center ?: start.cartesianCoordinate.toVec3()
+            val rawEnd = endGroup?.center ?: end.cartesianCoordinate.toVec3()
+            val dir = (rawEnd - rawStart).normalized()
+            val startRadius = if (startGroup != null) (groupRadiusById[startKey] ?: 0.0) else 0.0
+            val endRadius = if (endGroup != null) (groupRadiusById[endKey] ?: 0.0) else 0.0
+            val startPos = rawStart + dir * startRadius
+            val endPos = rawEnd - dir * endRadius
+
+            // Per v0.8.5 item 3: blended material for duplicate member→same-target bonds.
+            val members = bondMembersByKey[dedupeKey].orEmpty()
+            val (startMat, endMat) = if (!isHBond && members.size >= 2 && endGroup != null) {
+                // Group end: occ-weighted mixedColor of bonding members ↔ target color.
+                val groupMembers = members.map { (memberId, sm, _) -> memberId to sm }.distinct()
+                val totalOcc = groupMembers.sumOf { (mid, _) -> atomById[mid]?.occupancy ?: 1.0 }
+                val mixedStart = if (startGroup != null && groupMembers.size >= 2) {
+                    blendMaterials(groupMembers, totalOcc)
+                } else bondMaterial(start)
+                val targetEnd = bondMaterial(end)
+                mixedStart to targetEnd
+            } else if (!isHBond && members.size >= 2 && startGroup != null) {
+                val groupMembers = members.map { (memberId, _, em) -> memberId to em }.distinct()
+                val totalOcc = groupMembers.sumOf { (mid, _) -> atomById[mid]?.occupancy ?: 1.0 }
+                val targetStart = bondMaterial(start)
+                val mixedEnd = blendMaterials(groupMembers, totalOcc)
+                targetStart to mixedEnd
+            } else {
+                bondMaterial(start) to bondMaterial(end)
+            }
+
+            val externalAllowed = !end.isExternalShell || bond.rule.shouldExtendAcrossCell(start.siteId, end.isExternalShell)
             objects += BondInstance(
                 id = "bond:${bond.atomA}:${bond.atomB}:${bond.offsetB.x}:${bond.offsetB.y}:${bond.offsetB.z}:$index",
                 bond = bond,
                 start = startPos,
                 end = endPos,
                 radius = if (isHBond) HbondPattern.RADIUS else options.bondRadius,
-                startMaterial = if (isHBond) HbondPattern.material() else bondMaterial(start),
-                endMaterial = if (isHBond) HbondPattern.material() else bondMaterial(end),
+                startMaterial = if (isHBond) HbondPattern.material() else startMat,
+                endMaterial = if (isHBond) HbondPattern.material() else endMat,
                 visible = options.showBonds && bond.rule.key !in options.hiddenBondKeys && externalAllowed,
             )
         }
@@ -211,5 +265,26 @@ class CrystalSceneBuilder {
         if (normal.lengthSquared() < 1e-18) return null
         if (normal.dot(center - first) > 0.0) normal = normal * -1.0
         return normal.normalized()
+    }
+
+    /** Occ-weighted ARGB blend of member materials. */
+    private fun blendMaterials(members: List<Pair<Long, Material>>, totalOcc: Double): Material {
+        if (members.isEmpty()) return Material(0xFF808080L)
+        var r = 0.0; var g = 0.0; var b = 0.0; var a = 0.0; var w = 0.0
+        for ((_, mat) in members) {
+            val wt = 1.0 / members.size // equal weight per member
+            val argb = mat.argb
+            r += ((argb ushr 16) and 0xFF).toDouble() * wt
+            g += ((argb ushr 8) and 0xFF).toDouble() * wt
+            b += (argb and 0xFF).toDouble() * wt
+            a += ((argb ushr 24) and 0xFF).toDouble() * wt
+            w += wt
+        }
+        val iw = if (w > 0.0) 1.0 / w else 1.0
+        val ir = (r * iw).toInt().coerceIn(0, 255)
+        val ig = (g * iw).toInt().coerceIn(0, 255)
+        val ib = (b * iw).toInt().coerceIn(0, 255)
+        val ia = (a * iw).toInt().coerceIn(0, 255)
+        return Material(argb = (ia.toLong() shl 24) or (ir.toLong() shl 16) or (ig.toLong() shl 8) or ib.toLong(), reflective = false)
     }
 }
