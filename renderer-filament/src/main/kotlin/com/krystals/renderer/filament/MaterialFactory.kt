@@ -228,7 +228,9 @@ internal object AtomPbr {
     const val METALLIC = 0.0f
     const val ROUGHNESS = 0.32f
     const val REFLECTANCE = 0.45f
-    const val CLEAR_COAT = 0.1f
+    // v0.8.20: temporarily 0 — high light elevation produced a bright edge artifact on
+    // the atom silhouette (clear-coat reflection); disabled pending a proper fix.
+    const val CLEAR_COAT = 0.0f
     const val CLEAR_COAT_ROUGHNESS = 0.25f
     /** CPK base color is desaturated by 5% before it reaches the material. */
     const val SATURATION_FACTOR = 0.95f

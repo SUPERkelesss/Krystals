@@ -25,7 +25,10 @@ fragment {
         material.metallic = 0.0;
         material.roughness = 0.32;
         material.reflectance = 0.45;
-        material.clearCoat = 0.1;
+        // v0.8.20: clearCoat temporarily 0 — at high light elevation a bright edge
+        // artifact appeared on the atom silhouette (coating reflection); disabled
+        // pending a proper fix. clearCoatRoughness kept but inert while clearCoat=0.
+        material.clearCoat = 0.0;
         material.clearCoatRoughness = 0.25;
     }
 }
