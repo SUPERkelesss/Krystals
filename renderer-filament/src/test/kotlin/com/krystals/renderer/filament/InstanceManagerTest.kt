@@ -12,11 +12,16 @@ import com.krystals.crystal.core.periodic.Int3
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
 import com.krystals.crystal.analysis.bonding.Bond
+import com.krystals.crystal.analysis.bonding.BondConfiguration
+import com.krystals.crystal.analysis.bonding.BondDetector
 import com.krystals.crystal.analysis.bonding.BondRule
+import com.krystals.renderer.core.builder.CrystalSceneBuilder
+import com.krystals.renderer.core.builder.SceneBuildOptions
 import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.camera.Camera
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
+import com.krystals.renderer.core.primitive.GatheredAtomInstance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.style.backgroundColor
 import com.krystals.interaction.state.InteractionState
@@ -24,6 +29,8 @@ import com.krystals.interaction.state.ViewerSessionState
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -265,6 +272,60 @@ class InstanceManagerTest {
             )
         }
         return RenderScene(structure(), Expansion(), atoms)
+    }
+
+    @Test
+    fun gatheredMembersAreSkippedInInstancedRecords() {
+        // Disordered structure: two co-located sites (C/N at the same position) + one O partner.
+        // Regression (v0.8.8): the gathered group must stay a single pie — member atoms must
+        // never be emitted as instanced spheres (that would render as overlapping balls).
+        val structure = CrystalStructure(
+            blockName = "disordered",
+            lattice = Lattice(5.0, 5.0, 5.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(
+                Site("A1", "A1", Species("C"), FractionalCoordinate(0.5, 0.5, 0.3)),
+                Site("A2", "A2", Species("N"), FractionalCoordinate(0.5, 0.5, 0.3)),
+                Site("B", "B1", Species("O"), FractionalCoordinate(0.5, 0.5, 0.6)),
+            ),
+        )
+        val analysis = BondDetector.buildNetwork(
+            structure,
+            BondConfiguration(listOf(BondRule("A1", "B", 0.1, 4.0), BondRule("A2", "B", 0.1, 4.0))),
+        )
+        val scene = CrystalSceneBuilder().build(
+            structure, analysis,
+            SceneBuildOptions(
+                atomMaterialBySite = mapOf("A1" to Material(0xFFFF0000), "A2" to Material(0xFF0000FF), "B" to Material(0xFF00FF00)),
+                bondMaterialBySite = mapOf("A1" to Material(0xFFFF0000), "A2" to Material(0xFF0000FF), "B" to Material(0xFF00FF00)),
+            ),
+        )
+        val gathered = scene.objects.filterIsInstance<GatheredAtomInstance>().firstOrNull { it.gathered.memberAtomIds.size >= 2 }
+        assertNotNull(gathered, "two co-located sites must form a gathered group")
+        assertTrue(gathered.visible, "gathered group must be visible by default")
+
+        val manager = InstanceManager()
+        val diff = manager.sync(scene)
+        val recordIds = diff.batches.values.asSequence().flatten().map { it.objectId }.toSet()
+        // Member atoms must NOT appear as instanced spheres — they are rendered as pie sectors.
+        gathered.gathered.memberAtomIds.forEach { memberId ->
+            assertFalse(recordIds.contains("atom:$memberId"), "member atom $memberId must be skipped (overlapping-balls regression)")
+        }
+        // The collapsed group→B bond must be emitted and its start anchored at the group surface.
+        val groupBonds = scene.bonds.filter { b ->
+            b.bond.atomA in gathered.gathered.memberAtomIds || b.bond.atomB in gathered.gathered.memberAtomIds
+        }
+        assertTrue(groupBonds.isNotEmpty(), "collapsed group→B bond expected")
+        val bBond = groupBonds.first()
+        val gCenter = gathered.gathered.center
+        val gRadius = gathered.radius
+        val dirToEnd = (bBond.end - gCenter).normalized()
+        val expectedStart = gCenter + dirToEnd * gRadius
+        assertTrue(
+            (bBond.start - expectedStart).length() < 1e-6,
+            "bond must start at the gathered sphere surface, got ${bBond.start}, expected $expectedStart",
+        )
     }
 
     private fun structure() = CrystalStructure(
