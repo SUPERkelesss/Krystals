@@ -7,6 +7,7 @@ import com.google.android.filament.Material
 import com.google.android.filament.MaterialInstance
 import com.krystals.renderer.core.style.RenderEnvironment
 import com.krystals.renderer.core.style.DepthCueing
+import com.krystals.crystal.core.math.Mat3
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -61,8 +62,8 @@ class MaterialFactory(
         }
     }
 
-    fun updateDepthCueing(instance: MaterialInstance, environment: RenderEnvironment, near: Float, far: Float) {
-        applyEnvironment(instance, instanceCache.entries.firstOrNull { it.value === instance }?.key?.second ?: return, DepthState(environment, near, far))
+    fun updateDepthCueing(instance: MaterialInstance, environment: RenderEnvironment, near: Float, far: Float, cameraRotation: Mat3 = Mat3.IDENTITY) {
+        applyEnvironment(instance, instanceCache.entries.firstOrNull { it.value === instance }?.key?.second ?: return, DepthState(environment, near, far, cameraRotation))
     }
 
     private fun applyEnvironment(instance: MaterialInstance, key: MaterialKey, state: DepthState) {
@@ -71,23 +72,21 @@ class MaterialFactory(
         val argb = environment.backgroundArgb
         val viewRange = depthCueViewRange(cue, state.near, state.far)
         val light = environment.worldLight
-        val azimuth = Math.toRadians(light.azimuthDegrees.toDouble())
-        val elevation = Math.toRadians(light.elevationDegrees.toDouble())
         runCatching { instance.setParameter("depthRange", viewRange.first, viewRange.second) }
         runCatching { instance.setParameter("depthCueEnabled", if (cue.enabled) 1f else 0f) }
         runCatching { instance.setParameter("roughness", light.diffusion.coerceIn(0.04f, 1f)) }
         runCatching { instance.setParameter("specular", if (key.reflective) light.intensity else 0f) }
-        // Per v0.6.3: flip phi so 0-90° elevation means light closer to camera.
-        // L = (cos(φ)·cos(θ), cos(φ)·sin(θ), sin(φ))
-        val theta = Math.toRadians(light.azimuthDegrees.toDouble())
-        val phi = Math.toRadians(light.elevationDegrees.toDouble())
-        val cosPhi = kotlin.math.cos(phi)
+        // Per v0.3: the light is anchored in WORLD space and rotated into view space by the
+        // current camera. Rotating the crystal therefore sweeps the shading across its surface
+        // (correct 3D depth cue). The phi-flip convention is unchanged: 0-90° elevation means
+        // the light moves closer to the camera.
+        val direction = viewSpaceLightDirection(light.azimuthDegrees, light.elevationDegrees, state.cameraRotation)
         runCatching {
             instance.setParameter(
                 "lightDirection",
-                (cosPhi * kotlin.math.cos(theta)).toFloat(),
-                (cosPhi * kotlin.math.sin(theta)).toFloat(),
-                -kotlin.math.sin(phi).toFloat(),
+                direction.x.toFloat(),
+                direction.y.toFloat(),
+                direction.z.toFloat(),
             )
         }
         runCatching { instance.setParameter("highlightIntensity", light.intensity) }
@@ -103,8 +102,8 @@ class MaterialFactory(
         }
     }
 
-    fun updateDepthCueing(environment: RenderEnvironment, near: Float, far: Float) {
-        val state = DepthState(environment, near, far)
+    fun updateDepthCueing(environment: RenderEnvironment, near: Float, far: Float, cameraRotation: Mat3 = Mat3.IDENTITY) {
+        val state = DepthState(environment, near, far, cameraRotation)
         if (state == lastDepthState) return
         lastDepthState = state
         instanceCache.forEach { (cacheKey, instance) -> applyEnvironment(instance, cacheKey.second, state) }
@@ -132,6 +131,7 @@ private data class DepthState(
     val environment: RenderEnvironment,
     val near: Float,
     val far: Float,
+    val cameraRotation: com.krystals.crystal.core.math.Mat3 = com.krystals.crystal.core.math.Mat3.IDENTITY,
 )
 
 /** Maps Legacy's normalized visible-depth scale (+3 near, -3 far) to Filament view-space Z. */
