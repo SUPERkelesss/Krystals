@@ -2,13 +2,17 @@ package com.krystals.renderer.core
 
 import com.krystals.crystal.analysis.bonding.BondConfiguration
 import com.krystals.crystal.analysis.bonding.BondDetector
+import com.krystals.crystal.analysis.bonding.BondNetwork
 import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.model.Expansion
+import com.krystals.crystal.core.coordinate.CartesianCoordinate
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
+import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
+import com.krystals.crystal.core.periodic.Int3
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
 import com.krystals.renderer.core.builder.CrystalSceneBuilder
@@ -154,6 +158,31 @@ class CrystalSceneBuilderTest {
         // Bonds: both A1-B and A2-B collapse to one bond from the gathered center.
         val bonds = scene.bonds
         assertTrue(bonds.isNotEmpty(), "at least one bond from gathered center to B")
+    }
+
+    @Test
+    fun boundaryImageCoincidingWithPrimaryIsDeduplicated() {
+        // Regression (v0.8.13): two-overlapping-atoms at cell faces/corners. A shell atom whose
+        // cartesian position coincides exactly with a primary atom is a periodic duplicate and
+        // must not be emitted — only the primary AtomInstance stays at that position.
+        val structure = structure()
+        val primary = AtomImage(
+            id = 1, siteId = "A", siteLabel = "A1", species = Species("O"),
+            fractionalCoordinate = FractionalCoordinate(0.0, 0.0, 0.0),
+            cartesianCoordinate = CartesianCoordinate(0.0, 0.0, 0.0),
+            occupancy = 1.0, cellOffset = Int3(0, 0, 0),
+        )
+        val shellDup = primary.copy(
+            id = 2, siteId = "B", siteLabel = "B1", species = Species("C"),
+            fractionalCoordinate = FractionalCoordinate(0.0, 0.0, 1.0),
+            cellOffset = Int3(0, 0, -1), isShell = true, isBoundaryImage = true,
+        )
+        val analysis = BondNetwork(listOf(primary, shellDup), emptyList(), structure, Expansion())
+        val scene = CrystalSceneBuilder().build(structure, analysis, SceneBuildOptions())
+        val atOrigin = scene.objects.filterIsInstance<AtomInstance>().count {
+            it.atom.cartesianCoordinate == CartesianCoordinate(0.0, 0.0, 0.0)
+        }
+        assertEquals(1, atOrigin, "shell duplicate at the primary's position must be skipped")
     }
 
     private fun structure() = CrystalStructure(

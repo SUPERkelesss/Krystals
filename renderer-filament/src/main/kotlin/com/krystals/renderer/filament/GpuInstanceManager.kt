@@ -116,19 +116,21 @@ class GpuInstanceManager(
             val g = gInst.gathered
             val center = g.center
             val radius = gInst.radius
-            val totalOcc = g.slices.sumOf { it.fraction }  // render-layer display fractions sum
             var accumAngle = -90f
             g.slices.forEachIndexed { sIdx, slice ->
                 val sweep = (slice.fraction * 360f).toFloat().coerceAtLeast(1f)
                 val mesh = meshes.diskSector(accumAngle, sweep)
                 val meshId = "gathered-pie:$gIdx:s$sIdx"
                 auxiliaryMeshes[meshId] = mesh
-                // Atom-like material: lit, with occupancy transparency matching occ<1 atoms.
                 val sliceMat = Material(argb = slice.color, reflective = true)
+                // Per v0.8.13: slices are OPAQUE (occupancy 1.0) — passing totalOcc made every
+                // sector translucent and the transparent pass depth-sorted/blended them into a
+                // muddy face with wrong-looking shading. Opaque sectors match the legacy 2D pie
+                // arcs; only the remainder wedge is translucent.
                 val record = InstanceRecord(
                     meshId, 0,
-                    BatchKey(GeometryKind.PIE_SECTOR, MaterialKey(sliceMat, totalOcc)),
-                    identity(),  // billboard set per-frame by updateBillboardTransforms
+                    BatchKey(GeometryKind.PIE_SECTOR, MaterialKey(sliceMat, 1.0)),
+                    identity(), // billboard set per-frame by updateBillboardTransforms
                 )
                 create(record, snapshot)?.let { entity ->
                     entities[meshId] = entity
@@ -138,12 +140,13 @@ class GpuInstanceManager(
                 }
                 accumAngle += sweep
             }
+            // Remainder sector — translucent so it reads as "missing occupancy" on any background.
             if (g.remainderFraction > 0.001f) {
                 val sweep = (g.remainderFraction * 360f).toFloat().coerceAtLeast(1f)
                 val mesh = meshes.diskSector(accumAngle, sweep)
                 val meshId = "gathered-pie:$gIdx:rem"
                 auxiliaryMeshes[meshId] = mesh
-                val remMat = Material(argb = g.mixedColor, opacity = 0.25, reflective = true)
+                val remMat = Material(argb = g.mixedColor, opacity = 0.4, reflective = true)
                 val record = InstanceRecord(
                     meshId, 0,
                     BatchKey(GeometryKind.PIE_SECTOR, MaterialKey(remMat)),

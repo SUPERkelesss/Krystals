@@ -113,7 +113,18 @@ class CrystalSceneBuilder {
                 visible = anyVisible,
             )
         }
+        // Per v0.8.13: boundary-image (shell) atoms whose cartesian position coincides with a
+        // PRIMARY (in-cell) atom are exact periodic duplicates — rendering both produces two
+        // overlapping atoms at cell faces/corners (e.g. (0,0,1)). Skip the shell duplicate; the
+        // in-cell atom already represents that position. Shell atoms at positions with no
+        // primary (real cross-cell neighbors) still render.
+        val primaryPositions = analysis.atoms.asSequence()
+            .filter { !it.isShell }
+            .map { AtomKey(it) }
+            .toHashSet()
+
         for (atom in analysis.atoms) {
+            if (atom.isShell && AtomKey(atom) in primaryPositions) continue
             objects += AtomInstance(
                 id = "atom:${atom.id}",
                 atom = atom,
@@ -122,7 +133,6 @@ class CrystalSceneBuilder {
                 visible = atomVisible(atom),
             )
         }
-
         // Bond pass: drop intra-group bonds, remap positions, dedupe per (groupKey|atomId, groupKey|atomId, offsetB).
         // Per v0.8.5: groups anchor bonds at the sphere SURFACE; duplicate member→same-target
         // bonds collapse with occ-weighted mixedColor at the group end.
@@ -261,6 +271,13 @@ class CrystalSceneBuilder {
             add(index)
             add(index + 1)
         }
+    }
+
+    /** Per v0.8.13: 1e-4-quantized cartesian key for exact-coincidence dedupe (boundary-image
+     *  atoms that duplicate an in-cell atom's position). */
+    private fun AtomKey(a: AtomImage): Triple<Int, Int, Int> {
+        val p = a.cartesianCoordinate.toVec3()
+        return Triple((p.x / 1e-4).toInt(), (p.y / 1e-4).toInt(), (p.z / 1e-4).toInt())
     }
 
     private fun outwardNormal(center: Vec3, vertices: List<Vec3>): Vec3? {
