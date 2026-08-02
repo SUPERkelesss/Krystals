@@ -169,9 +169,9 @@ class GpuInstanceManager(
      * Called every frame before render with the current camera position.
      * [cameraPosition] is the world-space eye/camera position.
      */
-    fun updateBillboardTransforms(cameraPosition: Vec3) {
+    fun updateBillboardTransforms(cameraPosition: Vec3, cameraUp: Vec3 = Vec3(0.0, 1.0, 0.0)) {
         if (pieRegistry.isEmpty()) return
-        val billboard = billboardTransform(cameraPosition)
+        val billboard = billboardTransform(cameraPosition, cameraUp)
         pieRegistry.forEach { (entity, pair) ->
             val (center, radius) = pair
             engine.transformManager.setTransform(
@@ -407,14 +407,17 @@ class GpuInstanceManager(
     }
 
     companion object {
-        /** Per v0.8.10: returns a closure that builds a per-center column-major 4×4
+        /** Per v0.8.11: returns a closure that builds a per-center column-major 4×4
          *  billboard matrix. [cameraPosition] is the world-space eye position.
-         *  Each call computes normal = normalize(cameraPosition - center). */
-        fun billboardTransform(cameraPosition: Vec3, worldUp: Vec3 = Vec3(0.0, 1.0, 0.0)): (Vec3, Double) -> FloatArray {
+         *  [cameraUp] is the screen-up direction in world space (camera local +Y).
+         *  right = cross(cameraUp, normal); up = normal × right, so the pie's
+         *  12-o'clock locks to screen 12-o'clock regardless of camera roll. */
+        fun billboardTransform(cameraPosition: Vec3, cameraUp: Vec3): (Vec3, Double) -> FloatArray {
             return { center: Vec3, radius: Double ->
                 val toCam = cameraPosition - center
                 val normal = if (toCam.lengthSquared() < 1e-12) Vec3(0.0, 0.0, 1.0) else toCam.normalized()
-                val right = worldUp.cross(normal).let { if (it.lengthSquared() < 1e-12) Vec3(1.0, 0.0, 0.0).cross(normal) else it }.normalized()
+                // right = cameraUp × normal (degenerate fallback: (1,0,0) × normal)
+                val right = cameraUp.cross(normal).let { if (it.lengthSquared() < 1e-12) Vec3(1.0, 0.0, 0.0).cross(normal) else it }.normalized()
                 val up = normal.cross(right).normalized()
                 floatArrayOf(
                     (right.x * radius).toFloat(), (right.y * radius).toFloat(), (right.z * radius).toFloat(), 0f,
