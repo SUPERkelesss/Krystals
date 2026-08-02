@@ -89,6 +89,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private val frameBudget = DirtyFrameBudget()
     private var sceneRadius = 10.0
     private var sceneCenter = Vec3.ZERO
+    private var lastCameraPosition = Vec3.ZERO  // Per v0.8.10: for per-frame billboard updates
     private var sceneBounds: SceneBounds? = null
     private var allSceneBounds: SceneBounds? = null
     private var bondValenceBySite: Map<String, Double> = emptyMap()
@@ -329,6 +330,8 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         if (closed.get()) return
         val chain = swapChain ?: return
         if (!frameBudget.hasPending) return
+        // Per v0.8.10: update billboard transforms every frame with live camera position.
+        gpuInstances.updateBillboardTransforms(lastCameraPosition)
         if (renderer.beginFrame(chain, frameTimeNanos)) {
             renderer.render(view)
             renderer.endFrame()
@@ -374,6 +377,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         val worldFromCamera = state.camera.rotation.transposed()
         val target = sceneCenter + state.camera.target
         val eye = target + worldFromCamera * Vec3(0.0, 0.0, max(50.0, sceneRadius * 4.0))
+        lastCameraPosition = eye  // Per v0.8.10: stored for per-frame billboard updates
         val up = worldFromCamera * Vec3(0.0, 1.0, 0.0)
         camera.lookAt(eye.x, eye.y, eye.z, target.x, target.y, target.z, up.x, up.y, up.z)
     }

@@ -11,6 +11,7 @@ import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 enum class SharedGeometry { SPHERE_HIGH, SPHERE_MEDIUM, SPHERE_LOW, CYLINDER, LINE, AXIS, MEASUREMENT }
 
@@ -177,22 +178,30 @@ class MeshUploader(private val engine: Engine) : AutoCloseable {
      * Per v0.8.9: generate a sector of a unit-radius disk in the XY plane.
      * [startAngleDeg] + [sweepAngleDeg] define the arc in degrees measured
      * clockwise from +Y (12-o'clock). Center vertex at origin, arc vertices
-     * at unit radius. Normals are (0,0,1). Intended for billboard rendering.
+     * at unit radius.
+     *
+     * Per v0.8.10: sphere-impostor normals — each vertex normal =
+     * normalize(x, y, sqrt(1-x^2-y^2)) so the lit material shades the flat
+     * disk like a sphere. arcSteps defaults to 32 for smooth arcs.
      */
-    fun diskSector(startAngleDeg: Float, sweepAngleDeg: Float, arcSteps: Int = 8): MeshData {
+    fun diskSector(startAngleDeg: Float, sweepAngleDeg: Float, arcSteps: Int = 32): MeshData {
         require(sweepAngleDeg > 0f) { "sweep must be positive" }
         val startRad = startAngleDeg * PI.toFloat() / 180f
         val sweepRad = sweepAngleDeg * PI.toFloat() / 180f
         val positions = ArrayList<Float>()
         val normals = ArrayList<Float>()
-        // Center vertex
+        // Center vertex — normal = (0,0,1) (zenith of unit sphere)
         positions.add3(Vec3(0.0, 0.0, 0.0))
         normals.add3(Vec3(0.0, 0.0, 1.0))
-        // Arc vertices
+        // Arc vertices with sphere-impostor normals
         for (i in 0..arcSteps) {
             val angle = startRad + sweepRad * i / arcSteps
-            positions.add3(Vec3(cos(angle).toDouble(), sin(angle).toDouble(), 0.0))
-            normals.add3(Vec3(0.0, 0.0, 1.0))
+            val x = cos(angle).toDouble()
+            val y = sin(angle).toDouble()
+            positions.add3(Vec3(x, y, 0.0))
+            // Sphere-impostor: project XY point onto unit hemisphere
+            val nz = sqrt((1.0 - x * x - y * y).coerceAtLeast(0.0))
+            normals.add3(Vec3(x, y, nz))
         }
         val indices = ArrayList<Int>()
         for (i in 0 until arcSteps) {

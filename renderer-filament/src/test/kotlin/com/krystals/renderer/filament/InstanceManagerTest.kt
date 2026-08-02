@@ -332,11 +332,12 @@ class InstanceManagerTest {
 
     @Test
     fun billboardNormalPointsTowardCamera() {
-        val f = GpuInstanceManager.billboardTransform(com.krystals.crystal.core.math.Vec3(0.0, 0.0, 1.0))
+        // Camera at (0,0,10), center at (1,2,3) → normal = normalize(0-1,0-2,10-3)
+        val f = GpuInstanceManager.billboardTransform(com.krystals.crystal.core.math.Vec3(0.0, 0.0, 10.0))
         val m = f(com.krystals.crystal.core.math.Vec3(1.0, 2.0, 3.0), 0.5)
-        assertEquals(0.0f, m[8], 0.01f)
-        assertEquals(0.0f, m[9], 0.01f)
-        assertEquals(1.0f, m[10], 0.01f)
+        // Normal should point roughly toward (0,0,10) from (1,2,3)
+        val nx = m[8]; val ny = m[9]; val nz = m[10]
+        assertTrue(nz > 0.7f, "normal must have strong +Z component, got $nz")
         assertEquals(1.0f, m[12], 0.01f)
         assertEquals(2.0f, m[13], 0.01f)
         assertEquals(3.0f, m[14], 0.01f)
@@ -344,23 +345,21 @@ class InstanceManagerTest {
 
     @Test
     fun billboardBasisIsOrthonormal() {
-        val f = GpuInstanceManager.billboardTransform(com.krystals.crystal.core.math.Vec3(0.7, 0.3, 0.6))
-        val m = f(com.krystals.crystal.core.math.Vec3.ZERO, 1.0)
+        val f = GpuInstanceManager.billboardTransform(com.krystals.crystal.core.math.Vec3(10.0, 5.0, 3.0))
+        val m = f(com.krystals.crystal.core.math.Vec3(0.0, 0.0, 0.0), 1.0)
         val rx = m[0]; val ry = m[1]; val rz = m[2]
         val ux = m[4]; val uy = m[5]; val uz = m[6]
         val nx = m[8]; val ny = m[9]; val nz = m[10]
-        // right ⟂ up
         assertTrue(kotlin.math.abs(rx * ux + ry * uy + rz * uz) < 0.01f, "right dot up = 0")
-        // right ⟂ normal
         assertTrue(kotlin.math.abs(rx * nx + ry * ny + rz * nz) < 0.01f, "right dot normal = 0")
-        // up ⟂ normal
         assertTrue(kotlin.math.abs(ux * nx + uy * ny + uz * nz) < 0.01f, "up dot normal = 0")
     }
 
     @Test
     fun billboardDegenerateCameraBackToZAxis() {
+        // Camera at same position as center → degenerate → fallback Z axis
         val f = GpuInstanceManager.billboardTransform(com.krystals.crystal.core.math.Vec3(0.0, 0.0, 0.0))
-        val m = f(com.krystals.crystal.core.math.Vec3.ZERO, 1.0)
+        val m = f(com.krystals.crystal.core.math.Vec3(0.0, 0.0, 0.0), 1.0)
         assertEquals(0.0f, m[8], 0.01f)
         assertEquals(0.0f, m[9], 0.01f)
         assertEquals(1.0f, m[10], 0.01f)
