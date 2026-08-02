@@ -30,3 +30,4 @@ activation-secrets.gradle.kts
 
 # Hermes agent plans/session artifacts
 .hermes/
+.worktrees/

@@ -178,10 +178,10 @@ object CrystalEditor {
         return EditResult(structure, bondConfiguration.copy(rules = filtered))
     }
 
-    /** Per v0.8.7: structures composed entirely of non-metal atoms default to bonding rules
+    /** Per v0.8.7: all-ASU-sites-non-metal structures default to the bonding rule path
      *  regardless of cell size (ignoring SMART_IONIC_ATOM_LIMIT). Metals keep the existing
      *  size-gated smart-ionic / bonding fallback logic. */
-    private fun isAllNonMetals(structure: CrystalStructure): Boolean =
+    fun isAllNonMetals(structure: CrystalStructure): Boolean =
         structure.sites.all { !isMetal(it.species.symbol) }
 
     fun fromSmartIonicAttempt(
@@ -234,6 +234,14 @@ object CrystalEditor {
         atoms: List<com.krystals.crystal.core.model.AtomImage>,
         rules: List<BondRule>,
     ): List<BondRule> {
+        // Per v0.8.12: cheap gates BEFORE the Voronoi search — it is the dominant cost of this
+        // path and ran unconditionally, so H-free structures or structures without any acceptor
+        // element (O/N/F/S/P/Cl) paid a full periodic Voronoi pass for nothing.
+        val hbondAcceptorElements = setOf("O", "N", "F", "S", "P", "Cl")
+        val hasH = atoms.any { it.species.symbol == "H" }
+        val hasAcceptor = atoms.any { it.species.symbol in hbondAcceptorElements }
+        if (!hasH || !hasAcceptor) return rules
+
         // Run Voronoi first.
         val neighboursByAtomId = try {
             val neighbours = VoronoiNeighbours.find(structure, atoms)
@@ -249,7 +257,6 @@ object CrystalEditor {
 
         // Compute covalent-max thresholds per element pair using bonding radii.
         val covRadius = { sym: String -> PeriodicTable.radius(sym, RadiusSource.BONDING) }
-        val hbondAcceptorElements = setOf("O", "N", "F", "S", "P", "Cl")
         val atomById = atoms.associateBy { it.id }
 
         // Find H atoms with exactly 1 Voronoi neighbour in {O,N,F,S,P,Cl} within covalent distance.

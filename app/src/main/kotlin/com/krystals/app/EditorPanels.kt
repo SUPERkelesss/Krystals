@@ -461,29 +461,41 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Ed
             OutlinedButton(onClick = { tab.recordHistory(); tab.atomEditMode = AtomEditMode.MODIFY_NEXT; onPersistentMessage(atomEditHint); onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Text(localized("修改", "Modify")) }
             OutlinedButton(onClick = { tab.recordHistory(); tab.atomEditMode = AtomEditMode.DELETE_NEXT; onPersistentMessage(atomEditHint); onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Text(localized("删除", "Delete")) }
         }
-LazyColumn(Modifier.fillMaxSize()) {
+// Per v0.8.11: compute co-located site groups for border coloring.
+    val siteGroups = remember(tab.structure) { computeGatheredSiteBorders(tab.structure.sites, tab.renderConfiguration) }
+    LazyColumn(Modifier.fillMaxSize()) {
 items(tab.structure.sites, key = { it.id }) { site ->
-Row(
-    Modifier
-        .fillMaxWidth()
-        .clickable { atomDialog = site }
-        .border(0.5.dp, Color.Gray, RoundedCornerShape(8.dp))
-        .padding(10.dp),
-    verticalAlignment = Alignment.CenterVertically,
-) {
-                    Box(Modifier.size(20.dp).background(colorFromArgb(RenderPalette.resolveArgb(site.species.symbol, tab.renderConfiguration)), CircleShape))
-                    Text("${site.label}  ${site.species.symbol}   (${fmt(site.fractionalCoordinate.x)}, ${fmt(site.fractionalCoordinate.y)}, ${fmt(site.fractionalCoordinate.z)})", modifier = Modifier.weight(1f).padding(start = 10.dp))
-                    IconButton(onClick = {
-                        val deleted = runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.DeleteAtom(site.id)) }
-                            .onFailure { onMessage(it.message ?: "Delete failed") }.getOrNull() ?: return@IconButton
-                        // Per v0.7.1: deleting an atom no longer regenerates all bond rules —
-                        // only rules referencing the deleted atom are removed (handled inside DeleteAtom).
-                        onStructure(deleted)
-                    }) { Icon(Icons.Default.Delete, null) }
+    val groupInfo = siteGroups[site.id]
+    val borderMod = if (groupInfo != null) {
+        val (wasNormalized, color) = groupInfo
+        // Per v0.8.11: co-located (same-position) site groups get a mixedColor border;
+        // raw Σocc > 1 gets a thicker RED border.
+        val borderColor = if (wasNormalized) Color(0xFFFF4444) else Color(color)
+        Modifier.border(if (wasNormalized) 3.dp else 2.dp, borderColor, RoundedCornerShape(8.dp))
+    } else {
+        Modifier.border(0.5.dp, Color.Gray, RoundedCornerShape(8.dp))
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable { atomDialog = site }
+            .then(borderMod)
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+                        Box(Modifier.size(20.dp).background(colorFromArgb(RenderPalette.resolveArgb(site.species.symbol, tab.renderConfiguration)), CircleShape))
+                        Text("${site.label}  ${site.species.symbol}   (${fmt(site.fractionalCoordinate.x)}, ${fmt(site.fractionalCoordinate.y)}, ${fmt(site.fractionalCoordinate.z)})", modifier = Modifier.weight(1f).padding(start = 10.dp))
+                        IconButton(onClick = {
+                            val deleted = runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.DeleteAtom(site.id)) }
+                                .onFailure { onMessage(it.message ?: "Delete failed") }.getOrNull() ?: return@IconButton
+                            // Per v0.7.1: deleting an atom no longer regenerates all bond rules —
+                            // only rules referencing the deleted atom are removed (handled inside DeleteAtom).
+                            onStructure(deleted)
+                        }) { Icon(Icons.Default.Delete, null) }
+                    }
                 }
             }
         }
-    }
     if (periodicOpen) PeriodicTableDialog(onDismiss = { periodicOpen = false }) { element -> periodicOpen = false; newElement = element }
     newElement?.let { element -> AtomDialog(null, element, onDismiss = { newElement = null }) { label, chosen, frac, occupancy ->
         runCatching {
@@ -1582,6 +1594,44 @@ private fun computeGatheredSiteInfo(sites: List<com.krystals.crystal.core.model.
         val rawSum = bucket.sumOf { it.occupancy }
         val info = GatheredSiteInfo(wasNormalized = rawSum > 1.0)
         for (site in bucket) result[site.id] = info
+    }
+    return result
+}
+
+/** Per v0.8.11: identifies co-located site groups and computes their border color.
+ *  Returns (wasNormalized: Boolean, mixedColor: Long) per site id.
+ *  mixedColor = occ-weighted ARGB blend of all member site colors.
+ *  wasNormalized = true when raw Σocc > 1 → red border. */
+private fun computeGatheredSiteBorders(sites: List<com.krystals.crystal.core.model.Site>, config: com.krystals.renderer.core.style.RenderConfiguration): Map<String, Pair<Boolean, Long>> {
+    val tol = 1e-4
+    val byPos = linkedMapOf<Triple<Int, Int, Int>, MutableList<com.krystals.crystal.core.model.Site>>()
+    for (s in sites) {
+        val key = Triple((s.fractionalCoordinate.x / tol).toInt(), (s.fractionalCoordinate.y / tol).toInt(), (s.fractionalCoordinate.z / tol).toInt())
+        byPos.getOrPut(key) { mutableListOf() }.add(s)
+    }
+    val result = mutableMapOf<String, Pair<Boolean, Long>>()
+    for ((_, bucket) in byPos) {
+        val distinctIds = bucket.map { it.id }.distinct()
+        if (distinctIds.size < 2) continue
+        val rawSum = bucket.sumOf { it.occupancy }
+        val wasNormalized = rawSum > 1.0
+        val scale = if (wasNormalized) 1.0 / rawSum else 1.0
+        // Occ-weighted ARGB blend (same algorithm as GatheredAtomGrouper.mixColors)
+        var r = 0.0; var g = 0.0; var b = 0.0; var w = 0.0
+        for (s in bucket) {
+            val argb = RenderPalette.resolveArgb(s.species.symbol, config)
+            val wt = s.occupancy * scale
+            r += ((argb ushr 16) and 0xFF).toInt() * wt
+            g += ((argb ushr 8) and 0xFF).toInt() * wt
+            b += (argb and 0xFF).toInt() * wt
+            w += wt
+        }
+        val iw = if (w > 0.0) 1.0 / w else 1.0
+        val ir = (r * iw).toInt().coerceIn(0, 255)
+        val ig = (g * iw).toInt().coerceIn(0, 255)
+        val ib = (b * iw).toInt().coerceIn(0, 255)
+        val mixedColor = (0xFFL shl 24) or (ir.toLong() shl 16) or (ig.toLong() shl 8) or ib.toLong()
+        for (s in bucket) result[s.id] = wasNormalized to mixedColor
     }
     return result
 }

@@ -326,8 +326,9 @@ object CrystalImageExporter {
             addAll(dihedralPlanes)
             sceneGathered.forEach { gInst ->
                 val g = gInst.gathered
-                val depth = legacyCameraDepth(controller.rotation * g.center)
-                val screen = screen(controller.rotation * g.center)
+                // Per v0.8.9: must subtract center like atom projection (L283).
+                val depth = legacyCameraDepth(controller.rotation * (g.center - center))
+                val screen = screen(controller.rotation * (g.center - center))
                 val r = ((gInst.radius * scale).coerceIn(9.0, 84.0)).toFloat()
                 add(GatherPrimitive(screen.first, screen.second, zDepth = depth, radius = r, slices = g.slices, remainderFraction = g.remainderFraction, mixedColor = g.mixedColor))
             }
