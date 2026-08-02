@@ -1,13 +1,13 @@
-{
-    "atom_opaque.filamat":  "dd4d7612742d0a9ba122637cca2328d48d853fc6d668ace6b94e87ddc66d22f5",
-    "atom_transparent.filamat":  "a1e36240d7e4f5bf0c70ab95634f9d96019e280a6a4d24c6312063804f20b0a9",
-    "opaque.filamat":  "630e98d76143a85fd939e5d30d21d6992e8e0f2c3acf91db5bd238dbf4a650f4",
-    "transparent.filamat":  "5ea20bfa20ec2a54efb52634cb5ef05655aeb5de4312e7fcf9efb0721baca212",
-    "polyhedron.filamat":  "43565881d2cc8df0f331ab0a608dfdcc44649042b2af76276bad2167936f915c",
-    "unlit_opaque.filamat":  "dca52f820ca6f21b436328866218a3bf8133587d886122ccf7f5d19bbc07725d",
-    "unlit_transparent.filamat":  "d90e7c1fe8d5c989e76a281ad9c36f595dd82bf1619991507f813e29cc055b02",
-    "unlit_polyhedron.filamat":  "1555e19bf8ba6690331a956f4223bae1016595a3e2cf7f38bf0fb77042e23b73",
-    "highlight.filamat":  "e9486e62ecab0661198c0765fe55b7318a47133e2a891785b425417d698023e3",
-    "depth_cueing.filamat":  "37e43341e0a7ebabc1335176c92d74d3175a73e98eaa7669f4460b9aa089feab",
-    "picking.filamat":  "d4b81d4bd51736b4657c13bcf3d38d8b0dba8007292cada0f090ec22a484b129"
-}
+{
+    "atom_opaque.filamat":  "c2f67046df02f957823c0e63eecb7509e26a6cfd1b966034532c87ba5bba1c89",
+    "atom_transparent.filamat":  "c6a0b6e78cc35cbff4dfde9fc5996053550cd5563dbbdf9cd93b78b631f07ea6",
+    "opaque.filamat":  "e08fa8f000d33da7be58b845da3a213f23e1195af7ab466da5788fead78d1550",
+    "transparent.filamat":  "513498938a67bc8ddb93d8fa3d013a4151e1a5c5621bbfc21afca02d23fff1f8",
+    "polyhedron.filamat":  "ef8dc98b8df32f32c01c6faf435e757d28b669c8ca45d2136ddbdd93e6bb3c4b",
+    "unlit_opaque.filamat":  "c9f550ececee0c0959c37f493aa75534f8a4d9a1e4eda72aca16282744452232",
+    "unlit_transparent.filamat":  "fad04459bdcaa6b1681bfa55f649fca0a069a4e74fe23d0e73410ff0ad55543e",
+    "unlit_polyhedron.filamat":  "acbc986e7262b38f00b469b527af68e80071c46d5e70dad1b527644ae1319c96",
+    "highlight.filamat":  "e9486e62ecab0661198c0765fe55b7318a47133e2a891785b425417d698023e3",
+    "depth_cueing.filamat":  "37e43341e0a7ebabc1335176c92d74d3175a73e98eaa7669f4460b9aa089feab",
+    "picking.filamat":  "d4b81d4bd51736b4657c13bcf3d38d8b0dba8007292cada0f090ec22a484b129"
+}
