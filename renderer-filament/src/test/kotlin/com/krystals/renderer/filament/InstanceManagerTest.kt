@@ -386,6 +386,41 @@ class InstanceManagerTest {
         assertEquals(1.0f, m[10], 0.01f)
     }
 
+    @Test
+    fun invisibleGroupMembersAreAlsoSkippedInInstancedRecords() {
+        // Regression (v0.8.14): a pure boundary-image group (shell members only, e.g. the +z
+        // images of a face position) is invisible — its members must NOT fall back to
+        // individual sphere rendering. The (0,0,1)-type position must show nothing at all.
+        val structure = CrystalStructure(
+            blockName = "faceDisordered",
+            lattice = Lattice(5.0, 5.0, 5.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(
+                Site("A1", "A1", Species("C"), FractionalCoordinate(0.0, 0.0, 0.0), occupancy = 0.5),
+                Site("A2", "A2", Species("N"), FractionalCoordinate(0.0, 0.0, 0.0), occupancy = 0.5),
+            ),
+        )
+        val analysis = BondDetector.buildNetwork(structure, BondConfiguration())
+        val scene = CrystalSceneBuilder().build(structure, analysis, SceneBuildOptions())
+        val groups = scene.objects.filterIsInstance<GatheredAtomInstance>()
+        val hidden = groups.filter { !it.visible }
+        assertTrue(hidden.isNotEmpty(), "pure boundary-image group must be invisible")
+        assertTrue(groups.any { it.visible }, "in-cell group must be visible")
+
+        val manager = InstanceManager()
+        val diff = manager.sync(scene)
+        val recordIds = diff.batches.values.asSequence().flatten().map { it.objectId }.toSet()
+        hidden.forEach { g ->
+            g.gathered.memberAtomIds.forEach { memberId ->
+                assertFalse(
+                    recordIds.contains("atom:$memberId"),
+                    "member of invisible group must be skipped, not rendered as a single ball",
+                )
+            }
+        }
+    }
+
     private fun structure() = CrystalStructure(
         blockName = "test",
         lattice = Lattice(4.0, 4.0, 4.0, 90.0, 90.0, 90.0),

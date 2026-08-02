@@ -59,8 +59,12 @@ class InstanceManager {
 
         // Per v0.8.8: gather co-located mixed-occupancy atoms — per-slice sector meshes
         // are emitted by GpuInstanceManager. InstanceManager only tracks membership.
+        // Per v0.8.14: index members of ALL groups (visible or not). A group hidden because it
+        // is a pure boundary-image bundle (e.g. the +z images of (0,0,1)) must still suppress
+        // its member atoms — otherwise they fall back to individual sphere rendering and the
+        // position shows a plain single-site ball instead of nothing.
         val gatheredByMemberId = linkedMapOf<Long, String>()
-        scene.objects.asSequence().filterIsInstance<GatheredAtomInstance>().filter(GatheredAtomInstance::visible).forEach { gInst ->
+        scene.objects.asSequence().filterIsInstance<GatheredAtomInstance>().forEach { gInst ->
             val g = gInst.gathered
             val memberIds = g.memberAtomIds.sorted().joinToString(",")
             val baseId = "gathered:$memberIds"
