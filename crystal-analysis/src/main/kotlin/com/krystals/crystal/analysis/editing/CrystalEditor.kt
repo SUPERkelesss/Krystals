@@ -4,6 +4,9 @@ import com.krystals.crystal.analysis.bonding.BondConfiguration
 import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.bonding.BondValence
+import com.krystals.crystal.analysis.bonding.HbondChecking
+import com.krystals.crystal.analysis.bonding.VoronoiNeighbours
+import com.krystals.crystal.analysis.bonding.VoronoiSearchLimitExceededException
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.Expansion
 import com.krystals.crystal.analysis.model.PeriodicTable
@@ -181,13 +184,15 @@ object CrystalEditor {
         epsilon: Double,
         smartIonic: BondValence.SmartIonicResult?,
     ): EditResult {
-        val sizeGuarded = SymmetryExpander.expand(structure).size > BondValence.SMART_IONIC_ATOM_LIMIT
+        val atoms = SymmetryExpander.expand(structure)
+        val sizeGuarded = atoms.size > BondValence.SMART_IONIC_ATOM_LIMIT
         var timedOut = false
         val generated = if (!sizeGuarded && smartIonic != null && smartIonic.success) {
             smartIonic.rules
         } else {
             if (!sizeGuarded && smartIonic == null) timedOut = true
-            bondingRules(structure, epsilon)
+            // Per v0.8.6: append hbond rules on the bonding fallback path.
+            bondingRulesWithHbonds(structure, atoms, bondingRules(structure, epsilon))
         }
         val warnings = if (timedOut) listOf(SMART_IONIC_TIMEOUT) else emptyList()
         // Per v0.6.3: replace existing rules with generated ones, but preserve
@@ -208,7 +213,54 @@ object CrystalEditor {
             val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon, atoms)
             if (result.success) return result.rules
         }
-        return bondingRules(structure, epsilon)
+        // Per v0.8.6: the bonding-radius fallback path also gets hbond detection.
+        val rules = bondingRules(structure, epsilon)
+        return bondingRulesWithHbonds(structure, atoms, rules)
+    }
+
+    /** Per v0.8.6: append hbond rules to the bonding-radius rule set.
+     *  Proton criterion for the bonding path: H site bonded through exactly ONE
+     *  single bond to O/N/F/S/P/Cl (counted from the generated bonding rules).
+     *  The smartIonic path keeps its BVS==1 proton criterion unchanged. */
+    private fun bondingRulesWithHbonds(
+        structure: CrystalStructure,
+        atoms: List<com.krystals.crystal.core.model.AtomImage>,
+        rules: List<BondRule>,
+    ): List<BondRule> {
+        // Compute protons from the bonding rules: H sites with exactly 1 bond.
+        val hbondAcceptorElements = setOf("O", "N", "F", "S", "P", "Cl")
+        val hBondCount = linkedMapOf<String, Int>()
+        val hPartners = linkedMapOf<String, MutableSet<String>>()
+        for (rule in rules) {
+            val pair = listOf(rule.siteA, rule.siteB)
+            val hSite = pair.find { siteId -> structure.sites.any { it.id == siteId && it.species.symbol == "H" } }
+            if (hSite == null) continue
+            val other = pair.first { it != hSite }
+            val otherElem = structure.sites.firstOrNull { it.id == other }?.species?.symbol ?: continue
+            if (otherElem !in hbondAcceptorElements) continue
+            hBondCount[hSite] = (hBondCount[hSite] ?: 0) + 1
+            hPartners.getOrPut(hSite) { mutableSetOf() }.add(otherElem)
+        }
+        val protonSiteIds = hBondCount.filter { it.value == 1 }.keys.toSet()
+        if (protonSiteIds.isEmpty()) return rules
+
+        // Run Voronoi for neighbour lookup (same pipeline as smartIonic).
+        val neighboursByAtomId = try {
+            val neighbours = VoronoiNeighbours.find(structure, atoms)
+            val map = linkedMapOf<Long, MutableList<Pair<Long, Double>>>()
+            for ((a, b, dist) in neighbours) {
+                map.getOrPut(a) { mutableListOf() }.add(b to dist)
+                map.getOrPut(b) { mutableListOf() }.add(a to dist)
+            }
+            map
+        } catch (_: VoronoiSearchLimitExceededException) {
+            return rules
+        }
+
+        val hbondRules = HbondChecking.hbondRules(
+            structure, atoms, neighboursByAtomId, protonSiteIds, rules,
+        )
+        return rules + hbondRules
     }
 
     private fun bondingRules(structure: CrystalStructure, epsilon: Double = 0.45): List<BondRule> {
@@ -241,7 +293,10 @@ object CrystalEditor {
                 return EditResult(structure, bondConfiguration.copy(rules = filtered))
             }
             val fallback = bondingRules(structure, epsilon)
-            val filteredFallback = fallback.filter { it.key !in bondConfiguration.disabledPairs }
+            // Per v0.8.6: append hbond rules on the bonding fallback path.
+            val atoms = SymmetryExpander.expand(structure)
+            val withHbonds = bondingRulesWithHbonds(structure, atoms, fallback)
+            val filteredFallback = withHbonds.filter { it.key !in bondConfiguration.disabledPairs }
             return EditResult(structure, bondConfiguration.copy(rules = filteredFallback), listOf(SMART_IONIC_UNAVAILABLE))
         }
         val siteSpecies = structure.sites.associate { it.id to it.species.symbol }

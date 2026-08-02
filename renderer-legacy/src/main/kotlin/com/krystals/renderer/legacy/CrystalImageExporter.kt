@@ -588,7 +588,7 @@ private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, isHBond: 
             val paint = android.graphics.Paint().apply {
                 color = android.graphics.Color.GRAY
                 alpha = 80
-                strokeWidth = 2f
+                strokeWidth = 3f
                 pathEffect = android.graphics.DashPathEffect(floatArrayOf(4f, 6f), 0f)
                 isAntiAlias = true
             }

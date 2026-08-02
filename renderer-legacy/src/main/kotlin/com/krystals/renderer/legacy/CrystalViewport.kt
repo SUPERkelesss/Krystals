@@ -888,7 +888,7 @@ private fun DrawScope.drawBond(
     if (clipped.getDistance() < 0.001f) return
     // Per v0.8.1: H-bonds are drawn as a single gray dotted line instead of split cylinders.
     if (isHBond) {
-        drawLine(Color.Gray.copy(alpha = 0.31f), start, end, strokeWidth = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 6f)))
+        drawLine(Color.Gray.copy(alpha = 0.31f), start, end, strokeWidth = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 6f)))
         return
     }
     val perp = Offset(-dir.y, dir.x)
