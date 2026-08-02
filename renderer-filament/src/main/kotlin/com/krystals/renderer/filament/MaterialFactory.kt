@@ -228,13 +228,24 @@ internal object AtomPbr {
     const val METALLIC = 0.0f
     const val ROUGHNESS = 0.32f
     const val REFLECTANCE = 0.45f
-    // v0.8.20: temporarily 0 — high light elevation produced a bright edge artifact on
-    // the atom silhouette (clear-coat reflection); disabled pending a proper fix.
-    const val CLEAR_COAT = 0.0f
+    // v0.8.21: restored to 0.1 — the bright silhouette edge was highlight overexposure
+    // (150k lux directional light with post-processing disabled), not the clear coat.
+    const val CLEAR_COAT = 0.1f
     const val CLEAR_COAT_ROUGHNESS = 0.25f
     /** CPK base color is desaturated by 5% before it reaches the material. */
     const val SATURATION_FACTOR = 0.95f
 }
+
+/**
+ * Directional light intensity in lux for a [worldLightIntensityLux]-style mapping.
+ *
+ * v0.8.21: 150_000 lux (noon sun) overexposed the PBR highlight to pure white because
+ * the view has post-processing (tone mapping) disabled — the highlight clipped and its
+ * arc edge read as a "bright edge" on the atom. 30_000 lux at intensity=1.0 (12_000 at
+ * the 0.4 default) keeps a strong studio key light without clipping.
+ */
+internal fun worldLightIntensityLux(intensity: Float): Float =
+    (intensity * 30_000f).coerceAtLeast(1f)
 
 /**
  * Desaturates an ARGB color by [factor] (1.0 = identity) in HSL space, preserving hue

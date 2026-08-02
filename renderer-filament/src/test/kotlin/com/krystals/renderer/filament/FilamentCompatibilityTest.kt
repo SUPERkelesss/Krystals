@@ -132,14 +132,24 @@ class FilamentCompatibilityTest {
     }
 
     @Test
+    fun `world light intensity stays below overexposure threshold`() {
+        // v0.8.21: with post-processing disabled (no tone mapping), 150k lux clipped the
+        // PBR highlight to pure white and its arc edge read as a "bright edge" on atoms.
+        // The mapping must stay strong but non-clipping.
+        assertEquals(12_000f, worldLightIntensityLux(0.4f), 1f)   // default intensity
+        assertEquals(30_000f, worldLightIntensityLux(1.0f), 1f)   // slider max
+        assertEquals(1f, worldLightIntensityLux(0f), 1f)           // floor
+        assertTrue(worldLightIntensityLux(1.0f) < 100_000f, "must not approach noon-sun levels")
+    }
+
+    @Test
     fun `atom pbr configuration matches spec`() {
         // v0.8.18: atoms use a real Filament lit material with these PBR parameters.
         assertEquals(0.0f, AtomPbr.METALLIC, 0.001f)
         assertEquals(0.32f, AtomPbr.ROUGHNESS, 0.001f)
         assertEquals(0.45f, AtomPbr.REFLECTANCE, 0.001f)
-        // v0.8.20: clearCoat temporarily disabled (0.0) pending a fix for the bright
-        // silhouette edge artifact at high light elevation.
-        assertEquals(0.0f, AtomPbr.CLEAR_COAT, 0.001f)
+        // v0.8.21: clearCoat restored to 0.1 — the edge artifact was overexposure, not coat.
+        assertEquals(0.1f, AtomPbr.CLEAR_COAT, 0.001f)
         assertEquals(0.25f, AtomPbr.CLEAR_COAT_ROUGHNESS, 0.001f)
         assertEquals(0.95f, AtomPbr.SATURATION_FACTOR, 0.001f)
     }

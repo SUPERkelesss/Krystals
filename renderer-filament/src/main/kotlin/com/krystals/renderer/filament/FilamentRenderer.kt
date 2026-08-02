@@ -412,8 +412,9 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             worldDir.y.toFloat(),
             worldDir.z.toFloat(),
         )
-        // Intensity in lux; 1.0 (default 0.4) maps to a comfortable studio key light.
-        engine.lightManager.setIntensity(lightInstance, (light.intensity * 150_000f).coerceAtLeast(1f))
+        // Intensity in lux; v0.8.21: capped well below noon-sun so the PBR highlight
+        // never clips to pure white (post-processing / tone mapping is disabled).
+        engine.lightManager.setIntensity(lightInstance, worldLightIntensityLux(light.intensity))
         // Depth-cueing range is derived from the visible-atoms AABB, not the preloaded
         // neighbor-cell shell. +3 maps to the nearest visible corner, -3 to the farthest.
         val visibleBounds = scene.visibleBounds()
