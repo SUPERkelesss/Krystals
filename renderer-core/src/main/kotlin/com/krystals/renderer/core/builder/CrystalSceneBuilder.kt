@@ -95,12 +95,12 @@ class CrystalSceneBuilder {
         val groupRadiusById = linkedMapOf<String, Double>()  // for surface-anchored bonds
         for (g in groups) {
             val maxRadius = g.memberAtomIds.mapNotNull { id -> atomById[id]?.let { options.atomRadiusByElement[it.species.symbol] ?: options.defaultAtomRadius } }.maxOrNull() ?: options.defaultAtomRadius
-            // Per v0.8.11: only PRIMARY (non-shell) members count for visibility.
-            // atomVisible() unconditionally returns true for boundary images, so a pure
-            // boundary-image group at a cell face would be always visible — matching no
-            // bond-extend logic. Primary members exist for every in-cell group; the cell-face
-            // duplicate groups have only shell members and stay hidden.
-            val anyVisible = g.memberAtomIds.any { id -> atomById[id]?.let { a -> !a.isShell && atomVisible(a) } ?: false }
+            // Per v0.8.15: group visibility follows ANY member's atom visibility, including
+            // boundary-image members. Boundary-image groups (e.g. the +z images of (0,0,1))
+            // render the SAME pie as the in-cell group — the user requires (0,0,1)-type
+            // positions to look identical to (0,0,0). External-shell groups stay hidden
+            // (atomVisible is false unless referenced by an extending bond).
+            val anyVisible = g.memberAtomIds.any { id -> atomById[id]?.let { a -> atomVisible(a) } ?: false }
             val remainderMat = Material(argb = g.mixedColor, opacity = 0.25, reflective = false)
             val gatheredId = "gathered:${g.memberAtomIds.sorted().joinToString(",")}"
             groupCenterById[gatheredId] = g.center

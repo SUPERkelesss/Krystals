@@ -387,10 +387,11 @@ class InstanceManagerTest {
     }
 
     @Test
-    fun invisibleGroupMembersAreAlsoSkippedInInstancedRecords() {
-        // Regression (v0.8.14): a pure boundary-image group (shell members only, e.g. the +z
-        // images of a face position) is invisible — its members must NOT fall back to
-        // individual sphere rendering. The (0,0,1)-type position must show nothing at all.
+    fun allGroupMembersAreSkippedInInstancedRecords() {
+        // Regression (v0.8.14/15): EVERY gathered group — including pure boundary-image groups
+        // at (0,0,1)-type positions — must be visible and rendered as a pie; its member atoms
+        // must never appear as individual spheres (that would render as overlapping balls or a
+        // plain single-site ball instead of the pie).
         val structure = CrystalStructure(
             blockName = "faceDisordered",
             lattice = Lattice(5.0, 5.0, 5.0, 90.0, 90.0, 90.0),
@@ -404,18 +405,17 @@ class InstanceManagerTest {
         val analysis = BondDetector.buildNetwork(structure, BondConfiguration())
         val scene = CrystalSceneBuilder().build(structure, analysis, SceneBuildOptions())
         val groups = scene.objects.filterIsInstance<GatheredAtomInstance>()
-        val hidden = groups.filter { !it.visible }
-        assertTrue(hidden.isNotEmpty(), "pure boundary-image group must be invisible")
-        assertTrue(groups.any { it.visible }, "in-cell group must be visible")
+        assertTrue(groups.size >= 2, "in-cell group + boundary-image groups expected")
+        assertTrue(groups.all { it.visible }, "all groups (incl. boundary-image ones) must be visible per v0.8.15")
 
         val manager = InstanceManager()
         val diff = manager.sync(scene)
         val recordIds = diff.batches.values.asSequence().flatten().map { it.objectId }.toSet()
-        hidden.forEach { g ->
+        groups.forEach { g ->
             g.gathered.memberAtomIds.forEach { memberId ->
                 assertFalse(
                     recordIds.contains("atom:$memberId"),
-                    "member of invisible group must be skipped, not rendered as a single ball",
+                    "group member must be skipped, never rendered as an individual ball",
                 )
             }
         }

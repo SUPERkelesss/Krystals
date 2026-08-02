@@ -186,10 +186,10 @@ class CrystalSceneBuilderTest {
     }
 
     @Test
-    fun pureBoundaryImageGroupIsNotVisible() {
-        // Regression (v0.8.13): a gathered group whose members are ALL shell atoms (e.g. the +z
-        // boundary images of a face position like (0,0,1)) must be marked invisible — legacy and
-        // filament both skip invisible groups. Only the in-cell group (primary members) renders.
+    fun pureBoundaryImageGroupRendersLikeInCellGroup() {
+        // Regression (v0.8.15): a gathered group whose members are ALL shell atoms (e.g. the +z
+        // boundary images of a face position like (0,0,1)) must render the SAME pie as the
+        // in-cell group — boundary positions look identical to (0,0,0), per user requirement.
         val structure = structure() // cubic, c = 4.0
         fun atom(id: Long, siteId: String, z: Double, shell: Boolean): AtomImage = AtomImage(
             id = id, siteId = siteId, siteLabel = siteId, species = Species("O"),
@@ -209,7 +209,10 @@ class CrystalSceneBuilderTest {
         val groups = scene.objects.filterIsInstance<GatheredAtomInstance>()
         assertEquals(2, groups.size)
         assertTrue(groups.single { it.gathered.center.z == 0.0 }.visible, "in-cell group visible")
-        assertFalse(groups.single { it.gathered.center.z == 4.0 }.visible, "pure boundary-image group hidden")
+        assertTrue(groups.single { it.gathered.center.z == 4.0 }.visible, "boundary-image group visible (identical style)")
+        val inCell = groups.single { it.gathered.center.z == 0.0 }.gathered
+        val boundary = groups.single { it.gathered.center.z == 4.0 }.gathered
+        assertEquals(inCell.slices.map { it.siteId to it.fraction }, boundary.slices.map { it.siteId to it.fraction })
     }
 
     private fun structure() = CrystalStructure(
