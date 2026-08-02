@@ -1,6 +1,7 @@
 package com.krystals.crystal.analysis.bonding
 
 import com.krystals.crystal.analysis.editing.CrystalEditor
+import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
 import com.krystals.crystal.core.model.CrystalStructure
@@ -8,8 +9,9 @@ import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
+import com.krystals.crystal.analysis.model.RadiusSource
 import kotlin.test.Test
-import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -89,5 +91,52 @@ class HbondBondingFallbackTest {
         )
         val result = CrystalEditor.fromSmartIonicAttempt(structure, BondConfiguration(), 0.45, smartIonic = null)
         assertTrue(result.bondConfiguration.rules.none { it.isHBond }, "no H → no hbond rules")
+    }
+
+    // ── v0.8.7: all-non-metal structures default to bonding rules ──────────────────
+
+    @Test
+    fun allNonMetalStructureUsesBondingPathDirectly() {
+        // Ice-like structure: H and O only (all non-metals).
+        // fromSmartIonicAttempt with a valid smartIonic result should STILL use bonding.
+        val structure = simpleStructure(
+            listOf(
+                Site("O1", "O1", Species("O"), FractionalCoordinate(0.5, 0.5, 0.3)),
+                Site("H1", "H1", Species("H"), FractionalCoordinate(0.5, 0.5, 0.4)),
+                Site("O2", "O2", Species("O"), FractionalCoordinate(0.5, 0.5, 0.59)),
+            ),
+        )
+        // Compute a valid smartIonic result for this structure.
+        val atoms = SymmetryExpander.expand(structure)
+        val smartResult = BondValence.smartIonicRules(structure, BondConfiguration(), 0.45, atoms)
+        // Pass the valid smartIonic result — all-non-metal should ignore it, use bonding instead.
+        val result = CrystalEditor.fromSmartIonicAttempt(structure, BondConfiguration(), 0.45, smartIonic = smartResult)
+        // The result must produce rules (bonding path) and hbond rules (bonding path detection).
+        val hbondRules = result.bondConfiguration.rules.filter { it.isHBond }
+        assertTrue(result.bondConfiguration.rules.isNotEmpty(), "bonding path must generate rules")
+        assertTrue(hbondRules.isNotEmpty(), "all-non-metal bonding path must detect hbonds")
+    }
+
+    @Test
+    fun metalContainingStructureStillUsesSmartIonicWhenSmall() {
+        // CsCl: Cs is metal → should use smartIonic when ≤100 atoms.
+        val structure = CrystalStructure(
+            blockName = "cscl",
+            lattice = Lattice(4.0, 4.0, 4.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(
+                Site("Cs", "Cs1", Species("Cs"), FractionalCoordinate.ZERO),
+                Site("Cl", "Cl1", Species("Cl"), FractionalCoordinate(0.5, 0.5, 0.5)),
+            ),
+        )
+        val atoms = SymmetryExpander.expand(structure)
+        val smartResult = BondValence.smartIonicRules(structure, BondConfiguration(), 0.45, atoms)
+        assertTrue(smartResult.success, "CsCl smartIonic should succeed")
+        // With a valid smartIonic result, the metal-containing structure uses it.
+        val result = CrystalEditor.fromSmartIonicAttempt(structure, BondConfiguration(), 0.45, smartIonic = smartResult)
+        assertTrue(result.bondConfiguration.rules.isNotEmpty(), "metal structure must generate rules")
+        // Metal structure with smartIonic should NOT produce hbond rules (no H atoms).
+        assertFalse(result.bondConfiguration.rules.any { it.isHBond }, "CsCl has no H, no hbonds")
     }
 }

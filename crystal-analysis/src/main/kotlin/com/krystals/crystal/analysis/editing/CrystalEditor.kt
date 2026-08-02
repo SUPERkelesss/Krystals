@@ -178,6 +178,12 @@ object CrystalEditor {
         return EditResult(structure, bondConfiguration.copy(rules = filtered))
     }
 
+    /** Per v0.8.7: structures composed entirely of non-metal atoms default to bonding rules
+     *  regardless of cell size (ignoring SMART_IONIC_ATOM_LIMIT). Metals keep the existing
+     *  size-gated smart-ionic / bonding fallback logic. */
+    private fun isAllNonMetals(structure: CrystalStructure): Boolean =
+        structure.sites.all { !isMetal(it.species.symbol) }
+
     fun fromSmartIonicAttempt(
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,
@@ -186,12 +192,13 @@ object CrystalEditor {
     ): EditResult {
         val atoms = SymmetryExpander.expand(structure)
         val sizeGuarded = atoms.size > BondValence.SMART_IONIC_ATOM_LIMIT
+        // Per v0.8.7: all-non-metal structures skip smartIonic entirely.
+        val useBonding = isAllNonMetals(structure) || sizeGuarded
         var timedOut = false
-        val generated = if (!sizeGuarded && smartIonic != null && smartIonic.success) {
+        val generated = if (!useBonding && smartIonic != null && smartIonic.success) {
             smartIonic.rules
         } else {
-            if (!sizeGuarded && smartIonic == null) timedOut = true
-            // Per v0.8.6: append hbond rules on the bonding fallback path.
+            if (!useBonding && smartIonic == null) timedOut = true
             bondingRulesWithHbonds(structure, atoms, bondingRules(structure, epsilon))
         }
         val warnings = if (timedOut) listOf(SMART_IONIC_TIMEOUT) else emptyList()
@@ -206,10 +213,9 @@ object CrystalEditor {
         bondConfiguration: BondConfiguration,
         epsilon: Double,
     ): List<BondRule> {
-        // Expand once: reuse the atoms for both the smart-ionic size guard and the rule
-        // generation, so smartIonicRules doesn't expand the same structure a second time.
         val atoms = SymmetryExpander.expand(structure)
-        if (atoms.size <= BondValence.SMART_IONIC_ATOM_LIMIT) {
+        // Per v0.8.7: all-non-metal structures skip smartIonic, go to bonding rules directly.
+        if (!isAllNonMetals(structure) && atoms.size <= BondValence.SMART_IONIC_ATOM_LIMIT) {
             val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon, atoms)
             if (result.success) return result.rules
         }
@@ -291,7 +297,8 @@ object CrystalEditor {
         source: RadiusSource,
         epsilon: Double = 0.45,
     ): EditResult {
-        if (source == RadiusSource.SMART_IONIC) {
+        // Per v0.8.7: all-non-metal structures skip smartIonic entirely.
+        if (source == RadiusSource.SMART_IONIC && !isAllNonMetals(structure)) {
             val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon)
             if (result.success) {
                 val filtered = result.rules.filter { it.key !in bondConfiguration.disabledPairs }
@@ -303,6 +310,14 @@ object CrystalEditor {
             val withHbonds = bondingRulesWithHbonds(structure, atoms, fallback)
             val filteredFallback = withHbonds.filter { it.key !in bondConfiguration.disabledPairs }
             return EditResult(structure, bondConfiguration.copy(rules = filteredFallback), listOf(SMART_IONIC_UNAVAILABLE))
+        }
+        // Non-SMART_IONIC sources OR all-non-metal structures: bonding rules directly.
+        if (source == RadiusSource.SMART_IONIC) {
+            val atoms = SymmetryExpander.expand(structure)
+            val rules = bondingRules(structure, epsilon)
+            val withHbonds = bondingRulesWithHbonds(structure, atoms, rules)
+            val filtered = withHbonds.filter { it.key !in bondConfiguration.disabledPairs }
+            return EditResult(structure, bondConfiguration.copy(rules = filtered))
         }
         val siteSpecies = structure.sites.associate { it.id to it.species.symbol }
         val rules = structure.sites.flatMapIndexed { i, siteA ->
