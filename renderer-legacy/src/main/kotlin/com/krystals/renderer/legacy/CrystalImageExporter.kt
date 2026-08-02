@@ -206,7 +206,7 @@ object CrystalImageExporter {
         bondValenceBySite: Map<String, Double> = emptyMap(),
     ): Bitmap = renderLegacy(
         snapshot = LegacyRenderSceneAdapter.toBondNetwork(scene),
-        sceneGathered = scene.objects.filterIsInstance<GatheredAtomInstance>(),
+        sceneGathered = scene.objects.filterIsInstance<GatheredAtomInstance>().filter(GatheredAtomInstance::visible),
         appearance = appearance,
         renderConfiguration = renderConfiguration,
         controller = controller,

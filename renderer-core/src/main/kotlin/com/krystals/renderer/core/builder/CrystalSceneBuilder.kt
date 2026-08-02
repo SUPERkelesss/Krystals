@@ -95,12 +95,12 @@ class CrystalSceneBuilder {
         val groupRadiusById = linkedMapOf<String, Double>()  // for surface-anchored bonds
         for (g in groups) {
             val maxRadius = g.memberAtomIds.mapNotNull { id -> atomById[id]?.let { options.atomRadiusByElement[it.species.symbol] ?: options.defaultAtomRadius } }.maxOrNull() ?: options.defaultAtomRadius
-            // Per v0.8.11: only PRIMARY (non-shell) members count for visibility.
-            // atomVisible() unconditionally returns true for boundary images, so a pure
-            // boundary-image group at a cell face would be always visible — matching no
-            // bond-extend logic. Primary members exist for every in-cell group; the cell-face
-            // duplicate groups have only shell members and stay hidden.
-            val anyVisible = g.memberAtomIds.any { id -> atomById[id]?.let { a -> !a.isShell && atomVisible(a) } ?: false }
+            // Per v0.8.15: group visibility follows ANY member's atom visibility, including
+            // boundary-image members. Boundary-image groups (e.g. the +z images of (0,0,1))
+            // render the SAME pie as the in-cell group — the user requires (0,0,1)-type
+            // positions to look identical to (0,0,0). External-shell groups stay hidden
+            // (atomVisible is false unless referenced by an extending bond).
+            val anyVisible = g.memberAtomIds.any { id -> atomById[id]?.let { a -> atomVisible(a) } ?: false }
             val remainderMat = Material(argb = g.mixedColor, opacity = 0.25, reflective = false)
             val gatheredId = "gathered:${g.memberAtomIds.sorted().joinToString(",")}"
             groupCenterById[gatheredId] = g.center
@@ -113,7 +113,18 @@ class CrystalSceneBuilder {
                 visible = anyVisible,
             )
         }
+        // Per v0.8.13: boundary-image (shell) atoms whose cartesian position coincides with a
+        // PRIMARY (in-cell) atom are exact periodic duplicates — rendering both produces two
+        // overlapping atoms at cell faces/corners (e.g. (0,0,1)). Skip the shell duplicate; the
+        // in-cell atom already represents that position. Shell atoms at positions with no
+        // primary (real cross-cell neighbors) still render.
+        val primaryPositions = analysis.atoms.asSequence()
+            .filter { !it.isShell }
+            .map { AtomKey(it) }
+            .toHashSet()
+
         for (atom in analysis.atoms) {
+            if (atom.isShell && AtomKey(atom) in primaryPositions) continue
             objects += AtomInstance(
                 id = "atom:${atom.id}",
                 atom = atom,
@@ -122,7 +133,6 @@ class CrystalSceneBuilder {
                 visible = atomVisible(atom),
             )
         }
-
         // Bond pass: drop intra-group bonds, remap positions, dedupe per (groupKey|atomId, groupKey|atomId, offsetB).
         // Per v0.8.5: groups anchor bonds at the sphere SURFACE; duplicate member→same-target
         // bonds collapse with occ-weighted mixedColor at the group end.
@@ -261,6 +271,13 @@ class CrystalSceneBuilder {
             add(index)
             add(index + 1)
         }
+    }
+
+    /** Per v0.8.13: 1e-4-quantized cartesian key for exact-coincidence dedupe (boundary-image
+     *  atoms that duplicate an in-cell atom's position). */
+    private fun AtomKey(a: AtomImage): Triple<Int, Int, Int> {
+        val p = a.cartesianCoordinate.toVec3()
+        return Triple((p.x / 1e-4).toInt(), (p.y / 1e-4).toInt(), (p.z / 1e-4).toInt())
     }
 
     private fun outwardNormal(center: Vec3, vertices: List<Vec3>): Vec3? {
