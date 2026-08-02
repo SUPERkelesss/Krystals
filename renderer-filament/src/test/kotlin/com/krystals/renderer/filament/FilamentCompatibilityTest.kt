@@ -64,20 +64,23 @@ class FilamentCompatibilityTest {
     fun `brighter light raises ambient so atoms brighten instead of darkening`() {
         // v0.8.14 regression: the old formula (0.62 - 0.32*intensity) inverted the
         // brightness slider — raising intensity lowered ambient and dimmed atoms.
+        // v0.8.15: ambient lowered overall (0.30 + 0.25i) so atoms are less washed out;
+        // the positive correlation is preserved.
         val low = diffuseAmbient(0.2f)
         val high = diffuseAmbient(0.8f)
         assertTrue(high > low, "ambient must rise with intensity: $low -> $high")
-        assertEquals(0.47f, diffuseAmbient(0.4f), 0.001f) // default intensity
+        assertEquals(0.40f, diffuseAmbient(0.4f), 0.001f) // default intensity
     }
 
     @Test
     fun `diffusion slider drives specular width without dead lower clamp`() {
         // v0.8.14 regression: shininess was clamped at 4.0, so moving the diffusion
         // slider barely changed the highlight. Shininess must respond across the range.
+        // v0.8.15: shininess base raised to 3.0/(r+0.01) so the highlight is tighter.
         val tight = specularShininess(0.35f)  // diffusion 0   -> radius 0.35
         val wide = specularShininess(1.5f)    // diffusion 1   -> radius 1.5
         assertTrue(tight > wide, "smaller radius must give tighter highlight: $tight vs $wide")
-        assertTrue(wide < 4.0f, "wide highlight must not be clamped at 4.0, got $wide")
-        assertEquals(2.14f, specularShininess(0.925f), 0.01f) // default diffusion 0.5
+        assertTrue(wide in 2.0f..4.0f, "wide highlight must sit below old 4.0 clamp, got $wide")
+        assertEquals(3.21f, specularShininess(0.925f), 0.01f) // default diffusion 0.5
     }
 }

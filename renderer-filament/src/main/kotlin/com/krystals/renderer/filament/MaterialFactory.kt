@@ -166,14 +166,17 @@ internal fun viewSpaceLightDirection(
  *
  * v0.8.14: intensity now RAISES ambient (brightness slider brightens atoms). The old
  * formula (0.62 - 0.32*intensity) inverted the slider — higher intensity dimmed atoms.
+ * v0.8.15: baseline lowered (0.30 + 0.25i) so atoms are less washed out; the positive
+ * correlation is preserved.
  */
 internal fun diffuseAmbient(intensity: Float): Float =
-    (0.35f + 0.30f * intensity).coerceIn(0.35f, 0.65f)
+    (0.30f + 0.25f * intensity).coerceIn(0.30f, 0.55f)
 
 /**
  * Blinn-Phong shininess from the highlight radius (0.35 + 1.15*diffusion), mirroring
  * the .mat payloads. v0.8.14: no dead 4.0 lower clamp — the diffusion slider must
  * visibly widen/narrow the highlight across its full range.
+ * v0.8.15: base raised from 2.0 to 3.0 so the highlight is tighter and more specular.
  */
 internal fun specularShininess(highlightRadius: Float): Float =
-    maxOf(2.0f / (highlightRadius + 0.01f), 1.5f)
+    maxOf(3.0f / (highlightRadius + 0.01f), 2.0f)
