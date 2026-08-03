@@ -1700,6 +1700,33 @@ private fun ViewerScreen(
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text(stringResource(R.string.save)) }, leadingIcon = { Icon(Icons.Default.Save, null) }, onClick = { menuOpen = false; onSave(tab) })
                 DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = { menuOpen = false; onSaveToPreset() })
+                DropdownMenuItem(text = { Text(localized("分享到…", "Share to…")) }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
+                    menuOpen = false
+                    scope.launch {
+                        runCatching {
+                            val cifContent = CifCodec.write(
+                                tab.parsed,
+                                tab.structure,
+                                tab.bondConfiguration,
+                                tab.renderConfiguration.toCifDisplayMetadata(),
+                            )
+                            withContext(Dispatchers.IO) {
+                                val tempFile = File(shareContext.cacheDir, "${tab.name.ensureCifExtension()}")
+                                tempFile.writeText(cifContent, Charsets.UTF_8)
+                                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(android.content.Intent.EXTRA_STREAM, androidx.core.content.FileProvider.getUriForFile(shareContext, "${shareContext.packageName}.fileprovider", tempFile))
+                                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                val chooserIntent = android.content.Intent.createChooser(shareIntent, shareLabel)
+                                chooserIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                shareContext.startActivity(chooserIntent)
+                            }
+                        }.onFailure { error ->
+                            if (error !is CancellationException) onMessage(error.message ?: "Share failed")
+                        }
+                    }
+                })
                 DropdownMenuItem(text = { Text(stringResource(R.string.export_image), color = if (secretHighlightAlpha > 0f) MaterialTheme.colorScheme.primary.copy(alpha = secretHighlightAlpha) else androidx.compose.ui.graphics.Color.Unspecified) }, leadingIcon = { val defaultTint = androidx.compose.material3.LocalContentColor.current; Icon(Icons.Default.Photo, null, tint = if (secretHighlightAlpha > 0f) MaterialTheme.colorScheme.primary.copy(alpha = secretHighlightAlpha) else defaultTint) }, onClick = {
                     menuOpen = false
                     val useMsaa = secretUnlocked
@@ -1740,33 +1767,6 @@ private fun ViewerScreen(
                             }
                         }
                     } ?: onMessage("Unable to export current crystal")
-                })
-                DropdownMenuItem(text = { Text(localized("分享到…", "Share to…")) }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
-                    menuOpen = false
-                    scope.launch {
-                        runCatching {
-                            val cifContent = CifCodec.write(
-                                tab.parsed,
-                                tab.structure,
-                                tab.bondConfiguration,
-                                tab.renderConfiguration.toCifDisplayMetadata(),
-                            )
-                            withContext(Dispatchers.IO) {
-                                val tempFile = File(shareContext.cacheDir, "${tab.name.ensureCifExtension()}")
-                                tempFile.writeText(cifContent, Charsets.UTF_8)
-                                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(android.content.Intent.EXTRA_STREAM, androidx.core.content.FileProvider.getUriForFile(shareContext, "${shareContext.packageName}.fileprovider", tempFile))
-                                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                }
-                                val chooserIntent = android.content.Intent.createChooser(shareIntent, shareLabel)
-                                chooserIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                                shareContext.startActivity(chooserIntent)
-                            }
-                        }.onFailure { error ->
-                            if (error !is CancellationException) onMessage(error.message ?: "Share failed")
-                        }
-                    }
                 })
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
@@ -2011,25 +2011,24 @@ sceneBuildError?.let { message ->
                 }
             }
 
-            // Legend groups by (element, resolved color), sourced from the edited structure (not the
-            // rendered atoms) so it doesn't churn as visibility changes. Sites of the same element
-            // sharing a color collapse into one element row; per-site color overrides split into rows
-            // labeled by site.label (e.g. C1, C2).
+            // Legend groups by element, sourced from the edited structure (not the
+            // rendered atoms) so it doesn't churn as visibility changes. Per v0.8.30: when every
+            // site of an element shares the same color, the element collapses into one row
+            // {X  [color]}; otherwise each site gets its own row labeled by site.label (X1, X2...).
             val legendEntries = remember(tab.structure, tab.visibility) {
                 val visibleSites = tab.structure.sites.filterNot { it.id in tab.visibility.hiddenSites }
                 visibleSites
-                    .groupBy { site ->
-                        site.species.symbol to RenderPalette.resolveSiteArgb(
-                            site.id,
-                            site.species.symbol,
-                            tab.renderConfiguration,
-                        )
-                    }
-                    .toSortedMap(compareBy({ it.first }, { it.second }))
-                    .flatMap { (key, sites) ->
-                        val (element, argb) = key
-                        if (sites.size == 1 && sites.first().species.symbol == element) listOf(LegendEntry(element, argb))
-                        else sites.sortedBy { it.label }.map { LegendEntry(it.label, argb) }
+                    .groupBy { it.species.symbol }
+                    .toSortedMap()
+                    .flatMap { (element, sites) ->
+                        val distinctArgbs = sites.map { RenderPalette.resolveSiteArgb(it.id, element, tab.renderConfiguration) }.distinct()
+                        if (distinctArgbs.size == 1) {
+                            listOf(LegendEntry(element, distinctArgbs.first()))
+                        } else {
+                            sites.sortedBy { it.label }.map { site ->
+                                LegendEntry(site.label, RenderPalette.resolveSiteArgb(site.id, element, tab.renderConfiguration))
+                            }
+                        }
                     }
             }
             // Per v0.8.26: legend toggle respects user preference.

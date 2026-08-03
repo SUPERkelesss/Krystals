@@ -83,8 +83,8 @@ class PreferencesStoreTest {
         assertEquals(0, d.codFixedIndex)
         assertEquals("", d.codCustomUrl)
         assertEquals(ExportQuality.HIGH, d.exportQuality)
-        assertFalse(d.exportShowAxes)
-        assertFalse(d.exportShowMeasurements)
+        assertTrue(d.exportShowAxes)
+        assertTrue(d.exportShowMeasurements)
     }
 
     @Test

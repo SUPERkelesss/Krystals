@@ -41,8 +41,9 @@ data class SettingsValues(
     val codFixedIndex: Int = 0,
     val codCustomUrl: String = "",
     val exportQuality: ExportQuality = ExportQuality.HIGH,
-    val exportShowAxes: Boolean = false,
-    val exportShowMeasurements: Boolean = false,
+    // Per v0.8.30: axes/measurements export overlays default to ON.
+    val exportShowAxes: Boolean = true,
+    val exportShowMeasurements: Boolean = true,
 ) {
     companion object {
         fun defaults() = SettingsValues()

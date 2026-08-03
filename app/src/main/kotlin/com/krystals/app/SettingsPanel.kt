@@ -26,6 +26,9 @@ fun SettingsPanel(
     onDismiss: () -> Unit,
     onRestoreDefaults: (() -> Unit)? = null,
 ) {
+    // Per v0.8.30: settings are frozen on open; only Save applies them.
+    var draft by remember { mutableStateOf(settings) }
+    val apply = { onChange(draft) }
     // Label mapping helpers (localized() is @Composable, so these live in composition).
     val languageLabels = listOf(localized("中文", "Chinese"), "EN")
     val themeLabels = ThemeMode.entries.map { mode -> when (mode) {
@@ -55,58 +58,58 @@ fun SettingsPanel(
                 Column(Modifier.fillMaxWidth().height(480.dp).verticalScroll(rememberScrollState())) {
                     // ══ 常规 / General ══
                     Text(localized("常规", "General"), fontWeight = FontWeight.Bold)
-                    DropdownField(localized("语言", "Language"), languageLabel(settings.language), languageLabels) { label ->
-                        onChange(settings.copy(language = if (label == languageLabels[0]) "zh" else "en"))
+                    DropdownField(localized("语言", "Language"), languageLabel(draft.language), languageLabels) { label ->
+                        draft = draft.copy(language = if (label == languageLabels[0]) "zh" else "en")
                     }
-                    DropdownField(localized("主题", "Theme"), themeLabels[ThemeMode.entries.indexOf(settings.theme).coerceIn(0, themeLabels.lastIndex)], themeLabels) { label ->
-                        onChange(settings.copy(theme = ThemeMode.entries[themeLabels.indexOf(label)]))
+                    DropdownField(localized("主题", "Theme"), themeLabels[ThemeMode.entries.indexOf(draft.theme).coerceIn(0, themeLabels.lastIndex)], themeLabels) { label ->
+                        draft = draft.copy(theme = ThemeMode.entries[themeLabels.indexOf(label)])
                     }
-                    Tog(settings.autoCheckUpdate, { onChange(settings.copy(autoCheckUpdate = it)) }, localized("自动检查更新", "Auto Check Update"))
-                    LabeledSliderSetting(localized("悬浮球收起透明度", "Ball Collapsed Alpha"), settings.ballCollapsedAlpha, 0f, 1f) { onChange(settings.copy(ballCollapsedAlpha = it)) }
-                    Tog(settings.showLockButton, { onChange(settings.copy(showLockButton = it)) }, localized("显示锁定按键", "Show Lock Button"))
-                    Tog(settings.showLegend, { onChange(settings.copy(showLegend = it)) }, localized("显示图例", "Show Legend"))
+                    Tog(draft.autoCheckUpdate, { draft = draft.copy(autoCheckUpdate = it) }, localized("自动检查更新", "Auto Check Update"))
+                    LabeledSliderSetting(localized("悬浮球收起透明度", "Ball Collapsed Alpha"), draft.ballCollapsedAlpha, 0f, 1f) { draft = draft.copy(ballCollapsedAlpha = it) }
+                    Tog(draft.showLockButton, { draft = draft.copy(showLockButton = it) }, localized("显示锁定按键", "Show Lock Button"))
+                    Tog(draft.showLegend, { draft = draft.copy(showLegend = it) }, localized("显示图例", "Show Legend"))
                     HorizontalDivider(Modifier.padding(vertical = 10.dp))
 
                     // ══ 文件处理 / File Handling ══
                     Text(localized("文件处理", "File Handling"), fontWeight = FontWeight.Bold)
-                    Tog(settings.autoBondRules, { onChange(settings.copy(autoBondRules = it)) }, localized("自动计算键规则", "Auto Compute Bond Rules"))
-                    if (settings.autoBondRules) {
-                        DropdownField(localized("自动应用的键规则", "Bond Rule Mode"), bondRuleLabels[settings.bondRuleMode.ordinal], bondRuleLabels) { label ->
-                            onChange(settings.copy(bondRuleMode = BondRuleMode.entries[bondRuleLabels.indexOf(label)]))
+                    Tog(draft.autoBondRules, { draft = draft.copy(autoBondRules = it) }, localized("自动计算键规则", "Auto Compute Bond Rules"))
+                    if (draft.autoBondRules) {
+                        DropdownField(localized("自动应用的键规则", "Bond Rule Mode"), bondRuleLabels[draft.bondRuleMode.ordinal], bondRuleLabels) { label ->
+                            draft = draft.copy(bondRuleMode = BondRuleMode.entries[bondRuleLabels.indexOf(label)])
                         }
                     }
-                    Tog(settings.autoConvertCell, { onChange(settings.copy(autoConvertCell = it)) }, localized("素晶胞自动转正当晶胞", "Auto Convert Cell"))
-                    Tog(settings.defaultShowBonds, { onChange(settings.copy(defaultShowBonds = it)) }, localized("默认显示所有化学键", "Default Show Bonds"))
-                    DropdownField(localized("默认延伸化学键", "Default Extend Bonds"), extendLabels[settings.defaultExtendBonds.ordinal], extendLabels) { label ->
-                        onChange(settings.copy(defaultExtendBonds = ExtendBondsDefault.entries[extendLabels.indexOf(label)]))
+                    Tog(draft.autoConvertCell, { draft = draft.copy(autoConvertCell = it) }, localized("素晶胞自动转正当晶胞", "Auto Convert Cell"))
+                    Tog(draft.defaultShowBonds, { draft = draft.copy(defaultShowBonds = it) }, localized("默认显示所有化学键", "Default Show Bonds"))
+                    DropdownField(localized("默认延伸化学键", "Default Extend Bonds"), extendLabels[draft.defaultExtendBonds.ordinal], extendLabels) { label ->
+                        draft = draft.copy(defaultExtendBonds = ExtendBondsDefault.entries[extendLabels.indexOf(label)])
                     }
-                    DropdownField(localized("默认显示多面体", "Default Polyhedra"), extendLabels[settings.defaultPolyhedra.ordinal], extendLabels) { label ->
-                        onChange(settings.copy(defaultPolyhedra = PolyhedraDefault.entries[extendLabels.indexOf(label)]))
+                    DropdownField(localized("默认显示多面体", "Default Polyhedra"), extendLabels[draft.defaultPolyhedra.ordinal], extendLabels) { label ->
+                        draft = draft.copy(defaultPolyhedra = PolyhedraDefault.entries[extendLabels.indexOf(label)])
                     }
                     HorizontalDivider(Modifier.padding(vertical = 10.dp))
 
                     // ══ 网络 / Network ══
                     Text(localized("网络", "Network"), fontWeight = FontWeight.Bold)
-                    DropdownField(localized("COD 下载节点", "COD Mirror"), codModeLabels[settings.codMirrorMode.ordinal], codModeLabels) { label ->
-                        onChange(settings.copy(codMirrorMode = CodMirrorMode.entries[codModeLabels.indexOf(label)]))
+                    DropdownField(localized("COD 下载节点", "COD Mirror"), codModeLabels[draft.codMirrorMode.ordinal], codModeLabels) { label ->
+                        draft = draft.copy(codMirrorMode = CodMirrorMode.entries[codModeLabels.indexOf(label)])
                     }
-                    if (settings.codMirrorMode == CodMirrorMode.FIXED) {
+                    if (draft.codMirrorMode == CodMirrorMode.FIXED) {
                         val mirrors = CrystallographyOpenDatabase.MIRRORS
                         val mirrorLabels = mirrors.map { it.testUrl.removePrefix("https://").removePrefix("http://").trimEnd('/') }
                         DropdownField(
                             localized("固定节点", "Fixed Mirror"),
-                            mirrorLabels[settings.codFixedIndex.coerceIn(0, mirrorLabels.lastIndex)],
+                            mirrorLabels[draft.codFixedIndex.coerceIn(0, mirrorLabels.lastIndex)],
                             mirrorLabels,
                         ) { label ->
-                            onChange(settings.copy(codFixedIndex = mirrorLabels.indexOf(label).coerceAtLeast(0)))
+                            draft = draft.copy(codFixedIndex = mirrorLabels.indexOf(label).coerceAtLeast(0))
                         }
                     }
-                    if (settings.codMirrorMode == CodMirrorMode.CUSTOM) {
-                        var url by remember(settings) { mutableStateOf(settings.codCustomUrl) }
+                    if (draft.codMirrorMode == CodMirrorMode.CUSTOM) {
+                        var url by remember(settings) { mutableStateOf(draft.codCustomUrl) }
                         var testing by remember { mutableStateOf(false) }
                         var testResult by remember { mutableStateOf<Boolean?>(null) }
                         val scope = rememberCoroutineScope()
-                        OutlinedTextField(url, { url = it; onChange(settings.copy(codCustomUrl = it)); testResult = null }, label = { Text(localized("自定义节点 URL", "Custom Mirror URL")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(url, { url = it; draft = draft.copy(codCustomUrl = it); testResult = null }, label = { Text(localized("自定义节点 URL", "Custom Mirror URL")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
                             TextButton(
                                 enabled = !testing && url.isNotBlank(),
@@ -132,20 +135,27 @@ fun SettingsPanel(
 
                     // ══ 显示 / Display ══
                     Text(localized("显示", "Display"), fontWeight = FontWeight.Bold)
-                    DropdownField(localized("导出图片质量", "Export Quality"), qualityLabels[settings.exportQuality.ordinal], qualityLabels) { label ->
-                        onChange(settings.copy(exportQuality = ExportQuality.entries[qualityLabels.indexOf(label)]))
+                    DropdownField(localized("导出图片质量", "Export Quality"), qualityLabels[draft.exportQuality.ordinal], qualityLabels) { label ->
+                        draft = draft.copy(exportQuality = ExportQuality.entries[qualityLabels.indexOf(label)])
                     }
-                    Tog(settings.exportShowAxes, { onChange(settings.copy(exportShowAxes = it)) }, localized("导出时显示坐标轴", "Export Show Axes"))
-                    Tog(settings.exportShowMeasurements, { onChange(settings.copy(exportShowMeasurements = it)) }, localized("导出时显示测量结果", "Export Show Measurements"))
+                    Tog(draft.exportShowAxes, { draft = draft.copy(exportShowAxes = it) }, localized("导出时显示坐标轴", "Export Show Axes"))
+                    Tog(draft.exportShowMeasurements, { draft = draft.copy(exportShowMeasurements = it) }, localized("导出时显示测量结果", "Export Show Measurements"))
                     HorizontalDivider(Modifier.padding(vertical = 10.dp))
 
-                    // ══ Restore Defaults ══
+                    // ══ Restore Defaults / Actions ══
+                    HorizontalDivider(Modifier.padding(vertical = 10.dp))
                     Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.Center) {
-                        TextButton(onClick = onRestoreDefaults ?: {}) {
+                        TextButton(onClick = { draft = SettingsValues.defaults() }) {
                             Text(localized("恢复默认设置", "Restore Defaults"), color = MaterialTheme.colorScheme.error)
                         }
                     }
-                    Spacer(Modifier.height(16.dp))
+                    // Per v0.8.30: frozen draft — only Save applies the changes.
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = onDismiss) { Text(localized("取消", "Cancel")) }
+                        Spacer(Modifier.width(12.dp))
+                        Button(onClick = { apply(); onDismiss() }) { Text(localized("保存", "Save")) }
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
             }
         }

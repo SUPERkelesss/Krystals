@@ -65,6 +65,8 @@ object CrystalRenderSceneFactory {
                     reflective = appearance.bondReflectionEnabled,
                 ),
                 bondRadius = appearance.bondRadius.toDouble(),
+                hbondRadius = appearance.hbondRadius.toDouble(),
+                hbondOpacity = appearance.hbondOpacity.toDouble(),
                 bondColorMode = appearance.bondColorMode,
                 environment = appearance.toEnvironment(),
                 structuralExpansion = structuralExpansion,

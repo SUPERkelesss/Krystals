@@ -1209,6 +1209,11 @@ followTheme = true
             ToggleRow(localized("多面体反射", "Polyhedron reflection"), appearance.polyhedronReflectionEnabled) { appearance = appearance.copy(polyhedronReflectionEnabled = it) }
             LabeledSlider(localized("多面体不透明度", "Polyhedron opacity"), appearance.polyhedronOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(polyhedronOpacity = it) }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
+            // Per v0.8.30: hydrogen-bond appearance section.
+            Text(localized("氢键", "H-Bonds"), fontWeight = FontWeight.Bold)
+            LabeledSlider(localized("氢键半径", "H-bond radius"), appearance.hbondRadius, 0.01f..0.15f, decimals = 2) { appearance = appearance.copy(hbondRadius = it) }
+            LabeledSlider(localized("氢键不透明度", "H-bond opacity"), appearance.hbondOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(hbondOpacity = it) }
+            HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("世界光源", "World light"), fontWeight = FontWeight.Bold)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {

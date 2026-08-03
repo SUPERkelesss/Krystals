@@ -34,6 +34,9 @@ data class SceneBuildOptions(
     val defaultPolyhedronMaterial: Material = Material(0x809A90A0L, opacity = 0.5, doubleSided = true),
     val defaultAtomRadius: Double = 0.35,
     val bondRadius: Double = 0.15,
+    // Per v0.8.30: hydrogen-bond appearance (radius Å / opacity 0..1).
+    val hbondRadius: Double = 0.05,
+    val hbondOpacity: Double = 0.2,
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val environment: RenderEnvironment = RenderEnvironment(),
     val structuralExpansion: Boolean = false,
@@ -213,9 +216,9 @@ class CrystalSceneBuilder {
                 bond = bond,
                 start = startPos,
                 end = endPos,
-                radius = if (isHBond) HbondPattern.RADIUS else options.bondRadius,
-                startMaterial = if (isHBond) HbondPattern.material() else startMat,
-                endMaterial = if (isHBond) HbondPattern.material() else endMat,
+                radius = if (isHBond) options.hbondRadius else options.bondRadius,
+                startMaterial = if (isHBond) HbondPattern.material(options.hbondOpacity.toFloat()) else startMat,
+                endMaterial = if (isHBond) HbondPattern.material(options.hbondOpacity.toFloat()) else endMat,
                 visible = options.showBonds && bond.rule.key !in options.hiddenBondKeys && externalAllowed,
             )
         }

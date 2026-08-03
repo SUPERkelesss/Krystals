@@ -99,6 +99,9 @@ data class ViewerAppearance(
     val polyhedronEnabled: Boolean = true,
     val polyhedronOpacity: Float = 0.5f,
     val polyhedronReflectionEnabled: Boolean = true,
+    // Per v0.8.30: hydrogen-bond appearance (radius in Å, opacity 0..1).
+    val hbondRadius: Float = 0.05f,
+    val hbondOpacity: Float = 0.2f,
     val showAxes: Boolean = true,
     val axisMode: AxisMode = AxisMode.ABC,
     val axisOffsetX: Float = 0.08f,
@@ -111,6 +114,8 @@ data class ViewerAppearance(
         require(atomOpacity in 0f..1f) { "atom opacity must be between 0 and 1" }
         require(bondOpacity in 0f..1f) { "bond opacity must be between 0 and 1" }
         require(polyhedronOpacity in 0f..1f) { "polyhedron opacity must be between 0 and 1" }
+        require(hbondOpacity in 0f..1f) { "h-bond opacity must be between 0 and 1" }
+        require(hbondRadius in 0.01f..0.15f) { "h-bond radius must be between 0.01 and 0.15" }
     }
 
     fun toEnvironment() = RenderEnvironment(

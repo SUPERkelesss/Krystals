@@ -21,6 +21,7 @@ object HbondPattern {
     /** Opacity for the translucent cylinder. */
     const val OPACITY: Float = 0.2f
 
-    /** Single material shared by both start and end of every H-bond. */
-    fun material(): Material = Material(argb = COLOR, opacity = OPACITY.toDouble(), reflective = false)
+    /** Single material shared by both start and end of every H-bond.
+     *  Per v0.8.30: radius/opacity are overridable via ViewerAppearance. */
+    fun material(opacity: Float = OPACITY): Material = Material(argb = COLOR, opacity = opacity.toDouble(), reflective = false)
 }
