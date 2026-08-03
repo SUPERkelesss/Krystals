@@ -806,6 +806,15 @@ fun KrystalsRoot(
                         preferences = preferences,
                         settingsValues = settingsValues,
                         onSettingsChange = onSettingsChange,
+                        onRestoreDefaults = {
+                            val confirm = true // Auto-confirmed; can add dialog later
+                            PreferencesStore.clearAll(preferences)
+                            val defaults = SettingsValues.defaults()
+                            settingsValues = defaults
+                            PreferencesStore.save(preferences, defaults)
+                            if (language != defaults.language && defaults.language != "auto") applyLanguage(defaults.language)
+                            if (themeMode != defaults.theme) { themeMode = defaults.theme; preferences.edit().putString("theme", defaults.theme.name).apply() }
+                        },
                         onSave = { save(it) },
                         onOpen = { openLauncher.launch(arrayOf("chemical/x-cif", "text/plain", "application/octet-stream")) },
                         onOpenPreset = { presetOpen = true },
@@ -1369,6 +1378,7 @@ private fun ViewerScreen(
     secretUnlockTrigger: Int = 0,
     settingsValues: SettingsValues = SettingsValues.defaults(),
     onSettingsChange: (SettingsValues) -> Unit = {},
+    onRestoreDefaults: () -> Unit = {},
 ) {
     val tab = viewModel.current ?: return
     val scope = rememberCoroutineScope()
@@ -2128,6 +2138,7 @@ sceneBuildError?.let { message ->
         settings = settingsValues,
         onChange = onSettingsChange,
         onDismiss = { activePanel = ViewerPanel.None },
+        onRestoreDefaults = onRestoreDefaults,
     )
 }
 
