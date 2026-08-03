@@ -1,7 +1,7 @@
 package com.krystals.crystal.data
 
 /**
- * Per v0.8.0: 14 Bravais lattice types and their primitive ↔ conventional conversion matrices.
+ * Per v0.6.5: 14 Bravais lattice types and their primitive ↔ conventional conversion matrices.
  *
  * The matrices are stored in row form: each entry is `List<List<Double>>` where `rows[i][j]`
  * is the (i, j) element of the transformation matrix P such that:

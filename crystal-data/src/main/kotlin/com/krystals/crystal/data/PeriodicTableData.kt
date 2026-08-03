@@ -1529,8 +1529,8 @@ object PeriodicTableData {
     // Per v0.5.0: Shannon crystal radii (Å) from "Radii for All Species" (R. D. Shannon 1976,
     // .todos/bondvalence/Radii for All Species.html). Keyed "ion/charge" -> list of www.winter.group.shef.ac.uk
     // (coordination, isHighSpin, crystalRadius). High-spin entries are preferred at lookup.
-    // Per v0.6.3: the lookup now returns the Ionic radii column directly (CR−0.14 for cations,
-    // CR+0.14 for anions), matching the HTML file's "Ionic radii" column.
+    // Per v0.6.3: for a precise judgment the lookup now returns the Ionic radii column directly (CR−0.14 for cations,
+    // CR+0.14 for anions), matching the file's "Ionic radii" column.
     // ------------------------------------------------------------------
     private val shannonCrystalRadii: Map<String, List<Triple<Int, Boolean, Float>>> = mapOf(
     "Ac/3" to listOf(Triple(6, false, 1.26f)),
@@ -1803,6 +1803,7 @@ object PeriodicTableData {
      * True if [element] is the anionic partner in a bond with [other] — i.e. it has a higher
      * electronegativity (elements without a tabulated value count as metallic/cationic, i.e. not
      * anions). Used to decide which side of a pair carries the fixed valence and which is BVS-estimated.
+     * for a cursed reason the algo actually DO on anion-anion & cation-cation bonding. wtf?
      */
     fun isAnion(element: String, other: String): Boolean {
         val a = electronegativity[element] ?: 0.0

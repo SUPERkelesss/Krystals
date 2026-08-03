@@ -24,10 +24,8 @@ fragment {
         material.baseColor = color;
         material.metallic = 0.0;
         material.roughness = 0.32;
-        material.reflectance = 0.45;
-        // v0.8.21: clearCoat restored (0.1). The bright silhouette edge was NOT caused
-        // by the clear coat — it was highlight overexposure (see light intensity fix).
-        material.clearCoat = 0.1;
+        material.reflectance = 0.55;
+        material.clearCoat = 0.4;
         material.clearCoatRoughness = 0.25;
     }
 }
