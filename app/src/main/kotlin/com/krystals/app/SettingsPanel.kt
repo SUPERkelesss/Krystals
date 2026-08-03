@@ -180,7 +180,7 @@ fun SettingsPanel(
 }
 
 @Composable private fun LabeledSliderSetting(label: String, value: Float, min: Float, max: Float, onChange: (Float) -> Unit) {
-    Text(label, style = MaterialTheme.typography.bodyMedium)
+    // Per v0.8.33: value merged into the label line: "label: 45%".
+    Text("$label: ${"%.0f%%".format(value * 100f)}", style = MaterialTheme.typography.bodyMedium)
     Slider(value = value, onValueChange = onChange, valueRange = min..max)
-    Text("%.0f%%".format(value * 100f), style = MaterialTheme.typography.bodySmall)
 }
