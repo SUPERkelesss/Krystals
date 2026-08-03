@@ -398,6 +398,10 @@ fun KrystalsRoot(
     var language by remember {
         mutableStateOf(preferences.getString("language", if (java.util.Locale.getDefault().language == "zh") "zh" else "en") ?: "en")
     }
+    val systemDark = isSystemInDarkTheme()
+    var backgroundFollowTheme by remember {
+        mutableStateOf(preferences.getBoolean("bg_follow_theme", true))
+    }
     fun applyLanguage(value: String) {
         if (language == value) return
         language = value
@@ -408,7 +412,17 @@ fun KrystalsRoot(
         settingsValues = sv
         PreferencesStore.save(preferences, sv)
         // Per v0.8.33: theme and language take effect immediately (previously only after restart).
-        if (sv.theme != themeMode) themeMode = sv.theme
+        if (sv.theme != themeMode) {
+            themeMode = sv.theme
+            // Per v0.8.34: keep the follow-theme viewer background in sync when the theme is
+            // switched from Preferences (applyTheme does this for the menu path).
+            if (backgroundFollowTheme) {
+                val dark = sv.theme == ThemeMode.DARK || sv.theme == ThemeMode.SYSTEM && systemDark
+                val background = if (dark) 0xFF101014 else 0xFFF8F8FB
+                viewModel.defaultAppearance = viewModel.defaultAppearance.copy(backgroundArgb = background)
+                viewModel.tabs.forEach { tab -> tab.appearance = tab.appearance.copy(backgroundArgb = background) }
+            }
+        }
         if (sv.language != language && sv.language != "auto") applyLanguage(sv.language)
     }
     val localizedConfiguration = remember(language) {
@@ -433,10 +447,6 @@ fun KrystalsRoot(
         preferences.getString(AppearanceStore.KEY, null)?.let { json ->
             AppearanceStore.fromJson(json)?.let { ap -> viewModel.applyAppearance(ap) }
         }
-    }
-    val systemDark = isSystemInDarkTheme()
-    var backgroundFollowTheme by remember {
-        mutableStateOf(preferences.getBoolean("bg_follow_theme", true))
     }
     fun applyViewerBackground(dark: Boolean) {
         if (!backgroundFollowTheme) return
