@@ -1940,13 +1940,9 @@ private fun ViewerScreen(
                     onClick = { dispatchViewerCommand(ViewerCommand.ToggleLock) },
                     modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
                 ) {
-                    // Per v0.8.33: animated lock ↔ unlock transition (180° rotation + scale +
-                    // fade), so the state change reads clearly instead of snapping.
-                    val lockRotation by animateFloatAsState(
-                        targetValue = if (tab.interactionState.session.locked) 0f else -180f,
-                        animationSpec = tween(250),
-                        label = "lockRotation",
-                    )
+                    // Per v0.8.33: animated lock ↔ unlock transition (scale + fade), so the
+                    // state change reads clearly instead of snapping. (The initial 180° rotation
+                    // idea was dropped: it rendered the unlock state upside down.)
                     AnimatedContent(
                         targetState = tab.interactionState.session.locked,
                         transitionSpec = {
@@ -1962,8 +1958,7 @@ private fun ViewerScreen(
                                 modifier = Modifier
                                     .size(36.dp)
                                     .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.onSurface)
-                                    .graphicsLayer { rotationZ = lockRotation },
+                                    .background(MaterialTheme.colorScheme.onSurface),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Icon(
@@ -1975,9 +1970,7 @@ private fun ViewerScreen(
                             }
                         } else {
                             Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .graphicsLayer { rotationZ = lockRotation },
+                                modifier = Modifier.size(36.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Icon(
