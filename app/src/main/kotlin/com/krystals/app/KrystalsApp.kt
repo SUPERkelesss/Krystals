@@ -392,15 +392,24 @@ fun KrystalsRoot(
 ) {
     val preferences = remember { activity.getSharedPreferences("krystals", 0) }
     var settingsValues by remember { mutableStateOf(PreferencesStore.load(preferences)) }
-    val onSettingsChange: (SettingsValues) -> Unit = { sv ->
-        settingsValues = sv
-        PreferencesStore.save(preferences, sv)
-    }
     var themeMode by remember {
         mutableStateOf(runCatching { ThemeMode.valueOf(preferences.getString("theme", ThemeMode.SYSTEM.name)!!) }.getOrDefault(ThemeMode.SYSTEM))
     }
     var language by remember {
         mutableStateOf(preferences.getString("language", if (java.util.Locale.getDefault().language == "zh") "zh" else "en") ?: "en")
+    }
+    fun applyLanguage(value: String) {
+        if (language == value) return
+        language = value
+        preferences.edit().putString("language", value).putBoolean("pending_language_restart", true).apply()
+        activity.recreate()
+    }
+    val onSettingsChange: (SettingsValues) -> Unit = { sv ->
+        settingsValues = sv
+        PreferencesStore.save(preferences, sv)
+        // Per v0.8.33: theme and language take effect immediately (previously only after restart).
+        if (sv.theme != themeMode) themeMode = sv.theme
+        if (sv.language != language && sv.language != "auto") applyLanguage(sv.language)
     }
     val localizedConfiguration = remember(language) {
         Configuration(activity.resources.configuration).apply {
@@ -408,12 +417,6 @@ fun KrystalsRoot(
         }
     }
     val localizedContext = remember(language) { activity.createConfigurationContext(localizedConfiguration) }
-    fun applyLanguage(value: String) {
-        if (language == value) return
-        language = value
-        preferences.edit().putString("language", value).putBoolean("pending_language_restart", true).apply()
-        activity.recreate()
-    }
     // Per v0.8.26: show a loading overlay on language-switch restart.
     var languageSwitching by remember {
         mutableStateOf(preferences.getBoolean("pending_language_restart", false))
