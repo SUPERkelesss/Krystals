@@ -271,6 +271,10 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                                     }
                                     // Restore view on the main thread (Filament requires it).
                                     mainHandler.post {
+                                        // Per v0.8.32: the engine may have been closed while the pixel
+                                        // readback was in flight (e.g. the appearance preview dialog was
+                                        // dismissed) — never touch a destroyed view. Skip the restore.
+                                        if (closed.get()) return@post
                                         view.renderTarget = previousTarget
                                         view.viewport = previousViewport
                                         updateCamera(previousViewport.width, previousViewport.height)
