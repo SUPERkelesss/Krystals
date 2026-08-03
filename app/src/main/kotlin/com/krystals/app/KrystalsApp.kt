@@ -4067,22 +4067,28 @@ private fun MpSearchScreen(
                 }
             }
         }
-        // Per v0.8.27: help panel — tap anywhere to dismiss.
-        if (helpOpen) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.15f)).clickable { helpOpen = false })
-            Surface(
-                modifier = Modifier.offset { helpAnchor }.padding(horizontal = 16.dp).fillMaxWidth().clickable { helpOpen = false },
-                shape = RoundedCornerShape(12.dp),
-                tonalElevation = 4.dp,
-            ) {
-                Text(
-                    localized(
-                        "使用 * 进行元素通配搜索（如SiO*）。精确搜索中，* 仅代表一种元素；模糊搜索显示 * 代表多种元素的结果。",
-                        "Use * for element wildcard search (e.g. SiO*). In exact search, * represents a single element; fuzzy search shows results where * matches multiple elements.",
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(16.dp),
-                )
+        // Per v0.8.27: help panel — tap anywhere to dismiss. Per v0.8.31: animated open/close.
+        AnimatedVisibility(
+            visible = helpOpen,
+            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(initialAlpha = 0f),
+            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+        ) {
+            Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.15f)).clickable { helpOpen = false })
+                Surface(
+                    modifier = Modifier.offset { helpAnchor }.padding(horizontal = 16.dp).fillMaxWidth().clickable { helpOpen = false },
+                    shape = RoundedCornerShape(12.dp),
+                    tonalElevation = 4.dp,
+                ) {
+                    Text(
+                        localized(
+                            "使用 * 进行元素通配搜索（如SiO*）。精确搜索中，* 仅代表一种元素；模糊搜索显示 * 代表多种元素的结果。",
+                            "Use * for element wildcard search (e.g. SiO*). In exact search, * represents a single element; fuzzy search shows results where * matches multiple elements.",
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
             }
         }
         }
@@ -4270,22 +4276,28 @@ private fun CodSearchScreen(
                 }
             }
         }
-        // Per v0.8.27: help panel — tap anywhere to dismiss.
-        if (helpOpen) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.15f)).clickable { helpOpen = false })
-            Surface(
-                modifier = Modifier.offset { helpAnchor }.padding(horizontal = 16.dp).fillMaxWidth().clickable { helpOpen = false },
-                shape = RoundedCornerShape(12.dp),
-                tonalElevation = 4.dp,
-            ) {
-                Text(
-                    localized(
-                        "化学式如 SiO2（自动转为 Hill 顺序 O2 Si）。元素以空格分开，如 Si O。文本如 quartz，匹配矿物名/化学名/标题。",
-                        "Formula e.g. SiO2 (auto-converted to Hill order: O2 Si). Elements separated by space, e.g. Si O. Text e.g. quartz, matches mineral/chemical names and titles.",
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(16.dp),
-                )
+        // Per v0.8.27: help panel — tap anywhere to dismiss. Per v0.8.31: animated open/close.
+        AnimatedVisibility(
+            visible = helpOpen,
+            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(initialAlpha = 0f),
+            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+        ) {
+            Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.15f)).clickable { helpOpen = false })
+                Surface(
+                    modifier = Modifier.offset { helpAnchor }.padding(horizontal = 16.dp).fillMaxWidth().clickable { helpOpen = false },
+                    shape = RoundedCornerShape(12.dp),
+                    tonalElevation = 4.dp,
+                ) {
+                    Text(
+                        localized(
+                            "化学式如 SiO2（自动转为 Hill 顺序 O2 Si）。元素以空格分开，如 Si O。文本如 quartz，匹配矿物名/化学名/标题。",
+                            "Formula e.g. SiO2 (auto-converted to Hill order: O2 Si). Elements separated by space, e.g. Si O. Text e.g. quartz, matches mineral/chemical names and titles.",
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
             }
         }
         }
@@ -4311,51 +4323,31 @@ private fun OnlineSourcePickerDialog(
     onPickCod: () -> Unit,
     onPickMp: () -> Unit,
 ) {
-    // Per v0.8.29: expand-on-open / shrink-on-close animation. `visible` flips to false first,
-    // the exit animation plays, and the dialog is removed after it finishes.
-    var visible by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) { visible = true }
-    fun dismiss() {
-        if (!visible) { onDismiss(); return }
-        visible = false
-        scope.launch { kotlinx.coroutines.delay(220); onDismiss() }
-    }
-    Dialog(onDismissRequest = { dismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        AnimatedVisibility(
-            visible = visible,
-            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(initialAlpha = 0f),
-            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
-        ) {
-            Surface(
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
-                tonalElevation = 6.dp,
-                modifier = Modifier.padding(24.dp).fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(24.dp)) {
-                    Text(stringResource(R.string.import_online), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 16.dp))
-                    // Per v0.3.3: the two sources are presented as labelled cards with an icon and a
-                    // one-line description, rather than bare text buttons.
-                    OnlineSourceCard(
-                        icon = Icons.Default.Science,
-                        title = stringResource(R.string.import_cod),
-                        subtitle = localized("Crystallography Open Database，无需密钥", "Crystallography Open Database, no API key required"),
-                        onClick = { visible = false; scope.launch { kotlinx.coroutines.delay(220); onPickCod() } },
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    OnlineSourceCard(
-                        icon = Icons.Default.CloudDownload,
-                        title = stringResource(R.string.materials_project),
-                        subtitle = localized("Materials Project，需 API Key", "Materials Project, requires an API key"),
-                        onClick = { visible = false; scope.launch { kotlinx.coroutines.delay(220); onPickMp() } },
-                    )
-                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = { dismiss() }) { Text(stringResource(R.string.cancel)) }
-                    }
-                }
+    // Per v0.8.31: plain dialog — the v0.8.29 expand/shrink animation was removed per user request.
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.import_online)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // Per v0.3.3: the two sources are presented as labelled cards with an icon and a
+                // one-line description, rather than bare text buttons.
+                OnlineSourceCard(
+                    icon = Icons.Default.Science,
+                    title = stringResource(R.string.import_cod),
+                    subtitle = localized("Crystallography Open Database，无需密钥", "Crystallography Open Database, no API key required"),
+                    onClick = onPickCod,
+                )
+                OnlineSourceCard(
+                    icon = Icons.Default.CloudDownload,
+                    title = stringResource(R.string.materials_project),
+                    subtitle = localized("Materials Project，需 API Key", "Materials Project, requires an API key"),
+                    onClick = onPickMp,
+                )
             }
-        }
-    }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
 }
 
 @Composable
