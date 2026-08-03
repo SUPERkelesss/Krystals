@@ -42,6 +42,7 @@ import com.krystals.renderer.core.scene.toCameraDepthRange
 import com.krystals.renderer.core.scene.visibleBounds
 import com.krystals.renderer.core.style.AxisMode
 import com.krystals.renderer.core.style.SelectionColors
+import com.krystals.renderer.core.style.WorldLight
 import com.krystals.renderer.core.style.backgroundColor
 import com.krystals.crystal.core.math.Vec3
 import java.nio.ByteBuffer
@@ -119,9 +120,12 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             .castShadows(false)
             .build(engine, lightEntity)
         filamentScene.addEntity(lightEntity)
+        // v0.8.29: light model = ambient 60% + sun 40%. The IndirectLight carries the
+        // ambient share; the directional LightManager light carries the sun share. Both
+        // intensities are refreshed in updateLightingAndDepth from the world light.
         indirectLight = IndirectLight.Builder()
-            .irradiance(1, floatArrayOf(0.35f, 0.35f, 0.35f))
-            .intensity(30_000f)
+            .irradiance(1, floatArrayOf(0.5f, 0.5f, 0.5f))
+            .intensity(WorldLight.AMBIENT_RATIO * 30_000f)
             .build(engine)
         filamentScene.indirectLight = indirectLight
         view.scene = filamentScene
@@ -401,9 +405,14 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             worldDir.y.toFloat(),
             worldDir.z.toFloat(),
         )
-        // Intensity in lux; v0.8.21: capped well below noon-sun so the PBR highlight
-        // never clips to pure white (post-processing / tone mapping is disabled).
-        engine.lightManager.setIntensity(lightInstance, worldLightIntensityLux(light.intensity))
+        // v0.8.29: the sun carries 40% of the total light; the ambient 60% lives on the
+        // IndirectLight. With post-processing disabled (no tone mapping) this stays well
+        // below noon-sun so the PBR highlight never clips to pure white.
+        engine.lightManager.setIntensity(
+            lightInstance,
+            worldLightIntensityLux(light.intensity) * WorldLight.SUN_RATIO,
+        )
+        indirectLight.setIntensity(WorldLight.AMBIENT_RATIO * 30_000f * light.intensity.coerceAtLeast(0.1f))
         // Depth-cueing range is derived from the visible-atoms AABB, not the preloaded
         // neighbor-cell shell. +3 maps to the nearest visible corner, -3 to the farthest.
         val visibleBounds = scene.visibleBounds()

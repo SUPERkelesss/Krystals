@@ -26,18 +26,22 @@ fragment {
         float edgeShade = 1.0 - materialParams.reflectionEnabled * edge * 0.30;
         vec3 L = normalize(materialParams.lightDirection);
         float NdotL = max(dot(viewN, L), 0.0);
-        // v0.8.14: ambient rises with intensity so the brightness slider brightens atoms.
-        float ambient = clamp(0.35 + 0.30 * materialParams.highlightIntensity, 0.35, 0.65);
-        float diffuseShade = ambient + (1.0 - ambient) * NdotL;
+        // v0.8.29: light model = ambient 60% + sun 40%. The ambient term is constant;
+        // the sun term carries the directional diffuse (NdotL) scaled by sun strength
+        // (highlightIntensity = former reflection intensity).
+        float ambientShade = 0.6;
+        float sunShade = 0.4 * materialParams.highlightIntensity * NdotL;
+        float diffuseShade = ambientShade + sunShade;
         vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);
         // Real Blinn-Phong specular: half-vector NdotH makes the highlight follow the
         // view (orthographic camera view vector V = (0,0,1)).
         vec3 V = vec3(0.0, 0.0, 1.0);
         vec3 H = normalize(L + V);
         float NdotH = max(dot(viewN, H), 0.0);
-        // v0.8.14: shininess driven by diffusion across its full range (no dead 4.0 clamp).
+        // v0.8.29: sun angular radius (highlightRadius, former reflection diffusion)
+        // drives the highlight width; specular strength scales with the sun 40% share.
         float shininess = max(2.0 / (materialParams.highlightRadius + 0.01), 1.5);
-        float specular = materialParams.reflectionEnabled * materialParams.highlightIntensity * pow(NdotH, shininess);
+        float specular = materialParams.reflectionEnabled * 0.4 * materialParams.highlightIntensity * pow(NdotH, shininess);
         color.rgb = mix(color.rgb, vec3(1.0), specular * 0.75);
         float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);

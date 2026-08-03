@@ -7,6 +7,7 @@ import com.google.android.filament.Material
 import com.google.android.filament.MaterialInstance
 import com.krystals.renderer.core.style.RenderEnvironment
 import com.krystals.renderer.core.style.DepthCueing
+import com.krystals.renderer.core.style.WorldLight
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -143,15 +144,18 @@ internal fun depthCueViewRange(cue: DepthCueing, visibleNear: Float, visibleFar:
 }
 
 /**
- * Light direction expressed in view space, fixed relative to the camera.
+ * Sun direction expressed in view space, fixed relative to the camera (surface-to-light:
+ * the direction FROM the surface TOWARD the sun, used by the NdotL shader term).
  *
- * The world light is anchored to the camera: no matter how the crystal is rotated,
- * the light-to-camera relationship stays constant, so [cameraRotation] must NOT be
- * applied here. The phi convention: 0° elevation = horizon, 90° = at the camera
- * (-sin(phi) on Z). v0.8.26: Z sign restored to -sin(phi) — v0.8.24 flipped it to
- * +sin(phi) which inverted the lit atom shading, because worldLightTravelDirection
- * negates this value again for LightManager.setDirection. With -sin(phi) the lit
- * travel direction ends up camera-facing (+Z at 90° elevation) as in v0.8.19.
+ * The sun is anchored to the camera: no matter how the crystal is rotated, the
+ * sun-to-camera relationship stays constant, so [cameraRotation] must NOT be applied.
+ *
+ * v0.8.29 direction contract (user spec): the sun stays inside the camera-facing
+ * hemisphere and shines AWAY from the camera. In Filament view space the camera looks
+ * down -Z, so the camera-facing surface normal is +Z; a 90°-elevation sun therefore
+ * points at +Z (surface-to-light). Z = +sin(phi): 0° elevation = horizon, 90° = at the
+ * camera. The LightManager travel direction (worldLightTravelDirection) negates this,
+ * ending at -Z for 90° elevation — away from the camera, toward the scene.
  */
 internal fun viewSpaceLightDirection(
     azimuthDegrees: Float,
@@ -160,11 +164,11 @@ internal fun viewSpaceLightDirection(
     val theta = Math.toRadians(azimuthDegrees.toDouble())
     val phi = Math.toRadians(elevationDegrees.coerceIn(0f, 90f).toDouble())
     val cosPhi = kotlin.math.cos(phi)
-    // Surface-to-light in view space: 0° elevation = horizon, 90° = toward the camera (-Z).
+    // Surface-to-light in view space: 0° elevation = horizon, 90° = toward the camera (+Z).
     return com.krystals.crystal.core.math.Vec3(
         cosPhi * kotlin.math.cos(theta),
         cosPhi * kotlin.math.sin(theta),
-        -kotlin.math.sin(phi),
+        kotlin.math.sin(phi),
     )
 }
 
@@ -189,26 +193,19 @@ internal fun worldLightTravelDirection(
 }
 
 /**
- * Ambient floor for the unlit shader lighting, as a function of the world-light
- * intensity. Must mirror the formula compiled into the .mat payloads (atom_opaque,
- * atom_transparent, opaque, transparent, polyhedron and their unlit variants).
- *
- * v0.8.14: intensity now RAISES ambient (brightness slider brightens atoms). The old
- * formula (0.62 - 0.32*intensity) inverted the slider — higher intensity dimmed atoms.
- * v0.8.17: ambient is a faint base (0.12 + 0.10i) under the mirror highlight — atoms
- * are lit by specular alone, never washed out; the positive correlation is preserved.
+ * Ambient floor for the unlit shader lighting — v0.8.29: the ambient term is the
+ * constant 60% share of the light model (WorldLight.AMBIENT_RATIO), independent of
+ * sun strength. The sun 40% share carries the directional diffuse + specular.
  */
-internal fun diffuseAmbient(intensity: Float): Float =
-    (0.12f + 0.10f * intensity).coerceIn(0.12f, 0.30f)
+internal fun diffuseAmbient(): Float = WorldLight.AMBIENT_RATIO
 
 /**
- * Blinn-Phong shininess from the highlight radius (0.35 + 1.15*diffusion), mirroring
- * the .mat payloads. v0.8.14: no dead 4.0 lower clamp — the diffusion slider must
- * visibly widen/narrow the highlight across its full range.
- * v0.8.16: base raised to 4.0 so the mirror highlight stays tight on glass atoms.
+ * Sun angular radius -> Blinn-Phong shininess (highlight radius 0.35 + 1.15*diffusion),
+ * mirroring the .mat payloads. v0.8.14: no dead 4.0 lower clamp — the diffusion slider
+ * must visibly widen/narrow the highlight across its full range.
  */
 internal fun specularShininess(highlightRadius: Float): Float =
-    maxOf(4.0f / (highlightRadius + 0.01f), 3.0f)
+    maxOf(2.0f / (highlightRadius + 0.01f), 1.5f)
 
 /**
  * Frosted (diffuse) share of the atom glass shading — mirrors the NdotL weight in the
@@ -226,20 +223,27 @@ internal fun atomSpecularBlend(): Float = 1.0f
 /**
  * Atom material shading parameters.
  *
- * v0.8.24: atoms are lit PBR materials again (user spec) with a 0.4 clear coat on top
- * of the CPK base color. Must mirror the values baked into atom_opaque.mat /
- * atom_transparent.mat. The 5% CPK desaturation remains atom-specific.
+ * v0.8.29: atoms are a clear-coat plastic ball — a matte plastic dielectric base
+ * (metallic 0, roughness 0.5, reflectance 0.5) under a smooth clear coat (1.0 / 0.06),
+ * per Filament's recommended PBR config for glossy plastic. Must mirror the values
+ * baked into atom_opaque.mat / atom_transparent.mat. The 5% CPK desaturation remains
+ * atom-specific.
  */
 internal object AtomPbr {
     const val METALLIC = 0.0f
-    const val ROUGHNESS = 0.32f
-    const val REFLECTANCE = 0.45f
-    const val CLEAR_COAT = 0.4f
-    // v0.8.25: clear-coat roughness raised 0.25 -> 0.5 for a softer coat highlight.
-    const val CLEAR_COAT_ROUGHNESS = 0.5f
+    const val ROUGHNESS = 0.5f
+    const val REFLECTANCE = 0.5f
+    const val CLEAR_COAT = 1.0f
+    const val CLEAR_COAT_ROUGHNESS = 0.06f
     /** CPK base color is desaturated by 5% before it reaches the material. */
     const val SATURATION_FACTOR = 0.95f
 }
+
+/**
+ * Sun 40% share multiplier for the unlit (bond/mesh) shaders — mirrors the
+ * `0.4 * highlightIntensity` terms compiled into opaque/transparent/polyhedron.
+ */
+internal fun sunShade(intensity: Float): Float = WorldLight.SUN_RATIO * intensity
 
 /**
  * Directional light intensity in lux for a [worldLightIntensityLux]-style mapping.

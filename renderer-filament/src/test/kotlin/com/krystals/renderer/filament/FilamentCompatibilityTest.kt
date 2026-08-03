@@ -1,6 +1,7 @@
 package com.krystals.renderer.filament
 
 import com.krystals.renderer.core.style.DepthCueing
+import com.krystals.renderer.core.style.WorldLight
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -45,9 +46,29 @@ class FilamentCompatibilityTest {
         val cosPhi = cos(phi)
         assertEquals((cosPhi * cos(theta)), direction.x, 1e-9)
         assertEquals((cosPhi * sin(theta)), direction.y, 1e-9)
-        // v0.8.26: -sin(phi) — worldLightTravelDirection negates this for the lit
-        // travel direction, so surface-to-light keeps the v0.8.19 sign.
-        assertEquals(-sin(phi), direction.z, 1e-9)
+        // v0.8.29: +sin(phi) — the sun stays in the camera-facing hemisphere
+        // (surface-to-light points toward the camera at +Z for 90° elevation).
+        assertEquals(sin(phi), direction.z, 1e-9)
+    }
+
+    @Test
+    fun `sun stays in camera hemisphere and travels away from camera`() {
+        // v0.8.29 direction contract: the sun is inside the camera-facing hemisphere
+        // and shines away from the camera. At 90° elevation, surface-to-light points at
+        // +Z (camera-facing normal) and the LightManager travel direction at -Z (away).
+        val surfaceToLight = viewSpaceLightDirection(0f, 90f)
+        assertEquals(0.0, surfaceToLight.x, 1e-9)
+        assertEquals(0.0, surfaceToLight.y, 1e-9)
+        assertEquals(1.0, surfaceToLight.z, 1e-9)  // toward camera (+Z)
+
+        val travel = worldLightTravelDirection(
+            azimuthDegrees = 0f,
+            elevationDegrees = 90f,
+            cameraRotation = com.krystals.crystal.core.math.Mat3.IDENTITY,
+        )
+        assertEquals(0.0, travel.x, 1e-9)
+        assertEquals(0.0, travel.y, 1e-9)
+        assertEquals(-1.0, travel.z, 1e-9)  // away from camera (-Z)
     }
 
     @Test
@@ -79,50 +100,49 @@ class FilamentCompatibilityTest {
             elevationDegrees = 90f,
             cameraRotation = rot,
         )
-        // surface-to-light at (az=0, el=90) = (0,0,-1) (v0.8.26 sign restored); travel
-        // = (0,0,+1) in view space. World = rotY(90).transposed() * (0,0,1).
+        // surface-to-light at (az=0, el=90) = (0,0,+1) (v0.8.29 sign); travel
+        // = (0,0,-1) in view space. World = rotY(90).transposed() * (0,0,-1).
         // rotY(90) maps world->view, so view->world is rotY(-90): the c column
-        // (sin(-90),0,cos(-90)) = (-1,0,0) applied to (0,0,1) gives (-1,0,0).
-        val expected = com.krystals.crystal.core.math.rotY(-90.0) * com.krystals.crystal.core.math.Vec3(0.0, 0.0, 1.0)
+        // (sin(-90),0,cos(-90)) = (-1,0,0) applied to (0,0,-1) gives (1,0,0).
+        val expected = com.krystals.crystal.core.math.rotY(-90.0) * com.krystals.crystal.core.math.Vec3(0.0, 0.0, -1.0)
         assertEquals(expected.x, travel.x, 1e-9)
         assertEquals(expected.y, travel.y, 1e-9)
         assertEquals(expected.z, travel.z, 1e-9)
     }
 
     @Test
-    fun `default appearance light direction has negative z`() {
+    fun `default appearance light direction has positive z`() {
         val appearance = com.krystals.renderer.core.style.ViewerAppearance()
         val direction = viewSpaceLightDirection(
             appearance.lightAzimuth,
             appearance.lightElevation,
         )
-        // 默认方位 150°、高度 45°:光从屏幕左上偏后方向来,负 Z 表示向屏幕内(v0.8.26)。
-        assertEquals(-1.0, direction.z / kotlin.math.abs(direction.z), 1e-9)
+        // 默认方位 150°、高度 45°:光从屏幕左前上方来,正 Z 表示朝向相机(v0.8.29)。
+        assertEquals(1.0, direction.z / kotlin.math.abs(direction.z), 1e-9)
         assertEquals(-1.0, direction.x / kotlin.math.abs(direction.x), 1e-9)
     }
 
     @Test
-    fun `brighter light raises ambient so atoms brighten instead of darkening`() {
-        // v0.8.14 regression: the old formula (0.62 - 0.32*intensity) inverted the
-        // brightness slider — raising intensity lowered ambient and dimmed atoms.
-        // v0.8.17: ambient is a faint base (0.12 + 0.10i) under the mirror highlight;
-        // the positive correlation is preserved so the brightness slider still works.
-        val low = diffuseAmbient(0.2f)
-        val high = diffuseAmbient(0.8f)
-        assertTrue(high > low, "ambient must rise with intensity: $low -> $high")
-        assertEquals(0.16f, diffuseAmbient(0.4f), 0.001f) // default intensity: faint base
+    fun `light model is sixty percent ambient and forty percent sun`() {
+        // v0.8.29: the total light splits into a constant 60% ambient term and a
+        // directional 40% sun term that carries the diffuse + specular.
+        assertEquals(0.6f, WorldLight.AMBIENT_RATIO, 0.001f)
+        assertEquals(0.4f, WorldLight.SUN_RATIO, 0.001f)
+        assertEquals(1.0f, WorldLight.AMBIENT_RATIO + WorldLight.SUN_RATIO, 0.001f)
+        assertEquals(0.6f, diffuseAmbient(), 0.001f)  // ambient share is constant
+        assertEquals(0.2f, sunShade(0.5f), 0.001f)    // 40% * intensity
+        assertEquals(0.16f, sunShade(0.4f), 0.001f)   // default intensity -> 16% sun
     }
 
     @Test
     fun `diffusion slider drives specular width without dead lower clamp`() {
         // v0.8.14 regression: shininess was clamped at 4.0, so moving the diffusion
         // slider barely changed the highlight. Shininess must respond across the range.
-        // v0.8.16: base raised to 4.0/(r+0.01) so the mirror highlight stays tight.
         val tight = specularShininess(0.35f)  // diffusion 0   -> radius 0.35
         val wide = specularShininess(1.5f)    // diffusion 1   -> radius 1.5
         assertTrue(tight > wide, "smaller radius must give tighter highlight: $tight vs $wide")
-        assertTrue(wide in 3.0f..5.0f, "wide highlight must stay below old 4.0 clamp, got $wide")
-        assertEquals(4.28f, specularShininess(0.925f), 0.01f) // default diffusion 0.5
+        assertTrue(wide in 1.3f..2.0f, "wide highlight must stay near 1.5 floor, got $wide")
+        assertEquals(2.14f, specularShininess(0.925f), 0.01f) // default diffusion 0.5 -> 2/(0.935)
     }
 
     @Test
@@ -146,13 +166,13 @@ class FilamentCompatibilityTest {
 
     @Test
     fun `atom pbr configuration matches spec`() {
-        // v0.8.24: atoms are lit PBR with a 0.4 clear coat per user spec.
+        // v0.8.29: atoms are a clear-coat plastic ball — matte plastic dielectric base
+        // under a smooth clear coat (Filament's recommended glossy-plastic config).
         assertEquals(0.0f, AtomPbr.METALLIC, 0.001f)
-        assertEquals(0.32f, AtomPbr.ROUGHNESS, 0.001f)
-        assertEquals(0.45f, AtomPbr.REFLECTANCE, 0.001f)
-        assertEquals(0.4f, AtomPbr.CLEAR_COAT, 0.001f)
-        // v0.8.25: clear-coat roughness 0.5 (softer coat highlight).
-        assertEquals(0.5f, AtomPbr.CLEAR_COAT_ROUGHNESS, 0.001f)
+        assertEquals(0.5f, AtomPbr.ROUGHNESS, 0.001f)
+        assertEquals(0.5f, AtomPbr.REFLECTANCE, 0.001f)
+        assertEquals(1.0f, AtomPbr.CLEAR_COAT, 0.001f)
+        assertEquals(0.06f, AtomPbr.CLEAR_COAT_ROUGHNESS, 0.001f)
         assertEquals(0.95f, AtomPbr.SATURATION_FACTOR, 0.001f)
     }
 

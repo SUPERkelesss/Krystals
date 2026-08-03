@@ -12,30 +12,29 @@ material {
         { type : float3, name : backgroundColor },
         { type : float2, name : depthRange },
         { type : float, name : depthCueEnabled },
-        { type : float, name : occupancy },
-        { type : float, name : reflectionEnabled }
+        { type : float, name : occupancy }
     ]
 }
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         vec4 color = materialParams.baseColor;
-        // v0.8.24: atoms are lit PBR with a 0.4 clear coat (user spec).
+        // v0.8.29: atom = clear-coat plastic ball (Filament recommended PBR config).
+        // Occupancy sector cutout preserved for partial-occupancy sites.
         float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
         float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
         color.rgb = mix(color.rgb, materialParams.backgroundColor, fog);
-        // Occupancy sector: clockwise-from-twelve alpha cutout, same as transparent.mat.
         vec3 worldN = normalize(variable_customNormal.xyz);
         vec3 viewN = normalize(mat3(getViewFromWorldMatrix()) * worldN);
         float clockwiseFromTwelve = fract(atan(viewN.x, viewN.y) / 6.28318530 + 1.0);
         color.a *= mix(0.15, 1.0, step(clockwiseFromTwelve, clamp(materialParams.occupancy, 0.0, 1.0)));
         material.baseColor = color;
         material.metallic = 0.0;
-        material.roughness = 0.32;
-        material.reflectance = 0.45;
-        material.clearCoat = 0.4;
-        material.clearCoatRoughness = 0.5;
+        material.roughness = 0.5;
+        material.reflectance = 0.5;
+        material.clearCoat = 1.0;
+        material.clearCoatRoughness = 0.06;
     }
 }
 vertex {

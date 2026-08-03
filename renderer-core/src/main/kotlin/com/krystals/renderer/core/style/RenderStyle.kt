@@ -8,6 +8,19 @@ enum class LineStyle { SOLID, DASHED }
 enum class BondColorMode { BICOLOR, UNICOLOR }
 enum class AxisMode { ABC, XYZ }
 
+/**
+ * Scene lighting: a constant ambient term plus a camera-anchored sun (directional)
+ * term. The total light is split AMBIENT_RATIO (60%) ambient / SUN_RATIO (40%) sun.
+ *
+ * Sun parameters (v0.8.29 semantic rename):
+ *  - [azimuthDegrees]  sun azimuth (light angle, former lightAzimuth)
+ *  - [elevationDegrees] sun elevation (light height, former lightElevation)
+ *  - [intensity]        sun strength (former reflection intensity)
+ *  - [diffusion]        sun angular radius / highlight spread (former reflection diffusion)
+ *
+ * The sun is anchored to the camera (view-space fixed): rotating the crystal never
+ * changes the sun-to-camera relationship.
+ */
 data class WorldLight(
     val azimuthDegrees: Float = 35f,
     val elevationDegrees: Float = 60f,
@@ -18,6 +31,13 @@ data class WorldLight(
         require(elevationDegrees in 0f..90f) { "light elevation must be between 0 and 90 degrees" }
         require(intensity in 0f..1f) { "light intensity must be between 0 and 1" }
         require(diffusion in 0f..1f) { "light diffusion must be between 0 and 1" }
+    }
+
+    companion object {
+        /** Ambient share of the total light: 60%. */
+        const val AMBIENT_RATIO = 0.6f
+        /** Sun (directional) share of the total light: 40%. */
+        const val SUN_RATIO = 0.4f
     }
 }
 

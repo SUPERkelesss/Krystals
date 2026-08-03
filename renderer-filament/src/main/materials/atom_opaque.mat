@@ -8,26 +8,27 @@ material {
         { type : float4, name : baseColor },
         { type : float3, name : backgroundColor },
         { type : float2, name : depthRange },
-        { type : float, name : depthCueEnabled },
-        { type : float, name : reflectionEnabled }
+        { type : float, name : depthCueEnabled }
     ]
 }
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         vec4 color = materialParams.baseColor;
-        // v0.8.24: atoms are lit PBR with a 0.4 clear coat (user spec). Depth fog is
-        // applied to the base color; the clear coat adds a second glossy layer on top.
+        // v0.8.29: atom = clear-coat plastic ball (Filament recommended PBR config).
+        // Base layer is a matte plastic dielectric; a smooth clear coat on top gives
+        // the glossy plastic-ball look. Lighting (ambient 60% / sun 40%) is provided
+        // by the scene's IndirectLight + directional LightManager light.
         float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
         float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
         color.rgb = mix(color.rgb, materialParams.backgroundColor, fog);
         material.baseColor = color;
         material.metallic = 0.0;
-        material.roughness = 0.32;
-        material.reflectance = 0.45;
-        material.clearCoat = 0.4;
-        material.clearCoatRoughness = 0.5;
+        material.roughness = 0.5;
+        material.reflectance = 0.5;
+        material.clearCoat = 1.0;
+        material.clearCoatRoughness = 0.06;
     }
 }
 vertex {
