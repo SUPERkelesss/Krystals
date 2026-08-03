@@ -317,6 +317,11 @@ fun KrystalsRoot(
     viewModel: KrystalsViewModel = viewModel(),
 ) {
     val preferences = remember { activity.getSharedPreferences("krystals", 0) }
+    var settingsValues by remember { mutableStateOf(PreferencesStore.load(preferences)) }
+    val onSettingsChange: (SettingsValues) -> Unit = { sv ->
+        settingsValues = sv
+        PreferencesStore.save(preferences, sv)
+    }
     var themeMode by remember {
         mutableStateOf(runCatching { ThemeMode.valueOf(preferences.getString("theme", ThemeMode.SYSTEM.name)!!) }.getOrDefault(ThemeMode.SYSTEM))
     }
@@ -1308,6 +1313,7 @@ private sealed class ViewerPanel {
     object Display : ViewerPanel()
     object Info : ViewerPanel()
     object Appearance : ViewerPanel()
+    object Settings : ViewerPanel()
 }
 
 @Composable
@@ -1625,6 +1631,7 @@ private fun ViewerScreen(
                 IconButton(onClick = { tab.undo() }, enabled = tab.history.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, localized("撤回", "Undo")) }
                 IconButton(onClick = { tab.redo() }, enabled = tab.history.canRedo) { Icon(Icons.AutoMirrored.Filled.Redo, localized("前进", "Redo")) }
                 IconButton(onClick = { activePanel = ViewerPanel.Appearance }) { Icon(Icons.Default.ColorLens, null) }
+                IconButton(onClick = { activePanel = ViewerPanel.Settings }) { Icon(Icons.Default.Settings, null) }
             },
         )
         DocumentTabs(viewModel, onClose, ::selectTab)
@@ -2094,6 +2101,11 @@ sceneBuildError?.let { message ->
         onPreviewEnd = { previewAppearance = null },
         backgroundFollowTheme = backgroundFollowTheme,
         onBackgroundFollowThemeChange = onBackgroundFollowThemeChange,
+    )
+    if (activePanel == ViewerPanel.Settings) SettingsPanel(
+        settings = settingsValues,
+        onChange = onSettingsChange,
+        onDismiss = { activePanel = ViewerPanel.None },
     )
 }
 
