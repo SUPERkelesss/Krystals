@@ -29,7 +29,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.interaction.state.InteractionState
 import com.krystals.interaction.state.ViewerCommand
@@ -137,6 +140,20 @@ fun FilamentViewport(
     LaunchedEffect(renderer, scene) { renderer.submit(scene) }
     LaunchedEffect(renderer, interactionState) { renderer.updateInteraction(interactionState) }
     LaunchedEffect(renderer, bondValenceBySite) { renderer.updateOverlayData(bondValenceBySite) }
+    // Per v0.8.25: pause frame scheduling while the app is in the background (the Surface may
+    // survive lock screen / split view) and resume with one refresh frame on return.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(renderer, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> renderer.pause()
+                Lifecycle.Event.ON_START -> renderer.resume()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Box(
         modifier
