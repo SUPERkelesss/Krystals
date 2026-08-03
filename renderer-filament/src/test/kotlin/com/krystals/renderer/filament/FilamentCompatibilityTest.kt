@@ -143,15 +143,13 @@ class FilamentCompatibilityTest {
     }
 
     @Test
-    fun `atom pbr configuration matches spec`() {
-        // v0.8.18: atoms use a real Filament lit material with these PBR parameters.
-        assertEquals(0.0f, AtomPbr.METALLIC, 0.001f)
-        assertEquals(0.32f, AtomPbr.ROUGHNESS, 0.001f)
-        assertEquals(0.45f, AtomPbr.REFLECTANCE, 0.001f)
-        // v0.8.21: clearCoat restored to 0.1 — the edge artifact was overexposure, not coat.
-        assertEquals(0.1f, AtomPbr.CLEAR_COAT, 0.001f)
-        assertEquals(0.25f, AtomPbr.CLEAR_COAT_ROUGHNESS, 0.001f)
+    fun `atom base color keeps five percent desaturation`() {
+        // v0.8.23: atom materials are back to the same unlit shader as bonds; the only
+        // atom-specific material behavior left is the 5% CPK desaturation.
         assertEquals(0.95f, AtomPbr.SATURATION_FACTOR, 0.001f)
+        assertEquals(0xFF808080L, desaturateArgb(0xFF808080L, AtomPbr.SATURATION_FACTOR))
+        val out = desaturateArgb(0xFFFF0000L, AtomPbr.SATURATION_FACTOR)
+        assertTrue((out ushr 16 and 0xFF) > 200, "red must stay dominant")
     }
 
     @Test
