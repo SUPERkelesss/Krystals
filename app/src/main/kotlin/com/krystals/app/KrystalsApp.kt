@@ -633,6 +633,21 @@ fun KrystalsRoot(
     fun doOpenParsed(parsed: ParsedStructure, name: String, uri: Uri?, expandedEstimate: Int) {
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
+        // Per v0.8.26: apply user preference defaults for the new tab.
+        tab.visibility = tab.visibility.copy(showBonds = settingsValues.defaultShowBonds)
+        // Default extend-bonds setting.
+        tab.structuralExpansion = when (settingsValues.defaultExtendBonds) {
+            ExtendBondsDefault.ALL -> true
+            ExtendBondsDefault.METALS_ONLY -> parsed.structure.sites.any { isMetal(it.species.symbol) }
+            ExtendBondsDefault.NEVER -> false
+        }
+        // Default polyhedra visibility.
+        val siteIds = parsed.structure.sites.map { it.id }.toSet()
+        tab.visibility = tab.visibility.copy(polyhedronSites = when (settingsValues.defaultPolyhedra) {
+            PolyhedraDefault.ALL -> siteIds
+            PolyhedraDefault.METALS_ONLY -> parsed.structure.sites.filter { isMetal(it.species.symbol) }.map { it.id }.toSet()
+            PolyhedraDefault.NEVER -> emptySet()
+        })
         // Per v0.7.0: extract user comments from CIF source.
         tab.comments = CifComments.extract(parsed.document.source)
         // Per v0.8.26: skip bond computation when the user disables auto-bond-rules.
@@ -1609,11 +1624,13 @@ private fun ViewerScreen(
                         exporting = true
                         exportJob = scope.launch {
                             try {
-                                // Per v0.6.3: ensure the scene is submitted before exporting,
-                                // so renderToBitmap doesn't return null on first attempt.
                                 val renderer = activeFilamentRenderer
+                                // Per v0.8.26: export quality — HIGH = full res, LOW = half res.
+                                val useHigh = settingsValues.exportQuality == ExportQuality.HIGH
                                 val bitmap = if (renderer != null) {
-                                    runCatching { renderer.submit(scene); renderer.renderToBitmap(useMsaa = useMsaa) }.getOrNull()
+                                    runCatching { renderer.submit(scene); renderer.renderToBitmap(useMsaa = useMsaa && useHigh) }.getOrNull()?.let {
+                                        if (useHigh) it else android.graphics.Bitmap.createScaledBitmap(it, it.width / 2, it.height / 2, true)
+                                    }
                                 } else null
                                 if (bitmap == null) {
                                     onMessage("Unable to export current crystal")
