@@ -38,6 +38,7 @@ data class SettingsValues(
     val defaultExtendBonds: ExtendBondsDefault = ExtendBondsDefault.METALS_ONLY,
     val defaultPolyhedra: PolyhedraDefault = PolyhedraDefault.NEVER,
     val codMirrorMode: CodMirrorMode = CodMirrorMode.AUTO,
+    val codFixedIndex: Int = 0,
     val codCustomUrl: String = "",
     val exportQuality: ExportQuality = ExportQuality.HIGH,
     val exportShowAxes: Boolean = false,
@@ -65,6 +66,7 @@ object PreferencesStore {
     const val KEY_DEFAULT_EXTEND_BONDS = "default_extend_bonds"
     const val KEY_DEFAULT_POLYHEDRA = "default_polyhedra"
     const val KEY_COD_MIRROR_MODE = "cod_mirror_mode"
+    const val KEY_COD_FIXED_INDEX = "cod_fixed_index"
     const val KEY_COD_CUSTOM_URL = "cod_custom_url"
     const val KEY_EXPORT_QUALITY = "export_quality"
     const val KEY_EXPORT_SHOW_AXES = "export_show_axes"
@@ -97,6 +99,7 @@ object PreferencesStore {
             codMirrorMode = try {
                 CodMirrorMode.valueOf(prefs.getString(KEY_COD_MIRROR_MODE, defaults.codMirrorMode.name) ?: defaults.codMirrorMode.name)
             } catch (_: IllegalArgumentException) { defaults.codMirrorMode },
+            codFixedIndex = prefs.getInt(KEY_COD_FIXED_INDEX, defaults.codFixedIndex),
             codCustomUrl = prefs.getString(KEY_COD_CUSTOM_URL, defaults.codCustomUrl) ?: defaults.codCustomUrl,
             exportQuality = try {
                 ExportQuality.valueOf(prefs.getString(KEY_EXPORT_QUALITY, defaults.exportQuality.name) ?: defaults.exportQuality.name)
@@ -122,6 +125,7 @@ object PreferencesStore {
             .putString(KEY_DEFAULT_EXTEND_BONDS, settings.defaultExtendBonds.name)
             .putString(KEY_DEFAULT_POLYHEDRA, settings.defaultPolyhedra.name)
             .putString(KEY_COD_MIRROR_MODE, settings.codMirrorMode.name)
+            .putInt(KEY_COD_FIXED_INDEX, settings.codFixedIndex)
             .putString(KEY_COD_CUSTOM_URL, settings.codCustomUrl)
             .putString(KEY_EXPORT_QUALITY, settings.exportQuality.name)
             .putBoolean(KEY_EXPORT_SHOW_AXES, settings.exportShowAxes)
@@ -145,6 +149,7 @@ object PreferencesStore {
             .remove(KEY_DEFAULT_EXTEND_BONDS)
             .remove(KEY_DEFAULT_POLYHEDRA)
             .remove(KEY_COD_MIRROR_MODE)
+            .remove(KEY_COD_FIXED_INDEX)
             .remove(KEY_COD_CUSTOM_URL)
             .remove(KEY_EXPORT_QUALITY)
             .remove(KEY_EXPORT_SHOW_AXES)

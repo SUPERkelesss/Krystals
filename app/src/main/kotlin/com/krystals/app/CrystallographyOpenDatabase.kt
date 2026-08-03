@@ -98,10 +98,10 @@ object CrystallographyOpenDatabase {
     }
 
     /** Per v0.8.26: set mirror from user preference. */
-    fun setMirrorMode(mode: CodMirrorMode, customUrl: String = "") {
+    fun setMirrorMode(mode: CodMirrorMode, customUrl: String = "", fixedIndex: Int = 0) {
         when (mode) {
             CodMirrorMode.AUTO -> { /* testMirrors() is called on each search — no change needed */ }
-            CodMirrorMode.FIXED -> selectMirror(MIRRORS.first())
+            CodMirrorMode.FIXED -> selectMirror(MIRRORS.getOrNull(fixedIndex.coerceIn(0, MIRRORS.lastIndex)) ?: MIRRORS.first())
             CodMirrorMode.CUSTOM -> {
                 val url = customUrl.trimEnd('/')
                 if (url.isNotEmpty() && (url.startsWith("http://") || url.startsWith("https://"))) {

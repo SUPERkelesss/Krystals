@@ -13,6 +13,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.krystals.app.ui.ThemeMode
+import kotlinx.coroutines.launch
 
 /**
  * Per v0.8.26: user preferences panel with four groups.
@@ -89,9 +90,45 @@ fun SettingsPanel(
                 // ══ Network ══
                 SectionTitle(localized("网络", "Network"))
                 SegSetting(localized("COD 下载节点", "COD Mirror"), settings.codMirrorMode, CodMirrorMode.values().toList(), { onChange(settings.copy(codMirrorMode = it)) })
+                if (settings.codMirrorMode == CodMirrorMode.FIXED) {
+                    Text(localized("固定节点", "Fixed Mirror"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CrystallographyOpenDatabase.MIRRORS.forEachIndexed { index, mirror ->
+                            val host = mirror.testUrl.removePrefix("https://").removePrefix("http://").trimEnd('/')
+                            FilterChip(
+                                selected = settings.codFixedIndex == index,
+                                onClick = { onChange(settings.copy(codFixedIndex = index)) },
+                                label = { Text(host, maxLines = 1) },
+                            )
+                        }
+                    }
+                }
                 if (settings.codMirrorMode == CodMirrorMode.CUSTOM) {
                     var url by remember(settings) { mutableStateOf(settings.codCustomUrl) }
-                    OutlinedTextField(url, { url = it; onChange(settings.copy(codCustomUrl = it)) }, label = { Text(localized("自定义节点 URL", "Custom Mirror URL")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    var testing by remember { mutableStateOf(false) }
+                    var testResult by remember { mutableStateOf<Boolean?>(null) }
+                    val scope = rememberCoroutineScope()
+                    OutlinedTextField(url, { url = it; onChange(settings.copy(codCustomUrl = it)); testResult = null }, label = { Text(localized("自定义节点 URL", "Custom Mirror URL")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                        TextButton(
+                            enabled = !testing && url.isNotBlank(),
+                            onClick = {
+                                testing = true
+                                testResult = null
+                                scope.launch {
+                                    testResult = CrystallographyOpenDatabase.testCustomMirror(url)
+                                    testing = false
+                                }
+                            },
+                        ) { Text(if (testing) localized("测试中...", "Testing...") else localized("测试", "Test")) }
+                        testResult?.let { ok ->
+                            Text(
+                                if (ok) localized("✓ 节点可用，已沿用", "✓ Mirror reachable") else localized("✗ 节点不可用", "✗ Mirror unreachable"),
+                                color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
                 }
 
                 // ══ Display ══

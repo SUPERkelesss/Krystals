@@ -80,6 +80,7 @@ class PreferencesStoreTest {
         assertEquals(ExtendBondsDefault.METALS_ONLY, d.defaultExtendBonds)
         assertEquals(PolyhedraDefault.NEVER, d.defaultPolyhedra)
         assertEquals(CodMirrorMode.AUTO, d.codMirrorMode)
+        assertEquals(0, d.codFixedIndex)
         assertEquals("", d.codCustomUrl)
         assertEquals(ExportQuality.HIGH, d.exportQuality)
         assertFalse(d.exportShowAxes)
@@ -102,7 +103,8 @@ class PreferencesStoreTest {
             defaultShowBonds = false,
             defaultExtendBonds = ExtendBondsDefault.ALL,
             defaultPolyhedra = PolyhedraDefault.ALL,
-            codMirrorMode = CodMirrorMode.CUSTOM,
+            codMirrorMode = CodMirrorMode.FIXED,
+            codFixedIndex = 2,
             codCustomUrl = "https://example.com",
             exportQuality = ExportQuality.LOW,
             exportShowAxes = true,

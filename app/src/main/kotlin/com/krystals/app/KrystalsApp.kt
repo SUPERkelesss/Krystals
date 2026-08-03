@@ -991,6 +991,16 @@ fun KrystalsRoot(
         onMessage = ::showMessage,
         onOpenParsed = { parsed, name -> codSearchOpen = false; openParsed(parsed, name, null) },
     )
+    // Per v0.8.26: apply the user's COD mirror preference whenever the COD panel opens.
+    LaunchedEffect(codSearchOpen) {
+        if (codSearchOpen) {
+            CrystallographyOpenDatabase.setMirrorMode(
+                mode = settingsValues.codMirrorMode,
+                customUrl = settingsValues.codCustomUrl,
+                fixedIndex = settingsValues.codFixedIndex,
+            )
+        }
+    }
     }
     }
 }
@@ -1635,7 +1645,18 @@ private fun ViewerScreen(
                                 if (bitmap == null) {
                                     onMessage("Unable to export current crystal")
                                 } else {
-                                    onExport(bitmap)
+                                    val finalBitmap = if (settingsValues.exportShowAxes || settingsValues.exportShowMeasurements) {
+                                        bitmap.copy(android.graphics.Bitmap.Config.ARGB_8888, true).also { out ->
+                                            ExportOverlay.apply(
+                                                bitmap = out,
+                                                scene = scene,
+                                                state = tab.interactionState,
+                                                includeAxes = settingsValues.exportShowAxes,
+                                                includeMeasurements = settingsValues.exportShowMeasurements,
+                                            )
+                                        }
+                                    } else bitmap
+                                    onExport(finalBitmap)
                                 }
                             } catch (error: Exception) {
                                 if (error !is CancellationException) onMessage(error.message ?: "Export failed")
