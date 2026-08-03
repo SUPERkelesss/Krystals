@@ -14,17 +14,17 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.BorderStroke
@@ -41,6 +41,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -156,6 +157,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -222,8 +225,13 @@ private val DEFAULT_VISIBLE_FILTERS = setOf(
     SearchFilterType.POINT_GROUP, SearchFilterType.SPACE_GROUP,
 )
 
-/** Per v0.8.27: the full filter set offered by each search page. */
-private val COD_FILTER_TYPES = SearchFilterType.entries.toSet()
+/** Per v0.8.27: the full filter set offered by each search page. Per v0.8.29: COD has no
+ * composition/stability filters; MP has no bibliographic filters. */
+private val COD_FILTER_TYPES = setOf(
+    SearchFilterType.FORMULA, SearchFilterType.ELEMENT_COUNT, SearchFilterType.CRYSTAL_SYSTEM,
+    SearchFilterType.POINT_GROUP, SearchFilterType.SPACE_GROUP,
+    SearchFilterType.TITLE, SearchFilterType.AUTHOR, SearchFilterType.JOURNAL, SearchFilterType.YEAR,
+)
 private val MP_FILTER_TYPES = setOf(
     SearchFilterType.FORMULA, SearchFilterType.ELEMENT_COUNT, SearchFilterType.CRYSTAL_SYSTEM,
     SearchFilterType.POINT_GROUP, SearchFilterType.SPACE_GROUP,
@@ -319,7 +327,10 @@ private fun buildFilterOptions(metas: List<SearchResultMeta>): SearchFilterOptio
     val authors = metas.map { it.author }.filter { it.isNotBlank() }.distinct().sorted()
     val journals = metas.map { it.journal }.filter { it.isNotBlank() }.distinct().sorted()
     val years = metas.map { it.year }.filter { it.isNotBlank() }.distinct().sorted()
-    return SearchFilterOptions(elementCounts, crystalSystems, pointGroups, spaceGroups, formulas, titles, authors, journals, years)
+    // Per v0.8.29: element-composition options = distinct sorted element sets (e.g. "Fe O").
+    val elementCompositions = metas.map { elementsInFormula(it.formula).sorted().joinToString(" ") }
+        .filter { it.isNotBlank() }.distinct().sorted()
+    return SearchFilterOptions(elementCounts, crystalSystems, pointGroups, spaceGroups, formulas, titles, authors, journals, years, elementCompositions)
 }
 
 private data class SearchFilterOptions(
@@ -333,6 +344,8 @@ private data class SearchFilterOptions(
     val authors: List<String> = emptyList(),
     val journals: List<String> = emptyList(),
     val years: List<String> = emptyList(),
+    // Per v0.8.29: element-composition options (distinct sorted element sets).
+    val elementCompositions: List<String> = emptyList(),
 )
 
 private fun normalizeSgSymbol(s: String) = s.replace(" ", "").replace("_", "").lowercase()
@@ -1392,7 +1405,7 @@ private fun HomeScreen(
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_local)) }, leadingIcon = { Icon(Icons.Default.FileOpen, null) }, onClick = { menuOpen = false; onOpen() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.open_preset_library)) }, leadingIcon = { Icon(Icons.Default.Inventory2, null) }, onClick = { menuOpen = false; onOpenPreset() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.Science, null) }, onClick = { menuOpen = false; onOnlineSource() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.CloudDownload, null) }, onClick = { menuOpen = false; onOnlineSource() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
@@ -1425,7 +1438,7 @@ private fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onOpenPreset, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.Inventory2, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.open_preset_library)) }
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onOnlineSource, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.Science, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.import_online)) }
+                Button(onClick = onOnlineSource, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.CloudDownload, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.import_online)) }
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onNew, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.new_file)) }
             }
@@ -1682,7 +1695,7 @@ private fun ViewerScreen(
             navigationIcon = { Box { IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.Menu, null) }; DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_local)) }, leadingIcon = { Icon(Icons.Default.FileOpen, null) }, onClick = { menuOpen = false; onOpen() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.open_preset_library)) }, leadingIcon = { Icon(Icons.Default.Inventory2, null) }, onClick = { menuOpen = false; onOpenPreset() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.Science, null) }, onClick = { menuOpen = false; onOnlineSource() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.CloudDownload, null) }, onClick = { menuOpen = false; onOnlineSource() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text(stringResource(R.string.save)) }, leadingIcon = { Icon(Icons.Default.Save, null) }, onClick = { menuOpen = false; onSave(tab) })
@@ -3578,11 +3591,14 @@ private fun FilterDropdownChip(
             } else null,
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option) },
-                    onClick = { onSelect(option); expanded = false },
-                )
+            // Per v0.8.29: scroll when the option list is long (e.g. formulas/authors).
+            Column(Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp)) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option) },
+                        onClick = { onSelect(option); expanded = false },
+                    )
+                }
             }
         }
     }
@@ -3675,36 +3691,6 @@ private fun FilterPickerDialog(
     )
 }
 
-/** Per v0.8.27: a text-input filter chip (formula/title/author/journal/year/composition). */
-@Composable
-private fun FilterTextChip(
-    label: String,
-    value: String?,
-    onSelect: (String?) -> Unit,
-) {
-    var dialogOpen by remember { mutableStateOf(false) }
-    FilterChip(
-        selected = value != null,
-        onClick = { dialogOpen = true },
-        label = { Text(if (value != null) "$label: $value" else label, maxLines = 1) },
-    )
-    if (dialogOpen) {
-        var text by remember(value) { mutableStateOf(value ?: "") }
-        AlertDialog(
-            onDismissRequest = { dialogOpen = false },
-            title = { Text(label) },
-            text = { OutlinedTextField(text, { text = it }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
-            confirmButton = { TextButton(onClick = { onSelect(text.trim().ifBlank { null }); dialogOpen = false }) { Text(stringResource(R.string.confirm)) } },
-            dismissButton = {
-                Row {
-                    if (value != null) TextButton(onClick = { onSelect(null); dialogOpen = false }) { Text(localized("清除", "Clear")) }
-                    TextButton(onClick = { dialogOpen = false }) { Text(stringResource(R.string.cancel)) }
-                }
-            },
-        )
-    }
-}
-
 /** Per v0.6.5: horizontal filter bar for search results with cascading crystal system → point group → space group. */
 @Composable
 private fun SearchFilterBar(
@@ -3762,9 +3748,10 @@ private fun SearchFilterBar(
             }
             if (SearchFilterType.FORMULA in visibleFilters) {
                 item {
-                    FilterTextChip(
+                    FilterDropdownChip(
                         label = filterTypeLabel(SearchFilterType.FORMULA),
-                        value = filterState.formula,
+                        selectedValue = filterState.formula,
+                        options = options.formulas,
                         onSelect = { v -> onFilterChange(filterState.copy(formula = v)) },
                     )
                 }
@@ -3817,45 +3804,50 @@ private fun SearchFilterBar(
             }
             if (SearchFilterType.TITLE in visibleFilters) {
                 item {
-                    FilterTextChip(
+                    FilterDropdownChip(
                         label = filterTypeLabel(SearchFilterType.TITLE),
-                        value = filterState.title,
+                        selectedValue = filterState.title,
+                        options = options.titles,
                         onSelect = { v -> onFilterChange(filterState.copy(title = v)) },
                     )
                 }
             }
             if (SearchFilterType.AUTHOR in visibleFilters) {
                 item {
-                    FilterTextChip(
+                    FilterDropdownChip(
                         label = filterTypeLabel(SearchFilterType.AUTHOR),
-                        value = filterState.author,
+                        selectedValue = filterState.author,
+                        options = options.authors,
                         onSelect = { v -> onFilterChange(filterState.copy(author = v)) },
                     )
                 }
             }
             if (SearchFilterType.JOURNAL in visibleFilters) {
                 item {
-                    FilterTextChip(
+                    FilterDropdownChip(
                         label = filterTypeLabel(SearchFilterType.JOURNAL),
-                        value = filterState.journal,
+                        selectedValue = filterState.journal,
+                        options = options.journals,
                         onSelect = { v -> onFilterChange(filterState.copy(journal = v)) },
                     )
                 }
             }
             if (SearchFilterType.YEAR in visibleFilters) {
                 item {
-                    FilterTextChip(
+                    FilterDropdownChip(
                         label = filterTypeLabel(SearchFilterType.YEAR),
-                        value = filterState.year,
+                        selectedValue = filterState.year,
+                        options = options.years,
                         onSelect = { v -> onFilterChange(filterState.copy(year = v)) },
                     )
                 }
             }
             if (SearchFilterType.ELEMENT_COMPOSITION in visibleFilters) {
                 item {
-                    FilterTextChip(
+                    FilterDropdownChip(
                         label = filterTypeLabel(SearchFilterType.ELEMENT_COMPOSITION),
-                        value = filterState.elementComposition,
+                        selectedValue = filterState.elementComposition,
+                        options = options.elementCompositions,
                         onSelect = { v -> onFilterChange(filterState.copy(elementComposition = v)) },
                     )
                 }
@@ -4027,6 +4019,13 @@ private fun MpSearchScreen(
                     availableFilters = MP_FILTER_TYPES,
                     visibleFilters = visibleFilters,
                     onVisibleFiltersChange = { visibleFilters = it },
+                )
+                // Per v0.8.29: matching-count caption under the filter bar.
+                Text(
+                    localized("符合条件的", "Matching") + " ${filtered?.size ?: 0} " + localized("个结果: ", "results: "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
                 )
             }
             when {
@@ -4215,6 +4214,13 @@ private fun CodSearchScreen(
                     visibleFilters = visibleFilters,
                     onVisibleFiltersChange = { visibleFilters = it },
                 )
+                // Per v0.8.29: matching-count caption under the filter bar.
+                Text(
+                    localized("符合条件的", "Matching") + " ${filtered?.size ?: 0} " + localized("个结果: ", "results: "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                )
             }
             when {
                 searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索中…", "Searching…")) }
@@ -4305,30 +4311,51 @@ private fun OnlineSourcePickerDialog(
     onPickCod: () -> Unit,
     onPickMp: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.import_online)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // Per v0.3.3: the two sources are presented as labelled cards with an icon and a
-                // one-line description, rather than bare text buttons.
-                OnlineSourceCard(
-                    icon = Icons.Default.Science,
-                    title = stringResource(R.string.import_cod),
-                    subtitle = localized("Crystallography Open Database，无需密钥", "Crystallography Open Database, no API key required"),
-                    onClick = onPickCod,
-                )
-                OnlineSourceCard(
-                    icon = Icons.Default.CloudDownload,
-                    title = stringResource(R.string.materials_project),
-                    subtitle = localized("Materials Project，需 API Key", "Materials Project, requires an API key"),
-                    onClick = onPickMp,
-                )
+    // Per v0.8.29: expand-on-open / shrink-on-close animation. `visible` flips to false first,
+    // the exit animation plays, and the dialog is removed after it finishes.
+    var visible by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { visible = true }
+    fun dismiss() {
+        if (!visible) { onDismiss(); return }
+        visible = false
+        scope.launch { kotlinx.coroutines.delay(220); onDismiss() }
+    }
+    Dialog(onDismissRequest = { dismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(initialAlpha = 0f),
+            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+        ) {
+            Surface(
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                tonalElevation = 6.dp,
+                modifier = Modifier.padding(24.dp).fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(24.dp)) {
+                    Text(stringResource(R.string.import_online), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 16.dp))
+                    // Per v0.3.3: the two sources are presented as labelled cards with an icon and a
+                    // one-line description, rather than bare text buttons.
+                    OnlineSourceCard(
+                        icon = Icons.Default.Science,
+                        title = stringResource(R.string.import_cod),
+                        subtitle = localized("Crystallography Open Database，无需密钥", "Crystallography Open Database, no API key required"),
+                        onClick = { visible = false; scope.launch { kotlinx.coroutines.delay(220); onPickCod() } },
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OnlineSourceCard(
+                        icon = Icons.Default.CloudDownload,
+                        title = stringResource(R.string.materials_project),
+                        subtitle = localized("Materials Project，需 API Key", "Materials Project, requires an API key"),
+                        onClick = { visible = false; scope.launch { kotlinx.coroutines.delay(220); onPickMp() } },
+                    )
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { dismiss() }) { Text(stringResource(R.string.cancel)) }
+                    }
+                }
             }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
-    )
+        }
+    }
 }
 
 @Composable
