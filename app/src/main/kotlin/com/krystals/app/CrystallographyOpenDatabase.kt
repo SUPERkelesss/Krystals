@@ -355,7 +355,7 @@ object CrystallographyOpenDatabase {
         return out
     }
 
-    suspend fun downloadCif(fileId: String, target: File): Result<ParsedStructure> = withContext(Dispatchers.IO) {
+    suspend fun downloadCif(fileId: String, target: File, autoConvertConventional: Boolean = true): Result<ParsedStructure> = withContext(Dispatchers.IO) {
         val base = selectedMirror.apiBase.toHttpUrl()
         val url = base.newBuilder()
             .addPathSegment("$fileId.cif")

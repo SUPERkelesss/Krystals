@@ -930,6 +930,7 @@ fun KrystalsRoot(
             mpSearchOpenState = mpSearchOpenState,
             codSearchOpenState = codSearchOpenState,
             sponsorOpenState = sponsorOpenState,
+            autoConvertCell = settingsValues.autoConvertCell,
             viewModel = viewModel,
             activity = activity,
             preferences = preferences,
@@ -979,6 +980,7 @@ fun KrystalsRoot(
     if (mpSearchOpen) MpSearchScreen(
         context = activity,
         viewModel = viewModel,
+        autoConvertCell = settingsValues.autoConvertCell,
         onBack = { mpSearchOpen = false },
         onChangeKey = { mpSearchOpen = false; mpKeyDialogOpen = true },
         onMessage = ::showMessage,
@@ -987,6 +989,7 @@ fun KrystalsRoot(
     if (codSearchOpen) CodSearchScreen(
         context = activity,
         viewModel = viewModel,
+        autoConvertCell = settingsValues.autoConvertCell,
         onBack = { codSearchOpen = false },
         onMessage = ::showMessage,
         onOpenParsed = { parsed, name -> codSearchOpen = false; openParsed(parsed, name, null) },
@@ -1036,6 +1039,7 @@ private fun KrystalsRootDialogs(
     mpSearchOpenState: MutableState<Boolean>,
     codSearchOpenState: MutableState<Boolean>,
     sponsorOpenState: MutableState<Boolean>,
+    autoConvertCell: Boolean,
     viewModel: KrystalsViewModel,
     activity: MainActivity,
     preferences: SharedPreferences,
@@ -1262,13 +1266,14 @@ private fun KrystalsRootDialogs(
         )
     }
     if (presetOpen) PresetLibraryDialog(
-        context = activity,
-        viewModel = viewModel,
-        preferences = preferences,
-        onDismiss = { presetOpen = false },
-        onMessage = { showMessage(it) },
-        onOpenParsed = { parsed, name -> presetOpen = false; openParsed(parsed, name, null) },
-    )
+            context = activity,
+            viewModel = viewModel,
+            preferences = preferences,
+            autoConvertCell = autoConvertCell,
+            onDismiss = { presetOpen = false },
+            onMessage = { showMessage(it) },
+            onOpenParsed = { parsed, name -> presetOpen = false; openParsed(parsed, name, null) },
+        )
     if (mpKeyDialogOpen) MpApiKeyDialog(
         context = activity,
         onDismiss = { mpKeyDialogOpen = false },
@@ -3326,6 +3331,7 @@ private fun PresetLibraryDialog(
     context: Context,
     viewModel: KrystalsViewModel,
     preferences: android.content.SharedPreferences,
+    autoConvertCell: Boolean,
     onDismiss: () -> Unit,
     onMessage: (String) -> Unit,
     onOpenParsed: (ParsedStructure, String) -> Unit,
@@ -3377,7 +3383,7 @@ private fun PresetLibraryDialog(
                                 Text(localized("我的预设", "My presets"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
                             }
                         }
-                        if ("__user__" in expanded) items(userGroup, key = { "u_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
+                        if ("__user__" in expanded) items(userGroup, key = { "u_" + it.name }) { entry -> PresetRow(entry, context, viewModel, autoConvertCell, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
                     }
                     bundledGroups.forEach { (category, entries) ->
                         item(key = "header_$category") {
@@ -3386,7 +3392,7 @@ private fun PresetLibraryDialog(
                                 Text(category, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
                             }
                         }
-                        if (category in expanded) items(entries, key = { category + "_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
+                        if (category in expanded) items(entries, key = { category + "_" + it.name }) { entry -> PresetRow(entry, context, viewModel, autoConvertCell, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
                     }
                 }
             }
@@ -3410,6 +3416,7 @@ private fun PresetRow(
     entry: PresetEntry,
     context: Context,
     viewModel: KrystalsViewModel,
+    autoConvertCell: Boolean,
     onDismiss: () -> Unit,
     onMessage: (String) -> Unit,
     onDelete: () -> Unit,
@@ -3419,7 +3426,7 @@ private fun PresetRow(
     Row(
         Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable {
             scope.launch {
-                runCatching { withContext(Dispatchers.IO) { PresetRepository.openPreset(context, entry) } }
+                runCatching { withContext(Dispatchers.IO) { PresetRepository.openPreset(context, entry, autoConvertConventional = autoConvertCell) } }
                     .onSuccess { parsed ->
                         onDismiss()
                         onOpenParsed(parsed, entry.name)
@@ -3683,6 +3690,7 @@ private fun MpApiKeyDialog(
 private fun MpSearchScreen(
     context: Context,
     viewModel: KrystalsViewModel,
+    autoConvertCell: Boolean,
     onBack: () -> Unit,
     onChangeKey: () -> Unit,
     onMessage: (String) -> Unit,
@@ -3782,7 +3790,7 @@ localized(
                                 downloadingId = item.materialId
                                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                     val target = File(context.cacheDir, "${item.materialId}.cif")
-                                    val result = MaterialsProject.downloadCif(context, item.materialId, target)
+                                    val result = MaterialsProject.downloadCif(context, item.materialId, target, autoConvertConventional = autoConvertCell)
                                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                         downloadingId = null
                                         result.onSuccess { parsed ->
@@ -3827,6 +3835,7 @@ localized(
 private fun CodSearchScreen(
     context: Context,
     viewModel: KrystalsViewModel,
+    autoConvertCell: Boolean,
     onBack: () -> Unit,
     onMessage: (String) -> Unit,
     onOpenParsed: (ParsedStructure, String) -> Unit,
@@ -3964,7 +3973,7 @@ private fun CodSearchScreen(
                                 downloadingId = item.fileId
                                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                     val target = File(context.cacheDir, "cod-${item.fileId}.cif")
-                                    val result = CrystallographyOpenDatabase.downloadCif(item.fileId, target)
+                                    val result = CrystallographyOpenDatabase.downloadCif(item.fileId, target, autoConvertConventional = autoConvertCell)
                                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                         downloadingId = null
                                         result.onSuccess { parsed ->
