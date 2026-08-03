@@ -279,7 +279,8 @@ private fun FilamentLegacyStyleOverlay(
             val lightOffset = Offset(cos(theta) * cos(phi), -sin(theta) * cos(phi))
             val axisPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                 textSize = 30f
-                setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
+                // v0.8.27: no text shadow on axis labels (a/b/c, X/Y/Z).
+                clearShadowLayer()
             }
             val rotatedDirs = directions.mapIndexed { index, axis ->
                 val direction = (camera.rotation * axis).normalized()
@@ -292,7 +293,10 @@ private fun FilamentLegacyStyleOverlay(
                 val projectedLength = kotlin.math.sqrt(dx * dx + dy * dy)
                 val visibleLength = arrowLength * projectedLength
                 val unit = if (projectedLength > 0.0001f) Offset(dx / projectedLength, dy / projectedLength) else Offset.Zero
-                val end = origin + unit * visibleLength
+                // v0.8.27: arrow starts at the center-sphere surface (hub radius 12f),
+                // matching the sphere drawn at origin, not at the sphere's root.
+                val start = origin + unit * 12f
+                val end = start + unit * visibleLength
                 // Per v0.6.3: fixed arrowhead size (not scaled by projectedLength).
                 val headLength = headLengthBase
                 val shaftEnd = end - unit * headLength
@@ -302,7 +306,7 @@ private fun FilamentLegacyStyleOverlay(
                 // 3D cylinder shaft: draw as rotated rectangle with perpendicular gradient.
                 val shaftAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
                 drawContext.canvas.nativeCanvas.save()
-                drawContext.canvas.nativeCanvas.rotate(shaftAngle, origin.x, origin.y)
+                drawContext.canvas.nativeCanvas.rotate(shaftAngle, start.x, start.y)
                 val shaftLen = (visibleLength - headLength).coerceAtLeast(0f)
                 val shaftBrush = Brush.linearGradient(
                     listOf(
@@ -312,10 +316,10 @@ private fun FilamentLegacyStyleOverlay(
                         color,
                         color.copy(alpha = 0.4f),
                     ),
-                    start = Offset(origin.x, origin.y - halfWidth),
-                    end = Offset(origin.x, origin.y + halfWidth),
+                    start = Offset(start.x, start.y - halfWidth),
+                    end = Offset(start.x, start.y + halfWidth),
                 )
-                drawRect(shaftBrush, topLeft = Offset(origin.x, origin.y - halfWidth), size = androidx.compose.ui.geometry.Size(shaftLen, halfWidth * 2f))
+                drawRect(shaftBrush, topLeft = Offset(start.x, start.y - halfWidth), size = androidx.compose.ui.geometry.Size(shaftLen, halfWidth * 2f))
                 drawContext.canvas.nativeCanvas.restore()
                 // 3D cone arrowhead: filled triangle with perpendicular gradient.
                 val halfHead = headLength * 0.6f
