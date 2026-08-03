@@ -1,0 +1,291 @@
+#------------------------------------------------------------------------------
+#$Date: 2022-09-21 18:44:46 +0300 (Wed, 21 Sep 2022) $
+#$Revision: 278046 $
+#$URL: file:///home/coder/svn-repositories/_RELOADED_COD/cod-reloaded/cif/4/12/43/4124388.cif $
+#------------------------------------------------------------------------------
+#
+# This file is available in the Crystallography Open Database (COD),
+# http://www.crystallography.net/
+#
+# All data on this site have been placed in the public domain by the
+# contributors.
+#
+data_4124388
+loop_
+_publ_author_name
+'Yamada, Yasuhiro'
+'Yamada, Takumi'
+'Phuong, Le Quang'
+'Maruyama, Naoki'
+'Nishimura, Hidetaka'
+'Wakamiya, Atsushi'
+'Murata, Yasujiro'
+'Kanemitsu, Yoshihiko'
+_publ_section_title
+;
+ Dynamic Optical Properties of CH3NH3PbI3 Single Crystals As Revealed by
+ One- and Two-Photon Excited Photoluminescence Measurements.
+;
+_journal_name_full               'Journal of the American Chemical Society'
+_journal_page_first              150814091520002
+_journal_paper_doi               10.1021/jacs.5b04503
+_journal_year                    2015
+_chemical_formula_moiety         'I3 Pb, 4(C0.25 H1.50 N0.25) '
+_chemical_formula_sum            'C H6 I3 N Pb'
+_chemical_formula_weight         619.96
+_chemical_name_common            MAPbI3
+_chemical_name_systematic
+; 
+ ? 
+;
+_space_group_crystal_system      tetragonal
+_space_group_IT_number           140
+_space_group_name_Hall           '-I 4 2c'
+_space_group_name_H-M_alt        'I 4/m c m'
+_symmetry_space_group_name_Hall  '-I 4 2c'
+_symmetry_space_group_name_H-M   'I 4/m c m'
+_atom_sites_solution_hydrogens   geom
+_atom_sites_solution_primary     direct
+_atom_sites_solution_secondary   difmap
+_audit_creation_method           SHELXL-97
+_cell_angle_alpha                90.00
+_cell_angle_beta                 90.00
+_cell_angle_gamma                90.00
+_cell_formula_units_Z            4
+_cell_length_a                   8.8392(3)
+_cell_length_b                   8.8392(3)
+_cell_length_c                   12.6948(5)
+_cell_measurement_temperature    253(2)
+_cell_measurement_theta_max      25.89
+_cell_measurement_theta_min      3.21
+_cell_volume                     991.86(6)
+_computing_cell_refinement       HKL2000
+_computing_data_collection       CrystalClear
+_computing_data_reduction        HKL2000
+_computing_molecular_graphics    'Yadokari-XG 2011 (Wakita Nemoto et al., 2011)'
+_computing_publication_material  'Yadokari-XG 2011 (Wakita,Nemoto et al., 2011)'
+_computing_structure_refinement  'SHELXL-97 (Sheldrick, 1997)'
+_computing_structure_solution    'SHELXS-97 (Sheldrick, 1997)'
+_diffrn_ambient_temperature      253(2)
+_diffrn_detector_area_resol_mean 7.31
+_diffrn_measured_fraction_theta_full 0.996
+_diffrn_measured_fraction_theta_max 0.996
+_diffrn_measurement_device_type  'Rigaku Mercury'
+_diffrn_radiation_monochromator  graphite
+_diffrn_radiation_source         'fine-focus sealed tube'
+_diffrn_radiation_type           'MoKa '
+_diffrn_radiation_wavelength     0.71075
+_diffrn_reflns_av_R_equivalents  0.0584
+_diffrn_reflns_av_sigmaI/netI    0.0189
+_diffrn_reflns_limit_h_max       10
+_diffrn_reflns_limit_h_min       -10
+_diffrn_reflns_limit_k_max       10
+_diffrn_reflns_limit_k_min       -10
+_diffrn_reflns_limit_l_max       15
+_diffrn_reflns_limit_l_min       -15
+_diffrn_reflns_number            4361
+_diffrn_reflns_theta_full        25.89
+_diffrn_reflns_theta_max         25.89
+_diffrn_reflns_theta_min         3.21
+_exptl_absorpt_coefficient_mu    26.264
+_exptl_absorpt_correction_T_max  0.2278
+_exptl_absorpt_correction_T_min  0.1020
+_exptl_absorpt_correction_type   multi-scan
+_exptl_absorpt_process_details
+;
+ MULABS - Empirical Correction for Absorption Anisotropy.
+ Blessing, R. H., Acta Cryst., A51, 33-38 (1995).
+;
+_exptl_crystal_colour            black
+_exptl_crystal_density_diffrn    4.152
+_exptl_crystal_density_method    'not measured'
+_exptl_crystal_description       block
+_exptl_crystal_F_000             1040
+_exptl_crystal_size_max          0.16
+_exptl_crystal_size_mid          0.14
+_exptl_crystal_size_min          0.08
+_refine_diff_density_max         2.230
+_refine_diff_density_min         -3.389
+_refine_diff_density_rms         0.476
+_refine_ls_extinction_method     none
+_refine_ls_goodness_of_fit_ref   1.310
+_refine_ls_hydrogen_treatment    noref
+_refine_ls_matrix_type           full
+_refine_ls_number_parameters     27
+_refine_ls_number_reflns         280
+_refine_ls_number_restraints     19
+_refine_ls_restrained_S_all      1.263
+_refine_ls_R_factor_all          0.0554
+_refine_ls_R_factor_gt           0.0546
+_refine_ls_shift/su_max          0.000
+_refine_ls_shift/su_mean         0.000
+_refine_ls_structure_factor_coef Fsqd
+_refine_ls_weighting_details
+'calc w=1/[?^2^(Fo^2^)+(0.0857P)^2^+9.4355P] where P=(Fo^2^+2Fc^2^)/3'
+_refine_ls_weighting_scheme      calc
+_refine_ls_wR_factor_gt          0.1373
+_refine_ls_wR_factor_ref         0.1381
+_reflns_number_gt                270
+_reflns_number_total             280
+_reflns_threshold_expression     >2sigma(I)
+_cod_data_source_file            ja5b04503_si_002.cif
+_cod_data_source_block           MAPbI3
+_cod_original_sg_symbol_Hall     ' -I 4 2c '
+_cod_database_code               4124388
+loop_
+_symmetry_equiv_pos_as_xyz
+'x, y, z'
+'-x, -y, z'
+'x, -y, -z+1/2'
+'-x, y, -z+1/2'
+'-y, -x, -z+1/2'
+'y, x, -z+1/2'
+'y, -x, z'
+'-y, x, z'
+'x+1/2, y+1/2, z+1/2'
+'-x+1/2, -y+1/2, z+1/2'
+'x+1/2, -y+1/2, -z+1'
+'-x+1/2, y+1/2, -z+1'
+'-y+1/2, -x+1/2, -z+1'
+'y+1/2, x+1/2, -z+1'
+'y+1/2, -x+1/2, z+1/2'
+'-y+1/2, x+1/2, z+1/2'
+'-x, -y, -z'
+'x, y, -z'
+'-x, y, z-1/2'
+'x, -y, z-1/2'
+'y, x, z-1/2'
+'-y, -x, z-1/2'
+'-y, x, -z'
+'y, -x, -z'
+'-x+1/2, -y+1/2, -z+1/2'
+'x+1/2, y+1/2, -z+1/2'
+'-x+1/2, y+1/2, z'
+'x+1/2, -y+1/2, z'
+'y+1/2, x+1/2, z'
+'-y+1/2, -x+1/2, z'
+'-y+1/2, x+1/2, -z+1/2'
+'y+1/2, -x+1/2, -z+1/2'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_U_iso_or_equiv
+_atom_site_adp_type
+_atom_site_occupancy
+_atom_site_symmetry_multiplicity
+_atom_site_calc_flag
+_atom_site_refinement_flags
+_atom_site_disorder_assembly
+_atom_site_disorder_group
+Pb1 Pb 0.0000 0.0000 0.5000 0.0377(5) Uani 1 8 d S . .
+I1 I 0.0000 0.0000 0.2500 0.0717(11) Uani 1 8 d S . .
+I2 I 0.2942(2) 0.2058(2) 0.5000 0.0741(8) Uani 1 4 d S . .
+C1 C 0.544(10) 0.921(12) 0.784(8) 0.05(2) Uani 0.13 1 d PDU A -1
+H1 H 0.6092 1.0021 0.7699 0.080 Uiso 0.13 1 d P B -1
+H2 H 0.5573 0.8455 0.7246 0.080 Uiso 0.13 1 d P C -1
+H3 H 0.5515 0.8752 0.8463 0.080 Uiso 0.13 1 d P D -1
+N1 N 0.389(10) 0.987(14) 0.767(9) 0.05(2) Uani 0.13 1 d PDU A -1
+H4 H 0.3247 0.9139 0.7303 0.082 Uiso 0.13 1 d P E -1
+H5 H 0.3814 1.0681 0.7343 0.082 Uiso 0.13 1 d P F -1
+H6 H 0.3393 0.9908 0.8310 0.082 Uiso 0.13 1 d P G -1
+loop_
+_atom_site_aniso_label
+_atom_site_aniso_U_11
+_atom_site_aniso_U_22
+_atom_site_aniso_U_33
+_atom_site_aniso_U_23
+_atom_site_aniso_U_13
+_atom_site_aniso_U_12
+Pb1 0.0372(6) 0.0372(6) 0.0385(9) 0.000 0.000 0.000
+I1 0.0919(16) 0.0919(16) 0.0314(14) 0.000 0.000 0.000
+I2 0.0640(10) 0.0640(10) 0.0943(15) 0.000 0.000 -0.0337(10)
+C1 0.05(2) 0.05(2) 0.05(2) 0.000(9) 0.001(9) 0.000(9)
+N1 0.06(2) 0.05(2) 0.05(2) 0.001(9) -0.002(9) 0.001(9)
+loop_
+_atom_type_symbol
+_atom_type_description
+_atom_type_scat_dispersion_real
+_atom_type_scat_dispersion_imag
+_atom_type_scat_source
+C C 0.0033 0.0016 'International Tables Vol C Tables 4.2.6.8 and 6.1.1.4'
+H H 0.0000 0.0000 'International Tables Vol C Tables 4.2.6.8 and 6.1.1.4'
+N N 0.0061 0.0033 'International Tables Vol C Tables 4.2.6.8 and 6.1.1.4'
+I I -0.4742 1.8119 'International Tables Vol C Tables 4.2.6.8 and 6.1.1.4'
+Pb Pb -3.3944 10.1111 'International Tables Vol C Tables 4.2.6.8 and 6.1.1.4'
+loop_
+_geom_angle_atom_site_label_1
+_geom_angle_atom_site_label_2
+_geom_angle_atom_site_label_3
+_geom_angle
+_geom_angle_site_symmetry_1
+_geom_angle_site_symmetry_3
+I2 Pb1 I2 180.0 . 17_556
+I2 Pb1 I2 90.0 . 27_545
+I2 Pb1 I2 90.0 17_556 27_545
+I2 Pb1 I2 90.0 . 11_455
+I2 Pb1 I2 90.0 17_556 11_455
+I2 Pb1 I2 180.0 27_545 11_455
+I2 Pb1 I1 90.0 . 17_556
+I2 Pb1 I1 90.0 17_556 17_556
+I2 Pb1 I1 90.0 27_545 17_556
+I2 Pb1 I1 90.0 11_455 17_556
+I2 Pb1 I1 90.0 . .
+I2 Pb1 I1 90.0 17_556 .
+I2 Pb1 I1 90.0 27_545 .
+I2 Pb1 I1 90.0 11_455 .
+I1 Pb1 I1 180.0 17_556 .
+Pb1 I1 Pb1 180.0 3 .
+Pb1 I2 Pb1 159.93(10) 11 .
+N1 C1 H1 104(8) . .
+N1 C1 H2 105(10) . .
+H1 C1 H2 107(9) . .
+N1 C1 H3 111(9) . .
+H1 C1 H3 118(10) . .
+H2 C1 H3 111(10) . .
+C1 N1 H4 110(10) . .
+C1 N1 H5 118(10) . .
+H4 N1 H5 107(10) . .
+C1 N1 H6 109(10) . .
+H4 N1 H6 100(10) . .
+H5 N1 H6 112(10) . .
+loop_
+_geom_bond_atom_site_label_1
+_geom_bond_atom_site_label_2
+_geom_bond_distance
+_geom_bond_site_symmetry_2
+Pb1 I2 3.1737(5) .
+Pb1 I2 3.1737(5) 17_556
+Pb1 I2 3.1737(5) 27_545
+Pb1 I2 3.1737(5) 11_455
+Pb1 I1 3.17370(13) 17_556
+Pb1 I1 3.17370(13) .
+I1 Pb1 3.17370(13) 3
+I2 Pb1 3.1737(5) 11
+C1 N1 1.51(3) .
+C1 H1 0.94(11) .
+C1 H2 1.01(10) .
+C1 H3 0.89(10) .
+N1 H4 0.98(13) .
+N1 H5 0.83(10) .
+N1 H6 0.92(11) .
+loop_
+_geom_torsion_atom_site_label_1
+_geom_torsion_atom_site_label_2
+_geom_torsion_atom_site_label_3
+_geom_torsion_atom_site_label_4
+_geom_torsion
+_geom_torsion_site_symmetry_1
+_geom_torsion_site_symmetry_4
+I2 Pb1 I1 Pb1 0.0 . 3
+I2 Pb1 I1 Pb1 0.0 17_556 3
+I2 Pb1 I1 Pb1 0.0 27_545 3
+I2 Pb1 I1 Pb1 0.0 11_455 3
+I1 Pb1 I1 Pb1 0.0 17_556 3
+I2 Pb1 I2 Pb1 0.0 17_556 11
+I2 Pb1 I2 Pb1 180.0 27_545 11
+I2 Pb1 I2 Pb1 0.0 11_455 11
+I1 Pb1 I2 Pb1 -90.0 17_556 11
+I1 Pb1 I2 Pb1 90.0 . 11

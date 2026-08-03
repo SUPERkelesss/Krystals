@@ -1,0 +1,81 @@
+#------------------------------------------------------------------------------
+#$Date: 2025-08-18 18:02:58 +0300 (Mon, 18 Aug 2025) $
+#$Revision: 301777 $
+#$URL: file:///home/coder/svn-repositories/_RELOADED_COD/cod-reloaded/cif/1/52/81/1528159.cif $
+#------------------------------------------------------------------------------
+#
+# This file is available in the Crystallography Open Database (COD),
+# http://www.crystallography.net/
+#
+# All data on this site have been placed in the public domain by the
+# contributors.
+#
+data_1528159
+loop_
+_publ_author_name
+'Udalova, V.V.'
+'Pinsker, Z.G.'
+_publ_section_title
+;
+ Electron diffraction study of the structure of ammonium sulfate
+;
+_journal_name_full               Kristallografiya
+_journal_page_first              538
+_journal_page_last               547
+_journal_volume                  8
+_journal_year                    1963
+_chemical_formula_sum            'H8 N2 O4 S'
+_chemical_name_systematic        '(N H4)2 (S O4)'
+_space_group_IT_number           62
+_symmetry_space_group_name_Hall  '-P 2n 2a'
+_symmetry_space_group_name_H-M   'P m c n'
+_cell_angle_alpha                90
+_cell_angle_beta                 90
+_cell_angle_gamma                90
+_cell_formula_units_Z            4
+_cell_length_a                   5.97
+_cell_length_b                   10.6
+_cell_length_c                   7.76
+_cell_volume                     491.068
+_citation_journal_id_ASTM        KRISAJ
+_cod_data_source_file            Udalova_KRISAJ_1963_1684.cif
+_cod_data_source_block           H8N2O4S1
+_cod_original_cell_volume        491.0683
+_cod_original_sg_symbol_Hall     '-P 2ac 2n (y,z,x)'
+_cod_original_formula_sum        'H8 N2 O4 S1'
+_cod_database_code               1528159
+loop_
+_symmetry_equiv_pos_as_xyz
+x,y,z
+-x,y+1/2,-z+1/2
+-x+1/2,-y+1/2,z+1/2
+x+1/2,-y,-z
+-x,-y,-z
+x,-y-1/2,z-1/2
+x-1/2,y-1/2,-z-1/2
+-x-1/2,y,z
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+_atom_site_U_iso_or_equiv
+S1 S+6 0.25 0.42 0.256 1 0.0
+H4 H+1 0.25 0.7 0.138 1 0.0
+H1 H+1 0.25 0.059 0.044 1 0.0
+H5 H+1 0.111 0.063 0.258 1 0.0
+O1 O-2 0.25 0.409 0.045 1 0.0
+H3 H+1 0.25 0.72 0.38 1 0.0
+H2 H+1 0.25 0.193 0.147 1 0.0
+N1 N-3 0.25 0.097 0.192 1 0.0
+O2 O-2 0.25 0.54 0.308 1 0.0
+H6 H+1 0.111 0.861 0.457 1 0.0
+O3 O-2 0.041 0.352 0.317 1 0.0
+N2 N-3 0.25 0.805 0.48 1 0.0
+loop_
+_cod_related_entry_id
+_cod_related_entry_database
+_cod_related_entry_code
+1 PubChem 6097028
