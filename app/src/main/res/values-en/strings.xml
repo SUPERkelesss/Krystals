@@ -24,7 +24,7 @@
     <string name="sponsor">Sponsor</string>
     <string name="feedback">Feedback</string>
     <string name="sponsor_title">Sponsor Krystals</string>
-    <string name="open_preset_library">Open from preset library…</string>
+    <string name="open_preset_library">Open from preset library</string>
     <string name="save_to_presets">Save to presets</string>
     <string name="preset_library">Preset library</string>
     <string name="delete_preset_title">Delete preset?</string>
