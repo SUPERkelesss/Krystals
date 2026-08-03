@@ -19,7 +19,7 @@ class H3po4CorpusCheckTest {
     fun corpusH3po4Renders10Hbonds() {
         val dir = sequenceOf(File("../res/cifs_example"), File("res/cifs_example"))
             .firstOrNull { it.isDirectory } ?: error("corpus missing")
-        val parsed = CifCodec.parseStructure(File(dir, "08_molecular_ice/h3po4_H3PO4.cif").readText(), 0)
+        val parsed = CifCodec.parseStructure(File(dir, "08_molecular/h3po4_H3PO4.cif").readText(), 0)
         val structure = parsed.structure
         val result = BondValence.smartIonicRules(structure, BondConfiguration(), 0.45)
         val network = BondDetector.buildNetwork(structure, BondConfiguration(rules = result.rules))
