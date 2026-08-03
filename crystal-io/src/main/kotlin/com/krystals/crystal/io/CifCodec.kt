@@ -126,7 +126,7 @@ private val replacementPrefixes = listOf(
             block.loopContaining("_atom_site_fract_x", "_atom_site_cartn_x") != null
     }
 
-    fun parseStructure(source: String, blockIndex: Int? = null): ParsedStructure {
+    fun parseStructure(source: String, blockIndex: Int? = null, autoConvertConventional: Boolean = true): ParsedStructure {
         val document = parse(source)
         val candidates = structuralBlockIndices(document)
         require(candidates.isNotEmpty()) { "CIF contains no structure with a unit cell and atom sites" }
@@ -143,10 +143,12 @@ private val replacementPrefixes = listOf(
         } else {
             CrystalEditor.isConventionalCell(parsedBlock.structure)
         }
-        val structure = if (isConventional) {
-            parsedBlock.structure.copy(isConventional = true)
-        } else {
-            convertPrimitiveToConventional(parsedBlock.structure, parsedBlock.bondConfiguration)
+        // Per v0.8.26: when autoConvertConventional is false, keep the original cell as-is
+        // (user preference to view primitive cells without automatic conversion).
+        val structure = when {
+            !autoConvertConventional -> parsedBlock.structure
+            isConventional -> parsedBlock.structure.copy(isConventional = true)
+            else -> convertPrimitiveToConventional(parsedBlock.structure, parsedBlock.bondConfiguration)
         }
         return ParsedStructure(
             document,
@@ -165,10 +167,10 @@ private val replacementPrefixes = listOf(
         sites = emptyList(),
     ), bondConfiguration: BondConfiguration = BondConfiguration(), displayMetadata: CifDisplayMetadata = CifDisplayMetadata()): ParsedStructure {
         val source = canonicalStructure(structure, bondConfiguration.rules, displayMetadata, includeHeader = true)
-        return parseStructureAllowEmpty(source)
+        return parseStructureAllowEmpty(source, autoConvertConventional = true)
     }
 
-    private fun parseStructureAllowEmpty(source: String): ParsedStructure {
+    private fun parseStructureAllowEmpty(source: String, autoConvertConventional: Boolean = true): ParsedStructure {
         val document = parse(source)
         val parsedBlock = toStructure(document.blocks[0])
         val hasExplicitFlag = document.blocks[0].scalar("_krystals_is_conventional") != null
@@ -179,10 +181,10 @@ private val replacementPrefixes = listOf(
         } else {
             CrystalEditor.isConventionalCell(parsedBlock.structure)
         }
-        val structure = if (isConventional) {
-            parsedBlock.structure.copy(isConventional = true)
-        } else {
-            convertPrimitiveToConventional(parsedBlock.structure, parsedBlock.bondConfiguration)
+        val structure = when {
+            !autoConvertConventional -> parsedBlock.structure
+            isConventional -> parsedBlock.structure.copy(isConventional = true)
+            else -> convertPrimitiveToConventional(parsedBlock.structure, parsedBlock.bondConfiguration)
         }
         return ParsedStructure(document, 0, structure, parsedBlock.bondConfiguration, parsedBlock.displayMetadata)
     }

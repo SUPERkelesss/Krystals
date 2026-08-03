@@ -202,4 +202,39 @@ class CifCodecTest {
         // The normal rule's distance values must appear in the output.
         assertTrue("1.5" in written, "normal rule maxAngstrom must appear")
     }
+
+    @Test
+    fun autoConvertConventionalFalsePreservesNonConventionalCell() {
+        // Space group with :R suffix — the parser sets isConventional=false.
+        val source = """
+            data_test
+            _symmetry_space_group_name_H-M 'R 3 :R'
+            _cell_length_a 5.0
+            _cell_length_b 5.0
+            _cell_length_c 5.0
+            _cell_angle_alpha 60
+            _cell_angle_beta 60
+            _cell_angle_gamma 60
+            loop_
+            _symmetry_equiv_pos_site_id
+            _symmetry_equiv_pos_as_xyz
+            1 'x,y,z'
+            loop_
+            _atom_site_label
+            _atom_site_type_symbol
+            _atom_site_fract_x
+            _atom_site_fract_y
+            _atom_site_fract_z
+            O1 O 0.2 0.3 0.4
+        """.trimIndent()
+        // Default autoConvertConventional=true: converts to conventional.
+        val converted = CifCodec.parseStructure(source, autoConvertConventional = true)
+        assertTrue(converted.structure.isConventional, "converted cell must be marked conventional")
+        // autoConvertConventional=false: the structure is kept as-is — not converted.
+        val primitive = CifCodec.parseStructure(source, autoConvertConventional = false)
+        // The :R cell is not conventional, but also not converted, so the lattice should
+        // differ from the converted version (rhombohedral vs hexagonal setting).
+        assertTrue(!primitive.structure.isConventional || primitive.structure.lattice != converted.structure.lattice,
+            "non-converted cell should differ from auto-converted cell")
+    }
 }

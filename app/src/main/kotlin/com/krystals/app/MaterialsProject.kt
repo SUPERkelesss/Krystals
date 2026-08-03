@@ -163,7 +163,7 @@ object MaterialsProject {
      * operations so the saved CIF matches the original MP conventional cell. Otherwise
      * CifCodec will convert a genuine primitive cell to conventional as usual.
      */
-    suspend fun downloadCif(context: Context, materialId: String, target: File): Result<ParsedStructure> = withContext(Dispatchers.IO) {
+    suspend fun downloadCif(context: Context, materialId: String, target: File, autoConvertConventional: Boolean = true): Result<ParsedStructure> = withContext(Dispatchers.IO) {
         val key = getKey(context) ?: return@withContext Result.failure(IllegalStateException("API key not set"))
         runCatching {
             // Fetch the conventional structure + real symmetry from the new API.

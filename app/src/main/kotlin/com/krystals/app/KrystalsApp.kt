@@ -317,6 +317,11 @@ fun KrystalsRoot(
     viewModel: KrystalsViewModel = viewModel(),
 ) {
     val preferences = remember { activity.getSharedPreferences("krystals", 0) }
+    var settingsValues by remember { mutableStateOf(PreferencesStore.load(preferences)) }
+    val onSettingsChange: (SettingsValues) -> Unit = { sv ->
+        settingsValues = sv
+        PreferencesStore.save(preferences, sv)
+    }
     var themeMode by remember {
         mutableStateOf(runCatching { ThemeMode.valueOf(preferences.getString("theme", ThemeMode.SYSTEM.name)!!) }.getOrDefault(ThemeMode.SYSTEM))
     }
@@ -332,8 +337,19 @@ fun KrystalsRoot(
     fun applyLanguage(value: String) {
         if (language == value) return
         language = value
-        preferences.edit().putString("language", value).apply()
+        preferences.edit().putString("language", value).putBoolean("pending_language_restart", true).apply()
         activity.recreate()
+    }
+    // Per v0.8.26: show a loading overlay on language-switch restart.
+    var languageSwitching by remember {
+        mutableStateOf(preferences.getBoolean("pending_language_restart", false))
+    }
+    LaunchedEffect(languageSwitching) {
+        if (languageSwitching) {
+            kotlinx.coroutines.delay(500)
+            preferences.edit().putBoolean("pending_language_restart", false).apply()
+            languageSwitching = false
+        }
     }
     // Per v0.5.2a: load the persisted global appearance once at startup (falls back to defaults).
     LaunchedEffect(Unit) {
@@ -435,7 +451,9 @@ fun KrystalsRoot(
     // Per v0.6.5: check for updates on startup.
     // Per v0.8.25: at most once per 24h — the timestamp is written before the request so a
     // failed check (offline etc.) still counts and isn't retried on every cold start.
+    // Per v0.8.26: skip update check when autoCheckUpdate is disabled.
     LaunchedEffect(Unit) {
+        if (!settingsValues.autoCheckUpdate) return@LaunchedEffect
         val now = System.currentTimeMillis()
         val lastChecked = preferences.getLong("last_update_check_ms", 0L)
         if (now - lastChecked < UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect
@@ -549,16 +567,26 @@ fun KrystalsRoot(
                 Result.success(
                     withContext(Dispatchers.Default) {
                         val expandedSize = SymmetryExpander.expand(structure).size
-                        // Per v0.8.12: all-non-metal structures default to the bonding path and
-                        // ignore the smartIonic result (v0.8.7) — skip the expensive smartIonic
-                        // pre-computation (full Voronoi + BVS) entirely for them.
-                        if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
-                            CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null)
-                        } else {
-                        val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
-                            runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon) }.getOrNull()
-                        }
-                            CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
+                        // Per v0.8.26: dispatch by user-selected bond-rule mode.
+                        when (settingsValues.bondRuleMode) {
+                            BondRuleMode.AUTO -> {
+                                if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
+                                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null)
+                                } else {
+                                    val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                                        runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon) }.getOrNull()
+                                    }
+                                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
+                                }
+                            }
+                            BondRuleMode.SMART_IONIC -> {
+                                val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                                    runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon) }.getOrNull()
+                                }
+                                CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
+                            }
+                            BondRuleMode.BONDING -> CrystalEditor.rebuildBondRules(structure, bondConfiguration, RadiusSource.BONDING, epsilon)
+                            BondRuleMode.VDW -> CrystalEditor.rebuildBondRules(structure, bondConfiguration, RadiusSource.VDW, epsilon)
                         }
                     }
                 )
@@ -605,9 +633,25 @@ fun KrystalsRoot(
     fun doOpenParsed(parsed: ParsedStructure, name: String, uri: Uri?, expandedEstimate: Int) {
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
+        // Per v0.8.26: apply user preference defaults for the new tab.
+        tab.visibility = tab.visibility.copy(showBonds = settingsValues.defaultShowBonds)
+        // Default extend-bonds setting.
+        tab.structuralExpansion = when (settingsValues.defaultExtendBonds) {
+            ExtendBondsDefault.ALL -> true
+            ExtendBondsDefault.METALS_ONLY -> parsed.structure.sites.any { isMetal(it.species.symbol) }
+            ExtendBondsDefault.NEVER -> false
+        }
+        // Default polyhedra visibility.
+        val siteIds = parsed.structure.sites.map { it.id }.toSet()
+        tab.visibility = tab.visibility.copy(polyhedronSites = when (settingsValues.defaultPolyhedra) {
+            PolyhedraDefault.ALL -> siteIds
+            PolyhedraDefault.METALS_ONLY -> parsed.structure.sites.filter { isMetal(it.species.symbol) }.map { it.id }.toSet()
+            PolyhedraDefault.NEVER -> emptySet()
+        })
         // Per v0.7.0: extract user comments from CIF source.
         tab.comments = CifComments.extract(parsed.document.source)
-        openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
+        // Per v0.8.26: skip bond computation when the user disables auto-bond-rules.
+        if (settingsValues.autoBondRules) openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
     }
 
     /** Per v0.5.0: add a parsed structure, synthesizing bond rules off-UI with the computing overlay.
@@ -646,7 +690,7 @@ fun KrystalsRoot(
                 if (pending.candidates.size == 1) {
                     // Per v0.6.4: parseStructure can be heavy (resolves space groups, creates
                     // symmetry operations) — run on Dispatchers.Default to avoid blocking the UI.
-                    val parsed = withContext(Dispatchers.Default) { CifCodec.parseStructure(pending.text, pending.candidates.first()) }
+                    val parsed = withContext(Dispatchers.Default) { CifCodec.parseStructure(pending.text, pending.candidates.first(), autoConvertConventional = settingsValues.autoConvertCell) }
                     openParsed(parsed, pending.name, pending.uri)
                 } else pendingOpen = pending
             } else {
@@ -676,7 +720,7 @@ fun KrystalsRoot(
                     val contentWithComments = CifComments.inject(content, tab.comments)
                     withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, contentWithComments) }
                     tab.uri = uri; tab.isNew = false; tab.dirty = false; tab.savedName = tab.name
-                    tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex)
+                    tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell)
                 }.onSuccess {
                     showMessage("Saved ${tab.name}")
                 }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
@@ -702,7 +746,7 @@ fun KrystalsRoot(
                 // Per v0.7.0: inject user comments into CIF before writing.
                 val contentWithComments = CifComments.inject(content, tab.comments)
                 withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, contentWithComments) }
-                tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex)
+                tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell)
                 tab.dirty = false
             }.onSuccess { showMessage("Saved ${tab.name}"); afterSave() }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
         }
@@ -761,6 +805,19 @@ fun KrystalsRoot(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
         ) { _ ->
             Box(Modifier.fillMaxSize()) {
+                // Per v0.8.26: language switching overlay.
+                if (languageSwitching) {
+                    Box(
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator()
+                            Spacer(Modifier.height(16.dp))
+                            Text(localized("切换中...", "Switching..."))
+                        }
+                    }
+                }
                 if (viewModel.tabs.isEmpty()) {
                     HomeScreen(
                         onOpen = { openLauncher.launch(arrayOf("chemical/x-cif", "text/plain", "application/octet-stream")) },
@@ -775,6 +832,17 @@ fun KrystalsRoot(
                     ViewerScreen(
                         viewModel = viewModel,
                         preferences = preferences,
+                        settingsValues = settingsValues,
+                        onSettingsChange = onSettingsChange,
+                        onRestoreDefaults = {
+                            val confirm = true // Auto-confirmed; can add dialog later
+                            PreferencesStore.clearAll(preferences)
+                            val defaults = SettingsValues.defaults()
+                            settingsValues = defaults
+                            PreferencesStore.save(preferences, defaults)
+                            if (language != defaults.language && defaults.language != "auto") applyLanguage(defaults.language)
+                            if (themeMode != defaults.theme) { themeMode = defaults.theme; preferences.edit().putString("theme", defaults.theme.name).apply() }
+                        },
                         onSave = { save(it) },
                         onOpen = { openLauncher.launch(arrayOf("chemical/x-cif", "text/plain", "application/octet-stream")) },
                         onOpenPreset = { presetOpen = true },
@@ -862,6 +930,7 @@ fun KrystalsRoot(
             mpSearchOpenState = mpSearchOpenState,
             codSearchOpenState = codSearchOpenState,
             sponsorOpenState = sponsorOpenState,
+            autoConvertCell = settingsValues.autoConvertCell,
             viewModel = viewModel,
             activity = activity,
             preferences = preferences,
@@ -911,6 +980,7 @@ fun KrystalsRoot(
     if (mpSearchOpen) MpSearchScreen(
         context = activity,
         viewModel = viewModel,
+        autoConvertCell = settingsValues.autoConvertCell,
         onBack = { mpSearchOpen = false },
         onChangeKey = { mpSearchOpen = false; mpKeyDialogOpen = true },
         onMessage = ::showMessage,
@@ -919,10 +989,21 @@ fun KrystalsRoot(
     if (codSearchOpen) CodSearchScreen(
         context = activity,
         viewModel = viewModel,
+        autoConvertCell = settingsValues.autoConvertCell,
         onBack = { codSearchOpen = false },
         onMessage = ::showMessage,
         onOpenParsed = { parsed, name -> codSearchOpen = false; openParsed(parsed, name, null) },
     )
+    // Per v0.8.26: apply the user's COD mirror preference whenever the COD panel opens.
+    LaunchedEffect(codSearchOpen) {
+        if (codSearchOpen) {
+            CrystallographyOpenDatabase.setMirrorMode(
+                mode = settingsValues.codMirrorMode,
+                customUrl = settingsValues.codCustomUrl,
+                fixedIndex = settingsValues.codFixedIndex,
+            )
+        }
+    }
     }
     }
 }
@@ -958,6 +1039,7 @@ private fun KrystalsRootDialogs(
     mpSearchOpenState: MutableState<Boolean>,
     codSearchOpenState: MutableState<Boolean>,
     sponsorOpenState: MutableState<Boolean>,
+    autoConvertCell: Boolean,
     viewModel: KrystalsViewModel,
     activity: MainActivity,
     preferences: SharedPreferences,
@@ -1043,7 +1125,7 @@ private fun KrystalsRootDialogs(
             onDismissRequest = { pendingOpen = null },
             title = { Text(localized("选择结构", "Select structure")) },
             text = { Column { pending.candidates.forEach { index -> TextButton(onClick = {
-                runCatching { CifCodec.parseStructure(pending.text, index) }
+                runCatching { CifCodec.parseStructure(pending.text, index, autoConvertConventional = true) }
                     .onSuccess { parsed -> pendingOpen = null; openParsed(parsed, pending.name, pending.uri) }
                     .onFailure { if (it is com.krystals.crystal.core.CifParseException) { pendingOpen = null; cifWarningOpen = true } else showMessage(it.message ?: "Unable to open CIF") }
             }) { Text(document.blocks[index].name) } } } },
@@ -1184,13 +1266,14 @@ private fun KrystalsRootDialogs(
         )
     }
     if (presetOpen) PresetLibraryDialog(
-        context = activity,
-        viewModel = viewModel,
-        preferences = preferences,
-        onDismiss = { presetOpen = false },
-        onMessage = { showMessage(it) },
-        onOpenParsed = { parsed, name -> presetOpen = false; openParsed(parsed, name, null) },
-    )
+            context = activity,
+            viewModel = viewModel,
+            preferences = preferences,
+            autoConvertCell = autoConvertCell,
+            onDismiss = { presetOpen = false },
+            onMessage = { showMessage(it) },
+            onOpenParsed = { parsed, name -> presetOpen = false; openParsed(parsed, name, null) },
+        )
     if (mpKeyDialogOpen) MpApiKeyDialog(
         context = activity,
         onDismiss = { mpKeyDialogOpen = false },
@@ -1256,9 +1339,6 @@ private fun HomeScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.Science, null) }, onClick = { menuOpen = false; onOnlineSource() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
                 HorizontalDivider()
-                LanguageMenuItem(language, onLanguage)
-                ThemeMenuItem(themeMode, onTheme)
-                HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
                     TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     TextButton(onClick = { menuOpen = false; onFeedback() }) { Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -1308,6 +1388,7 @@ private sealed class ViewerPanel {
     object Display : ViewerPanel()
     object Info : ViewerPanel()
     object Appearance : ViewerPanel()
+    object Settings : ViewerPanel()
 }
 
 @Composable
@@ -1338,6 +1419,9 @@ private fun ViewerScreen(
     backgroundFollowTheme: Boolean,
     onBackgroundFollowThemeChange: (Boolean) -> Unit,
     secretUnlockTrigger: Int = 0,
+    settingsValues: SettingsValues = SettingsValues.defaults(),
+    onSettingsChange: (SettingsValues) -> Unit = {},
+    onRestoreDefaults: () -> Unit = {},
 ) {
     val tab = viewModel.current ?: return
     val scope = rememberCoroutineScope()
@@ -1555,16 +1639,29 @@ private fun ViewerScreen(
                         exporting = true
                         exportJob = scope.launch {
                             try {
-                                // Per v0.6.3: ensure the scene is submitted before exporting,
-                                // so renderToBitmap doesn't return null on first attempt.
                                 val renderer = activeFilamentRenderer
+                                // Per v0.8.26: export quality — HIGH = full res, LOW = half res.
+                                val useHigh = settingsValues.exportQuality == ExportQuality.HIGH
                                 val bitmap = if (renderer != null) {
-                                    runCatching { renderer.submit(scene); renderer.renderToBitmap(useMsaa = useMsaa) }.getOrNull()
+                                    runCatching { renderer.submit(scene); renderer.renderToBitmap(useMsaa = useMsaa && useHigh) }.getOrNull()?.let {
+                                        if (useHigh) it else android.graphics.Bitmap.createScaledBitmap(it, it.width / 2, it.height / 2, true)
+                                    }
                                 } else null
                                 if (bitmap == null) {
                                     onMessage("Unable to export current crystal")
                                 } else {
-                                    onExport(bitmap)
+                                    val finalBitmap = if (settingsValues.exportShowAxes || settingsValues.exportShowMeasurements) {
+                                        bitmap.copy(android.graphics.Bitmap.Config.ARGB_8888, true).also { out ->
+                                            ExportOverlay.apply(
+                                                bitmap = out,
+                                                scene = scene,
+                                                state = tab.interactionState,
+                                                includeAxes = settingsValues.exportShowAxes,
+                                                includeMeasurements = settingsValues.exportShowMeasurements,
+                                            )
+                                        }
+                                    } else bitmap
+                                    onExport(finalBitmap)
                                 }
                             } catch (error: Exception) {
                                 if (error !is CancellationException) onMessage(error.message ?: "Export failed")
@@ -1603,9 +1700,6 @@ private fun ViewerScreen(
                     }
                 })
                 HorizontalDivider()
-                LanguageMenuItem(language, onLanguage)
-                ThemeMenuItem(themeMode, onTheme = { mode -> viewModel.tabs.forEach { it.recordHistory() }; onTheme(mode) })
-                HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
                     TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     TextButton(onClick = { menuOpen = false; onFeedback() }) { Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -1625,6 +1719,7 @@ private fun ViewerScreen(
                 IconButton(onClick = { tab.undo() }, enabled = tab.history.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, localized("撤回", "Undo")) }
                 IconButton(onClick = { tab.redo() }, enabled = tab.history.canRedo) { Icon(Icons.AutoMirrored.Filled.Redo, localized("前进", "Redo")) }
                 IconButton(onClick = { activePanel = ViewerPanel.Appearance }) { Icon(Icons.Default.ColorLens, null) }
+                IconButton(onClick = { activePanel = ViewerPanel.Settings }) { Icon(Icons.Default.Settings, null) }
             },
         )
         DocumentTabs(viewModel, onClose, ::selectTab)
@@ -1762,37 +1857,39 @@ private fun ViewerScreen(
 
             // Per v0.7.0: lock button at viewer top-right.
             // Per v0.8.1: inactive = 50% opacity; active = solid circular background + hollow icon.
-            // Per v0.6.5: icon size matched (36dp outer + 24dp icon in both states).
-            IconButton(
-                onClick = { dispatchViewerCommand(ViewerCommand.ToggleLock) },
-                modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
-            ) {
-                if (tab.interactionState.session.locked) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.onSurface),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Outlined.LockOpen,
-                            null,
-                            tint = MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.size(24.dp),
-                        )
-                    }
-                } else {
-                    Box(
-                        modifier = Modifier.size(36.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Default.Lock,
-                            null,
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                            modifier = Modifier.size(24.dp),
-                        )
+            // Per v0.8.26: hidden when the user hides it, unless already locked (to prevent lock-in).
+            if (settingsValues.showLockButton || tab.interactionState.session.locked) {
+                IconButton(
+                    onClick = { dispatchViewerCommand(ViewerCommand.ToggleLock) },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+                ) {
+                    if (tab.interactionState.session.locked) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.onSurface),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Outlined.LockOpen,
+                                null,
+                                tint = MaterialTheme.colorScheme.surface,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier.size(36.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Default.Lock,
+                                null,
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -1866,13 +1963,16 @@ sceneBuildError?.let { message ->
                         else sites.sortedBy { it.label }.map { LegendEntry(it.label, argb) }
                     }
             }
-            ElementLegend(
-                entries = legendEntries,
-                expanded = legendExpanded,
-                onToggle = { legendExpanded = !legendExpanded },
-                onExpand = { legendExpanded = true },
-                modifier = Modifier.align(Alignment.BottomStart).padding(14.dp),
-            )
+            // Per v0.8.26: legend toggle respects user preference.
+            if (settingsValues.showLegend) {
+                ElementLegend(
+                    entries = legendEntries,
+                    expanded = legendExpanded,
+                    onToggle = { legendExpanded = !legendExpanded },
+                    onExpand = { legendExpanded = true },
+                    modifier = Modifier.align(Alignment.BottomStart).padding(14.dp),
+                )
+            }
 
             // Per v0.7.1: persistent overlay message for atom-edit / bond-draw flows.
             persistentMessage?.let { msg ->
@@ -1891,7 +1991,8 @@ sceneBuildError?.let { message ->
                 }
             }
 
-            val floatingAlpha by animateFloatAsState(targetValue = if (toolOpen) 1f else 0.45f, label = "floatingAlpha")
+            // Per v0.8.26: use user-configured collapsed alpha.
+            val floatingAlpha by animateFloatAsState(targetValue = if (toolOpen) 1f else settingsValues.ballCollapsedAlpha, label = "floatingAlpha")
             // Per v0.2.2: floating-ball palette uses the project's two purples (deep 0xFF7542A5 /
             // light 0xFFCFA7F5). Dark mode = deep bg + light icon; light mode = light bg + deep icon.
             // The active (measure/lock) tool buttons invert this pairing.
@@ -2094,6 +2195,12 @@ sceneBuildError?.let { message ->
         onPreviewEnd = { previewAppearance = null },
         backgroundFollowTheme = backgroundFollowTheme,
         onBackgroundFollowThemeChange = onBackgroundFollowThemeChange,
+    )
+    if (activePanel == ViewerPanel.Settings) SettingsPanel(
+        settings = settingsValues,
+        onChange = onSettingsChange,
+        onDismiss = { activePanel = ViewerPanel.None },
+        onRestoreDefaults = onRestoreDefaults,
     )
 }
 
@@ -3224,6 +3331,7 @@ private fun PresetLibraryDialog(
     context: Context,
     viewModel: KrystalsViewModel,
     preferences: android.content.SharedPreferences,
+    autoConvertCell: Boolean,
     onDismiss: () -> Unit,
     onMessage: (String) -> Unit,
     onOpenParsed: (ParsedStructure, String) -> Unit,
@@ -3275,7 +3383,7 @@ private fun PresetLibraryDialog(
                                 Text(localized("我的预设", "My presets"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
                             }
                         }
-                        if ("__user__" in expanded) items(userGroup, key = { "u_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
+                        if ("__user__" in expanded) items(userGroup, key = { "u_" + it.name }) { entry -> PresetRow(entry, context, viewModel, autoConvertCell, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
                     }
                     bundledGroups.forEach { (category, entries) ->
                         item(key = "header_$category") {
@@ -3284,7 +3392,7 @@ private fun PresetLibraryDialog(
                                 Text(category, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
                             }
                         }
-                        if (category in expanded) items(entries, key = { category + "_" + it.name }) { entry -> PresetRow(entry, context, viewModel, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
+                        if (category in expanded) items(entries, key = { category + "_" + it.name }) { entry -> PresetRow(entry, context, viewModel, autoConvertCell, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
                     }
                 }
             }
@@ -3308,6 +3416,7 @@ private fun PresetRow(
     entry: PresetEntry,
     context: Context,
     viewModel: KrystalsViewModel,
+    autoConvertCell: Boolean,
     onDismiss: () -> Unit,
     onMessage: (String) -> Unit,
     onDelete: () -> Unit,
@@ -3317,7 +3426,7 @@ private fun PresetRow(
     Row(
         Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable {
             scope.launch {
-                runCatching { withContext(Dispatchers.IO) { PresetRepository.openPreset(context, entry) } }
+                runCatching { withContext(Dispatchers.IO) { PresetRepository.openPreset(context, entry, autoConvertConventional = autoConvertCell) } }
                     .onSuccess { parsed ->
                         onDismiss()
                         onOpenParsed(parsed, entry.name)
@@ -3581,6 +3690,7 @@ private fun MpApiKeyDialog(
 private fun MpSearchScreen(
     context: Context,
     viewModel: KrystalsViewModel,
+    autoConvertCell: Boolean,
     onBack: () -> Unit,
     onChangeKey: () -> Unit,
     onMessage: (String) -> Unit,
@@ -3680,7 +3790,7 @@ localized(
                                 downloadingId = item.materialId
                                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                     val target = File(context.cacheDir, "${item.materialId}.cif")
-                                    val result = MaterialsProject.downloadCif(context, item.materialId, target)
+                                    val result = MaterialsProject.downloadCif(context, item.materialId, target, autoConvertConventional = autoConvertCell)
                                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                         downloadingId = null
                                         result.onSuccess { parsed ->
@@ -3725,6 +3835,7 @@ localized(
 private fun CodSearchScreen(
     context: Context,
     viewModel: KrystalsViewModel,
+    autoConvertCell: Boolean,
     onBack: () -> Unit,
     onMessage: (String) -> Unit,
     onOpenParsed: (ParsedStructure, String) -> Unit,
@@ -3862,7 +3973,7 @@ private fun CodSearchScreen(
                                 downloadingId = item.fileId
                                 scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                     val target = File(context.cacheDir, "cod-${item.fileId}.cif")
-                                    val result = CrystallographyOpenDatabase.downloadCif(item.fileId, target)
+                                    val result = CrystallographyOpenDatabase.downloadCif(item.fileId, target, autoConvertConventional = autoConvertCell)
                                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                         downloadingId = null
                                         result.onSuccess { parsed ->

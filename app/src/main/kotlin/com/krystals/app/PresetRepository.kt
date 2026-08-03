@@ -45,12 +45,12 @@ object PresetRepository {
         return user + bundled
     }
 
-    fun openPreset(context: Context, entry: PresetEntry): ParsedStructure {
+    fun openPreset(context: Context, entry: PresetEntry, autoConvertConventional: Boolean = true): ParsedStructure {
         val text = when (entry.source) {
             PresetSource.BUNDLED -> context.assets.open(entry.assetPath!!).bufferedReader().use { it.readText() }
             PresetSource.USER -> entry.file!!.readText()
         }
-        val parsed = CifCodec.parseStructure(text)
+        val parsed = CifCodec.parseStructure(text, autoConvertConventional = autoConvertConventional)
         // Per v0.2: only synthesize bond rules when the CIF has none of its own.
         // Per v0.5.0: rule synthesis (smart-ionic) is deferred to the caller's async path so the UI
         // can show a "computing" overlay — return the parsed structure as-is here.

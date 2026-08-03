@@ -97,6 +97,34 @@ object CrystallographyOpenDatabase {
         selectedMirror = mirror
     }
 
+    /** Per v0.8.26: set mirror from user preference. */
+    fun setMirrorMode(mode: CodMirrorMode, customUrl: String = "", fixedIndex: Int = 0) {
+        when (mode) {
+            CodMirrorMode.AUTO -> { /* testMirrors() is called on each search — no change needed */ }
+            CodMirrorMode.FIXED -> selectMirror(MIRRORS.getOrNull(fixedIndex.coerceIn(0, MIRRORS.lastIndex)) ?: MIRRORS.first())
+            CodMirrorMode.CUSTOM -> {
+                val url = customUrl.trimEnd('/')
+                if (url.isNotEmpty() && (url.startsWith("http://") || url.startsWith("https://"))) {
+                    selectMirror(CodMirror(url, if (url.endsWith("/cod")) url else "$url/cod"))
+                }
+            }
+        }
+    }
+
+    /** Per v0.8.26: test a single custom mirror URL (3s timeout, 2xx = ok). */
+    suspend fun testCustomMirror(url: String): Boolean {
+        val clean = url.trimEnd('/')
+        if (!clean.startsWith("http://") && !clean.startsWith("https://")) return false
+        return withContext(Dispatchers.IO) {
+            try {
+                val response = testClient.newCall(Request.Builder().url(clean).build()).execute()
+                response.use { it.isSuccessful }
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
     private fun request(url: HttpUrl): Request = Request.Builder()
         .url(url)
         .header("Accept", "text/csv, text/plain, chemical/x-cif, */*")
@@ -327,7 +355,7 @@ object CrystallographyOpenDatabase {
         return out
     }
 
-    suspend fun downloadCif(fileId: String, target: File): Result<ParsedStructure> = withContext(Dispatchers.IO) {
+    suspend fun downloadCif(fileId: String, target: File, autoConvertConventional: Boolean = true): Result<ParsedStructure> = withContext(Dispatchers.IO) {
         val base = selectedMirror.apiBase.toHttpUrl()
         val url = base.newBuilder()
             .addPathSegment("$fileId.cif")
