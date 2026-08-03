@@ -5,6 +5,7 @@ import com.krystals.renderer.core.builder.CrystalRenderSceneFactory
 import com.krystals.renderer.core.scene.RenderScene
 
 /** Bridges the backend-neutral scene snapshot to the unchanged Canvas engine. */
+@Deprecated("Canvas-Legacy renderer is end-of-life; the app is fixed on Filament")
 object LegacyRenderSceneAdapter {
     fun build(
         analysis: BondNetwork,

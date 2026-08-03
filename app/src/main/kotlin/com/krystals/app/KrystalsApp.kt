@@ -188,8 +188,6 @@ import com.krystals.crystal.io.ParsedStructure
 import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.state.InteractionReducer
 import com.krystals.interaction.state.ViewerCommand
-import com.krystals.renderer.legacy.CrystalImageExporter
-import com.krystals.renderer.legacy.LegacySceneRenderer
 import com.krystals.renderer.core.builder.CrystalRenderSceneFactory
 import com.krystals.renderer.core.style.RenderPalette
 import com.krystals.renderer.core.style.ViewerAppearance
@@ -307,9 +305,6 @@ private const val BUILD_SCENE_TIMEOUT_MS = 15_000L
 
 /** Per v0.5.3b: warn before opening a cell whose asymmetric expansion exceeds this many atoms. */
 private const val LARGE_CELL_WARN_THRESHOLD = 1000
-
-/** Per v0.8.x: persisted flag — user chose "don't ask again" for the canvas-rendering warning. */
-private const val CANVAS_WARN_DONT_ASK_KEY = "canvas_warn_dont_ask"
 
 @Composable
 fun KrystalsRoot(
@@ -1356,83 +1351,14 @@ private fun ViewerScreen(
     // Per v0.6.3: pre-resolve composable values for use in non-composable onClick lambdas.
     val shareLabel = localized("分享到…", "Share to…")
     val shareContext = LocalContext.current
-    var preferredBackend by remember { mutableStateOf(RendererBackendStore.load(preferences)) }
-    var filamentSessionFailed by remember(preferredBackend) { mutableStateOf(false) }
     var activeFilamentRenderer by remember { mutableStateOf<FilamentRenderer?>(null) }
-    val effectiveBackend = effectiveBackend(preferredBackend, filamentSessionFailed)
-    val filamentFallbackMessage = localized(
-        "Filament 初始化失败，本次会话已切换到 Canvas",
-        "Filament failed to initialize; using Canvas for this session",
+    val filamentErrorMessage = localized(
+        "Filament 渲染引擎初始化失败",
+        "Filament rendering engine failed to initialize",
     )
-    // Per v0.8.x: when a scene holds more than 100 atoms, any switch INTO canvas rendering
-    // (3D/2D toggle or engine picker in appearance) is gated behind a confirmation dialog
-    // that can be permanently suppressed with the "don't ask again" checkbox.
-    val canvasWarnAtomThreshold = 100
-    var canvasWarnDontAsk by remember { mutableStateOf(preferences.getBoolean(CANVAS_WARN_DONT_ASK_KEY, false)) }
-    var pendingCanvasConfirm by remember { mutableStateOf<RendererBackend?>(null) }
-    var pendingCanvasTab by remember { mutableStateOf<Int?>(null) }
-    // Resets the checkbox each time a canvas-warning dialog (re)appears.
-    var canvasWarnDontAskChecked by remember(pendingCanvasConfirm, pendingCanvasTab) { mutableStateOf(false) }
-    fun persistCanvasWarnDontAsk() {
-        if (canvasWarnDontAskChecked) {
-            canvasWarnDontAsk = true
-            preferences.edit().putBoolean(CANVAS_WARN_DONT_ASK_KEY, true).apply()
-        }
-    }
-    fun applyBackend(backend: RendererBackend) {
-        preferredBackend = backend
-        filamentSessionFailed = false
-        RendererBackendStore.save(preferences, backend)
-    }
-    fun selectBackend(backend: RendererBackend) {
-        val switchingToCanvas = backend == RendererBackend.CANVAS_LEGACY && effectiveBackend != RendererBackend.CANVAS_LEGACY
-        // Per v0.8.x: use the symmetry-expanded atom count (what the scene actually renders),
-        // matching the LARGE_CELL_WARN_THRESHOLD convention — sites.size alone under-counts
-        // asymmetric cells whose symmetry operations generate many displayed atoms.
-        val sceneAtomCount = SymmetryExpander.expand(tab.structure).size
-        if (switchingToCanvas && !canvasWarnDontAsk && sceneAtomCount > canvasWarnAtomThreshold) {
-            pendingCanvasConfirm = backend
-        } else {
-            applyBackend(backend)
-        }
-    }
-    pendingCanvasConfirm?.let { target ->
-        AlertDialog(
-            onDismissRequest = { persistCanvasWarnDontAsk(); pendingCanvasConfirm = null },
-            title = { Text(localized("警告", "Warning")) },
-            text = { CanvasWarnDialogContent(canvasWarnDontAskChecked) { canvasWarnDontAskChecked = it } },
-            confirmButton = { TextButton(onClick = {
-                persistCanvasWarnDontAsk()
-                pendingCanvasConfirm = null
-                applyBackend(target)
-            }) { Text(localized("确认", "Confirm")) } },
-            dismissButton = { TextButton(onClick = { persistCanvasWarnDontAsk(); pendingCanvasConfirm = null }) { Text(localized("取消", "Cancel")) } },
-        )
-    }
-    // Per v0.8.x: in 2D canvas mode, switching tabs to another cell with >100 atoms is
-    // gated behind the same confirmation dialog (also suppressible via "don't ask again").
     fun selectTab(index: Int) {
         if (index == viewModel.selectedIndex) return
-        val target = viewModel.tabs.getOrNull(index) ?: return
-        val sceneAtomCount = SymmetryExpander.expand(target.structure).size
-        if (effectiveBackend == RendererBackend.CANVAS_LEGACY && !canvasWarnDontAsk && sceneAtomCount > canvasWarnAtomThreshold) {
-            pendingCanvasTab = index
-        } else {
-            viewModel.select(index)
-        }
-    }
-    pendingCanvasTab?.let { targetIndex ->
-        AlertDialog(
-            onDismissRequest = { persistCanvasWarnDontAsk(); pendingCanvasTab = null },
-            title = { Text(localized("警告", "Warning")) },
-            text = { CanvasWarnDialogContent(canvasWarnDontAskChecked) { canvasWarnDontAskChecked = it } },
-            confirmButton = { TextButton(onClick = {
-                persistCanvasWarnDontAsk()
-                pendingCanvasTab = null
-                viewModel.select(targetIndex)
-            }) { Text(localized("确认", "Confirm")) } },
-            dismissButton = { TextButton(onClick = { persistCanvasWarnDontAsk(); pendingCanvasTab = null }) { Text(localized("取消", "Cancel")) } },
-        )
+        viewModel.select(index)
     }
     var menuOpen by remember { mutableStateOf(false) }
     var toolOpen by remember(tab.id) { mutableStateOf(false) }
@@ -1623,13 +1549,14 @@ private fun ViewerScreen(
                                 // Per v0.6.3: ensure the scene is submitted before exporting,
                                 // so renderToBitmap doesn't return null on first attempt.
                                 val renderer = activeFilamentRenderer
-                                val filamentBitmap = if (effectiveBackend == RendererBackend.FILAMENT && renderer != null) {
+                                val bitmap = if (renderer != null) {
                                     runCatching { renderer.submit(scene); renderer.renderToBitmap(useMsaa = useMsaa) }.getOrNull()
                                 } else null
-                                val bitmap = filamentBitmap ?: withContext(Dispatchers.Default) {
-                                    CrystalImageExporter.render(scene, tab.appearance, tab.renderConfiguration, tab.interactionState, bondValenceBySite)
+                                if (bitmap == null) {
+                                    onMessage("Unable to export current crystal")
+                                } else {
+                                    onExport(bitmap)
                                 }
-                                onExport(bitmap)
                             } catch (error: Exception) {
                                 if (error !is CancellationException) onMessage(error.message ?: "Export failed")
                             } finally {
@@ -1688,21 +1615,6 @@ private fun ViewerScreen(
                 @Suppress("UNUSED_VARIABLE") val historyVersion = tab.historyVersion
                 IconButton(onClick = { tab.undo() }, enabled = tab.history.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, localized("撤回", "Undo")) }
                 IconButton(onClick = { tab.redo() }, enabled = tab.history.canRedo) { Icon(Icons.AutoMirrored.Filled.Redo, localized("前进", "Redo")) }
-                IconButton(
-                    modifier = Modifier.size(36.dp),
-                    onClick = {
-                        selectBackend(
-                            if (effectiveBackend == RendererBackend.FILAMENT) RendererBackend.CANVAS_LEGACY
-                            else RendererBackend.FILAMENT,
-                        )
-                    },
-                ) {
-                    Text(
-                        if (effectiveBackend == RendererBackend.FILAMENT) "3D" else "2D",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
                 IconButton(onClick = { activePanel = ViewerPanel.Appearance }) { Icon(Icons.Default.ColorLens, null) }
             },
         )
@@ -1804,36 +1716,28 @@ private fun ViewerScreen(
                         }
                     }
                     val context = LocalContext.current
-                    val onFilamentFailure: (Throwable) -> Unit = {
-                        if (!filamentSessionFailed) onMessage(filamentFallbackMessage)
-                        filamentSessionFailed = true
-                    }
-                    val filamentResult = remember(effectiveBackend) {
-                        runCatching {
-                            if (effectiveBackend == RendererBackend.FILAMENT) FilamentRenderer(context) else null
-                        }
-                    }
+                    val onFilamentFailure: (Throwable) -> Unit = { onMessage(filamentErrorMessage) }
+                    val filamentResult = remember { runCatching { FilamentRenderer(context) } }
                     LaunchedEffect(filamentResult) {
                         filamentResult.exceptionOrNull()?.let(onFilamentFailure)
                     }
-                    val renderer = remember(effectiveBackend, filamentResult) {
-                        when (effectiveBackend) {
-                            RendererBackend.FILAMENT -> filamentResult.getOrNull() ?: LegacySceneRenderer()
-                            else -> LegacySceneRenderer()
+                    val renderer = remember(filamentResult) { filamentResult.getOrNull() }
+                    if (renderer == null) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(filamentErrorMessage, color = MaterialTheme.colorScheme.error)
                         }
+                    } else {
+                        RendererHost(
+                            renderer = renderer,
+                            scene = scene,
+                            state = tab.interactionState,
+                            onCommand = ::dispatchViewerCommand,
+                            onAtomTap = handleAtomTap,
+                            bondValenceBySite = bondValenceBySite,
+                            onFilamentRendererChanged = { activeFilamentRenderer = it },
+                            onFilamentFailure = onFilamentFailure,
+                        )
                     }
-                    RendererHost(
-                        renderer = renderer,
-                        scene = scene,
-                        state = tab.interactionState,
-                        appearance = renderedAppearance,
-                        renderConfiguration = tab.renderConfiguration,
-                        onCommand = ::dispatchViewerCommand,
-                        onAtomTap = handleAtomTap,
-                        bondValenceBySite = bondValenceBySite,
-                        onFilamentRendererChanged = { activeFilamentRenderer = it },
-                        onFilamentFailure = onFilamentFailure,
-                    )
                 }
                 else -> {
                     // Per v0.6.2: defensively suppress CancellationException messages (should
@@ -2177,36 +2081,11 @@ sceneBuildError?.let { message ->
         tab,
         onDismiss = { activePanel = ViewerPanel.None },
         onApplied = { appearance -> viewModel.tabs.forEach { it.recordHistory() }; onApplyAppearance(appearance) },
-        rendererBackend = preferredBackend,
-        onRendererBackendChanged = ::selectBackend,
         onPreviewStart = { previewAppearance = it },
         onPreviewEnd = { previewAppearance = null },
         backgroundFollowTheme = backgroundFollowTheme,
         onBackgroundFollowThemeChange = onBackgroundFollowThemeChange,
     )
-}
-
-@Composable
-private fun CanvasWarnDialogContent(
-    dontAskChecked: Boolean,
-    onDontAskCheckedChange: (Boolean) -> Unit,
-) {
-    Column {
-        Text(localized(
-            "当前晶胞原子数较多，使用 canvas 渲染可能造成异常帧率下降和卡顿。确认继续吗？",
-            "This cell contains many atoms; canvas rendering may cause severe frame drops and lag. Continue?",
-        ))
-        Row(
-            Modifier.fillMaxWidth().padding(top = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Checkbox(checked = dontAskChecked, onCheckedChange = onDontAskCheckedChange)
-            Text(
-                localized("不再提示", "Don't ask again"),
-                modifier = Modifier.clickable { onDontAskCheckedChange(!dontAskChecked) },
-            )
-        }
-    }
 }
 
 @Composable

@@ -21,7 +21,12 @@ import com.krystals.renderer.core.style.ViewerAppearance
  *
  * Scene / interaction / appearance state are held as Compose [MutableState] so that
  * updates from [submit]/[updateInteraction]/[configure] trigger recomposition of [Content].
+ *
+ * END OF LIFE: the Canvas-Legacy backend is no longer built or used by the app (which is
+ * fixed on Filament). This module is retained in the repository for reference only — it is
+ * excluded from settings.gradle.kts, not compiled, and receives no further maintenance.
  */
+@Deprecated("Canvas-Legacy renderer is end-of-life; the app is fixed on Filament")
 @Suppress("DEPRECATION")
 class LegacySceneRenderer : SceneRenderer, Picker {
     private val controller = ViewerController()

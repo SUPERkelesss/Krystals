@@ -46,12 +46,7 @@ import com.krystals.renderer.core.scene.allBounds
 import com.krystals.renderer.core.scene.sceneProjection
 import com.krystals.renderer.core.style.AxisMode
 import com.krystals.renderer.core.style.SelectionColors
-import com.krystals.renderer.core.SceneRenderer
-import com.krystals.renderer.core.style.RenderConfiguration
-import com.krystals.renderer.core.style.ViewerAppearance
 import com.krystals.renderer.filament.FilamentRenderer
-import com.krystals.renderer.filament.FilamentSceneRenderer
-import com.krystals.renderer.legacy.LegacySceneRenderer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -496,19 +491,14 @@ private fun FilamentLegacyStyleOverlay(
 private fun Double.formatFract() = "%.4f".format(this)
 
 /**
- * Hosts either the Filament or Canvas-Legacy backend behind the shared [SceneRenderer] SPI.
- *
- * The small UI-specific branch here is unavoidable: Filament needs an [AndroidView] with a
- * [Surface], while Canvas-Legacy is a Compose [Canvas]. All scene state and commands flow
- * through [SceneRenderer].
+ * Hosts the Filament backend (the only rendering backend since renderer-legacy was
+ * declared end-of-life). All scene state and commands flow through the renderer SPI.
  */
 @Composable
 internal fun RendererHost(
-    renderer: SceneRenderer,
+    renderer: FilamentRenderer,
     scene: RenderScene,
     state: InteractionState,
-    appearance: ViewerAppearance,
-    renderConfiguration: RenderConfiguration,
     onCommand: (ViewerCommand) -> Unit,
     onAtomTap: (AtomImage) -> Boolean,
     bondValenceBySite: Map<String, Double>,
@@ -517,31 +507,22 @@ internal fun RendererHost(
     modifier: Modifier = Modifier,
 ) {
     DisposableEffect(renderer) {
-        if (renderer is FilamentRenderer) onFilamentRendererChanged(renderer)
+        onFilamentRendererChanged(renderer)
         onDispose {
-            if (renderer is FilamentRenderer) onFilamentRendererChanged(null)
+            onFilamentRendererChanged(null)
             renderer.close()
         }
     }
-    DisposableEffect(renderer, appearance, renderConfiguration, bondValenceBySite, onCommand, onAtomTap) {
-        if (renderer is LegacySceneRenderer) {
-            renderer.configure(appearance, renderConfiguration, bondValenceBySite, onCommand, onAtomTap)
-        }
-        onDispose { }
-    }
     LaunchedEffect(renderer, scene) { renderer.submit(scene) }
     LaunchedEffect(renderer, state) { renderer.updateInteraction(state) }
-    when (renderer) {
-        is FilamentSceneRenderer -> FilamentViewport(
-            renderer = renderer as FilamentRenderer,
-            scene = scene,
-            interactionState = state,
-            onCommand = onCommand,
-            onAtomTap = onAtomTap,
-            onFailure = onFilamentFailure,
-            bondValenceBySite = bondValenceBySite,
-            modifier = modifier,
-        )
-        is LegacySceneRenderer -> renderer.Content(modifier)
-    }
+    FilamentViewport(
+        renderer = renderer,
+        scene = scene,
+        interactionState = state,
+        onCommand = onCommand,
+        onAtomTap = onAtomTap,
+        onFailure = onFilamentFailure,
+        bondValenceBySite = bondValenceBySite,
+        modifier = modifier,
+    )
 }

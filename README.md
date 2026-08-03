@@ -71,7 +71,7 @@ flowchart TB
         Scene["RenderScene / RenderObject"]
         Primitive["AtomInstance / BondInstance / MeshInstance"]
     end
-    subgraph rendererLegacy["renderer-legacy · Canvas-Legacy"]
+    subgraph rendererLegacy["renderer-legacy · Canvas-Legacy (EOL — not built, kept for reference)"]
         VP["CrystalViewport<br/>legacy Canvas viewport"]
         Exp["CrystalImageExporter<br/>high-res bitmap export"]
     end
@@ -120,7 +120,6 @@ flowchart TB
     SG --> SpaceGroups
     Bonds --> Elements
 
-    app -.->|depends on| rendererLegacy
     app -.->|depends on| interaction
     app -.->|depends on| analysis
     app -.->|depends on| io

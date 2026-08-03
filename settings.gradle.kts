@@ -29,6 +29,5 @@ include(
     ":crystal-io",
     ":renderer-core",
     ":renderer-filament",
-    ":renderer-legacy",
     ":interaction",
 )
