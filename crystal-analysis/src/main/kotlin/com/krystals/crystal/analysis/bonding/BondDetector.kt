@@ -4,6 +4,7 @@ import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.*
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
+import com.krystals.crystal.core.math.Mat3
 import com.krystals.crystal.core.math.Vec3
 import com.krystals.crystal.core.math.angleDegrees
 import com.krystals.crystal.core.math.distance
@@ -359,9 +360,17 @@ object BondDetector {
                 // rules in tests), skip the angle check — the hbond passes. In production
                 // smartIonic always generates normal rules first, so partners is non-empty.
                 val ok = if (partners.isEmpty()) true else {
+                    // Per v0.8.17: angle via periodic shortest displacements (same fix as the
+                    // rule layer) — a boundary proton's covalent partner sits across the cell
+                    // boundary and its main-cell coordinate gives a wrong ~60° angle.
                     val hPos = h.cartesianCoordinate.toVec3()
                     val xPos = x.cartesianCoordinate.toVec3()
-                    partners.any { y -> angleDegrees(xPos, hPos, y.cartesianCoordinate.toVec3()) > 110.0 }
+                    val lattice = structure.lattice.matrix
+                    val toX = periodicDisplacement(hPos, xPos, lattice)
+                    partners.any { y ->
+                        val toY = periodicDisplacement(hPos, y.cartesianCoordinate.toVec3(), lattice)
+                        angleDegrees(toX, com.krystals.crystal.core.math.Vec3(0.0, 0.0, 0.0), toY) > 110.0
+                    }
                 }
                 if (ok) anglePassed += b
             }
@@ -528,4 +537,16 @@ object BondDetector {
         return result
     }
 
+    /** Per v0.8.17: shortest periodic displacement from [from] to [to] (cartesian). Used by the
+     *  hbond angle re-check so a boundary proton's cross-boundary covalent partner yields the
+     *  correct ~1 Å displacement instead of the ~cell-length main-cell difference. */
+    private fun periodicDisplacement(from: Vec3, to: Vec3, lattice: Mat3): Vec3 {
+        val frac = lattice.inverse() * (to - from)
+        val wrapped = Vec3(
+            frac.x - kotlin.math.round(frac.x),
+            frac.y - kotlin.math.round(frac.y),
+            frac.z - kotlin.math.round(frac.z),
+        )
+        return lattice * wrapped
+    }
 }

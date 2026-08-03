@@ -139,6 +139,33 @@ class HbondBondingFallbackTest {
         }
     }
 
+    @Test
+    fun boundaryProtonDetectsHbondAcrossCellBoundary() {
+        // Per v0.8.17: H near the cell boundary whose covalent partner sits across the boundary
+        // (periodic image) must still be detected. Before the fix the angle used the main-cell
+        // coordinate (~9.2 Å away) instead of the periodic displacement (~0.8 Å), giving a wrong
+        // ~57° angle and dropping the H-bond entirely.
+        val structure = simpleStructure(
+            listOf(
+                Site("O", "O1", Species("O"), FractionalCoordinate(0.5, 0.5, 0.06)),
+                Site("H", "H1", Species("H"), FractionalCoordinate(0.5, 0.5, 0.98)), // ~0.8 Å from O1's +z image
+                Site("O", "O2", Species("O"), FractionalCoordinate(0.5, 0.7, 0.85)), // ~2.39 Å H···O2, angle ~123°
+            ),
+        )
+        val atoms = SymmetryExpander.expand(structure)
+        // Both rule-generation paths must detect it.
+        val si = BondValence.smartIonicRules(structure, BondConfiguration(), 0.45, atoms)
+        assertTrue(si.success)
+        assertTrue(si.rules.any { it.isHBond }, "smartIonic path must detect the boundary H-bond")
+        val bp = CrystalEditor.fromSmartIonicAttempt(structure, BondConfiguration(), 0.45, smartIonic = null)
+        assertTrue(bp.bondConfiguration.rules.any { it.isHBond }, "bonding path must detect the boundary H-bond")
+        // And the bond must materialise in the network at the periodic distance.
+        val net = BondDetector.buildNetwork(structure, bp.bondConfiguration)
+        val hbondBonds = net.bonds.filter { it.rule.isHBond }
+        assertEquals(1, hbondBonds.size)
+        assertTrue(hbondBonds.single().distance in 2.0..2.6, "H-bond distance must be the periodic ~2.39 Å")
+    }
+
     // ── v0.8.7: all-non-metal structures default to bonding rules ──────────────────
 
     @Test
