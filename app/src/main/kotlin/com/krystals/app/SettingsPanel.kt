@@ -4,15 +4,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.krystals.app.ui.ThemeMode
 
 /**
  * Per v0.8.26: user preferences panel with four groups:
@@ -45,24 +45,57 @@ fun SettingsPanel(
             }
             HorizontalDivider()
 
-            // Scrollable content
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(24.dp),
             ) {
+                // ── General ──
                 SectionTitle(localized("常规", "General"))
+
+                // Language
+                Text(localized("语言", "Language"), style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("zh" to "中文", "en" to "EN").forEach { (code, label) ->
+                        FilterChip(
+                            selected = when { settings.language == "auto" -> false; else -> settings.language == code },
+                            onClick = { onChange(settings.copy(language = code)) },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+
+                // Theme
+                Text(localized("主题", "Theme"), style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        Triple(ThemeMode.SYSTEM, Icons.Default.BrightnessAuto, localized("跟随系统", "System")),
+                        Triple(ThemeMode.LIGHT, Icons.Default.LightMode, localized("浅色", "Light")),
+                        Triple(ThemeMode.DARK, Icons.Default.DarkMode, localized("深色", "Dark")),
+                    ).forEach { (mode, icon, label) ->
+                        IconButton(onClick = { onChange(settings.copy(theme = mode)) }) {
+                            Icon(
+                                icon, null,
+                                tint = if (settings.theme == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                // ── File Handling ──
                 SectionTitle(localized("文件处理", "File Handling"))
+
+                // ── Network ──
                 SectionTitle(localized("网络", "Network"))
+
+                // ── Display ──
                 SectionTitle(localized("显示", "Display"))
 
                 Spacer(Modifier.height(16.dp))
-                // Placeholder: "Restore Defaults" will be added in Task 9.
             }
         }
     }
 }
 
-/** Section header with accent color. */
 @Composable
 private fun SectionTitle(text: String) {
     Text(

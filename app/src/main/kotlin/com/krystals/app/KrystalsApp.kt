@@ -337,8 +337,19 @@ fun KrystalsRoot(
     fun applyLanguage(value: String) {
         if (language == value) return
         language = value
-        preferences.edit().putString("language", value).apply()
+        preferences.edit().putString("language", value).putBoolean("pending_language_restart", true).apply()
         activity.recreate()
+    }
+    // Per v0.8.26: show a loading overlay on language-switch restart.
+    var languageSwitching by remember {
+        mutableStateOf(preferences.getBoolean("pending_language_restart", false))
+    }
+    LaunchedEffect(languageSwitching) {
+        if (languageSwitching) {
+            kotlinx.coroutines.delay(500)
+            preferences.edit().putBoolean("pending_language_restart", false).apply()
+            languageSwitching = false
+        }
     }
     // Per v0.5.2a: load the persisted global appearance once at startup (falls back to defaults).
     LaunchedEffect(Unit) {
@@ -766,6 +777,19 @@ fun KrystalsRoot(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
         ) { _ ->
             Box(Modifier.fillMaxSize()) {
+                // Per v0.8.26: language switching overlay.
+                if (languageSwitching) {
+                    Box(
+                        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator()
+                            Spacer(Modifier.height(16.dp))
+                            Text(localized("切换中...", "Switching..."))
+                        }
+                    }
+                }
                 if (viewModel.tabs.isEmpty()) {
                     HomeScreen(
                         onOpen = { openLauncher.launch(arrayOf("chemical/x-cif", "text/plain", "application/octet-stream")) },
@@ -780,6 +804,8 @@ fun KrystalsRoot(
                     ViewerScreen(
                         viewModel = viewModel,
                         preferences = preferences,
+                        settingsValues = settingsValues,
+                        onSettingsChange = onSettingsChange,
                         onSave = { save(it) },
                         onOpen = { openLauncher.launch(arrayOf("chemical/x-cif", "text/plain", "application/octet-stream")) },
                         onOpenPreset = { presetOpen = true },
@@ -1261,9 +1287,6 @@ private fun HomeScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.Science, null) }, onClick = { menuOpen = false; onOnlineSource() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
                 HorizontalDivider()
-                LanguageMenuItem(language, onLanguage)
-                ThemeMenuItem(themeMode, onTheme)
-                HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
                     TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     TextButton(onClick = { menuOpen = false; onFeedback() }) { Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -1344,6 +1367,8 @@ private fun ViewerScreen(
     backgroundFollowTheme: Boolean,
     onBackgroundFollowThemeChange: (Boolean) -> Unit,
     secretUnlockTrigger: Int = 0,
+    settingsValues: SettingsValues = SettingsValues.defaults(),
+    onSettingsChange: (SettingsValues) -> Unit = {},
 ) {
     val tab = viewModel.current ?: return
     val scope = rememberCoroutineScope()
@@ -1608,9 +1633,6 @@ private fun ViewerScreen(
                         }
                     }
                 })
-                HorizontalDivider()
-                LanguageMenuItem(language, onLanguage)
-                ThemeMenuItem(themeMode, onTheme = { mode -> viewModel.tabs.forEach { it.recordHistory() }; onTheme(mode) })
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
                     TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
