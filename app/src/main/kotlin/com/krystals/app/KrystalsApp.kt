@@ -14,6 +14,7 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Animatable
@@ -23,8 +24,11 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.BorderStroke
@@ -1933,32 +1937,53 @@ private fun ViewerScreen(
                     onClick = { dispatchViewerCommand(ViewerCommand.ToggleLock) },
                     modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
                 ) {
-                    if (tab.interactionState.session.locked) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.onSurface),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                Icons.Outlined.LockOpen,
-                                null,
-                                tint = MaterialTheme.colorScheme.surface,
-                                modifier = Modifier.size(24.dp),
-                            )
-                        }
-                    } else {
-                        Box(
-                            modifier = Modifier.size(36.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                Icons.Default.Lock,
-                                null,
-                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                                modifier = Modifier.size(24.dp),
-                            )
+                    // Per v0.8.33: animated lock ↔ unlock transition (180° rotation + scale +
+                    // fade), so the state change reads clearly instead of snapping.
+                    val lockRotation by animateFloatAsState(
+                        targetValue = if (tab.interactionState.session.locked) 0f else -180f,
+                        animationSpec = tween(250),
+                        label = "lockRotation",
+                    )
+                    AnimatedContent(
+                        targetState = tab.interactionState.session.locked,
+                        transitionSpec = {
+                            (scaleIn(initialScale = 0.4f, animationSpec = tween(220)) +
+                                fadeIn(animationSpec = tween(180))) togetherWith
+                                (scaleOut(targetScale = 0.4f, animationSpec = tween(220)) +
+                                    fadeOut(animationSpec = tween(180)))
+                        },
+                        label = "lockIcon",
+                    ) { locked ->
+                        if (locked) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.onSurface)
+                                    .graphicsLayer { rotationZ = lockRotation },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Outlined.LockOpen,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.surface,
+                                    modifier = Modifier.size(24.dp),
+                                )
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .graphicsLayer { rotationZ = lockRotation },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Default.Lock,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(24.dp),
+                                )
+                            }
                         }
                     }
                 }
