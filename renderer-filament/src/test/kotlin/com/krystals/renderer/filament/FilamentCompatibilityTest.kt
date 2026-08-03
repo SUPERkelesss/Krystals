@@ -45,9 +45,9 @@ class FilamentCompatibilityTest {
         val cosPhi = cos(phi)
         assertEquals((cosPhi * cos(theta)), direction.x, 1e-9)
         assertEquals((cosPhi * sin(theta)), direction.y, 1e-9)
-        // v0.8.24: +sin(phi) — Filament view space has the camera looking down -Z, so
-        // the camera-facing surface normal is +Z; a 90°-elevation light points at +Z.
-        assertEquals(sin(phi), direction.z, 1e-9)
+        // v0.8.26: -sin(phi) — worldLightTravelDirection negates this for the lit
+        // travel direction, so surface-to-light keeps the v0.8.19 sign.
+        assertEquals(-sin(phi), direction.z, 1e-9)
     }
 
     @Test
@@ -79,25 +79,25 @@ class FilamentCompatibilityTest {
             elevationDegrees = 90f,
             cameraRotation = rot,
         )
-        // surface-to-light at (az=0, el=90) = (0,0,+1) (v0.8.24 sign fix); travel =
-        // (0,0,-1) in view space. World = rotY(90).transposed() * (0,0,-1).
-        // rotY(90) maps world->view, so view->world is rotY(-90): applied to (0,0,-1)
-        // the c column (sin(-90),0,cos(-90)) = (-1,0,0) negated gives (1,0,0).
-        val expected = com.krystals.crystal.core.math.rotY(-90.0) * com.krystals.crystal.core.math.Vec3(0.0, 0.0, -1.0)
+        // surface-to-light at (az=0, el=90) = (0,0,-1) (v0.8.26 sign restored); travel
+        // = (0,0,+1) in view space. World = rotY(90).transposed() * (0,0,1).
+        // rotY(90) maps world->view, so view->world is rotY(-90): the c column
+        // (sin(-90),0,cos(-90)) = (-1,0,0) applied to (0,0,1) gives (-1,0,0).
+        val expected = com.krystals.crystal.core.math.rotY(-90.0) * com.krystals.crystal.core.math.Vec3(0.0, 0.0, 1.0)
         assertEquals(expected.x, travel.x, 1e-9)
         assertEquals(expected.y, travel.y, 1e-9)
         assertEquals(expected.z, travel.z, 1e-9)
     }
 
     @Test
-    fun `default appearance light direction has positive z`() {
+    fun `default appearance light direction has negative z`() {
         val appearance = com.krystals.renderer.core.style.ViewerAppearance()
         val direction = viewSpaceLightDirection(
             appearance.lightAzimuth,
             appearance.lightElevation,
         )
-        // 默认方位 150°、高度 45°:光从屏幕左前上方来,正 Z 表示朝向相机(v0.8.24)。
-        assertEquals(1.0, direction.z / kotlin.math.abs(direction.z), 1e-9)
+        // 默认方位 150°、高度 45°:光从屏幕左上偏后方向来,负 Z 表示向屏幕内(v0.8.26)。
+        assertEquals(-1.0, direction.z / kotlin.math.abs(direction.z), 1e-9)
         assertEquals(-1.0, direction.x / kotlin.math.abs(direction.x), 1e-9)
     }
 

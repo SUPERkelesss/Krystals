@@ -148,10 +148,10 @@ internal fun depthCueViewRange(cue: DepthCueing, visibleNear: Float, visibleFar:
  * The world light is anchored to the camera: no matter how the crystal is rotated,
  * the light-to-camera relationship stays constant, so [cameraRotation] must NOT be
  * applied here. The phi convention: 0° elevation = horizon, 90° = at the camera
- * (+sin(phi) on Z). In Filament view space the camera looks down -Z, so the surface
- * facing the camera has normal +Z; a 90° elevation light therefore points at +Z
- * (surface-to-light). v0.8.24: Z sign flipped from -sin(phi) — the old sign put the
- * light behind the scene, darkening the camera-facing hemisphere.
+ * (-sin(phi) on Z). v0.8.26: Z sign restored to -sin(phi) — v0.8.24 flipped it to
+ * +sin(phi) which inverted the lit atom shading, because worldLightTravelDirection
+ * negates this value again for LightManager.setDirection. With -sin(phi) the lit
+ * travel direction ends up camera-facing (+Z at 90° elevation) as in v0.8.19.
  */
 internal fun viewSpaceLightDirection(
     azimuthDegrees: Float,
@@ -160,11 +160,11 @@ internal fun viewSpaceLightDirection(
     val theta = Math.toRadians(azimuthDegrees.toDouble())
     val phi = Math.toRadians(elevationDegrees.coerceIn(0f, 90f).toDouble())
     val cosPhi = kotlin.math.cos(phi)
-    // Surface-to-light in view space: 0° elevation = horizon, 90° = toward the camera (+Z).
+    // Surface-to-light in view space: 0° elevation = horizon, 90° = toward the camera (-Z).
     return com.krystals.crystal.core.math.Vec3(
         cosPhi * kotlin.math.cos(theta),
         cosPhi * kotlin.math.sin(theta),
-        kotlin.math.sin(phi),
+        -kotlin.math.sin(phi),
     )
 }
 
