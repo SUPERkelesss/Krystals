@@ -104,6 +104,7 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Help
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Visibility
@@ -156,6 +157,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
@@ -208,14 +210,44 @@ import kotlin.math.sqrt
 
 private data class PendingOpen(val uri: Uri, val name: String, val text: String, val candidates: List<Int>)
 
+/** Per v0.8.27: user-toggleable search filter types shown in the filter bar. */
+private enum class SearchFilterType {
+    FORMULA, ELEMENT_COUNT, CRYSTAL_SYSTEM, POINT_GROUP, SPACE_GROUP,
+    TITLE, AUTHOR, JOURNAL, YEAR, ELEMENT_COMPOSITION, STABLE,
+}
+
+/** Per v0.8.27: default visible filters (formula + the original four). */
+private val DEFAULT_VISIBLE_FILTERS = setOf(
+    SearchFilterType.FORMULA, SearchFilterType.ELEMENT_COUNT, SearchFilterType.CRYSTAL_SYSTEM,
+    SearchFilterType.POINT_GROUP, SearchFilterType.SPACE_GROUP,
+)
+
+/** Per v0.8.27: the full filter set offered by each search page. */
+private val COD_FILTER_TYPES = SearchFilterType.entries.toSet()
+private val MP_FILTER_TYPES = setOf(
+    SearchFilterType.FORMULA, SearchFilterType.ELEMENT_COUNT, SearchFilterType.CRYSTAL_SYSTEM,
+    SearchFilterType.POINT_GROUP, SearchFilterType.SPACE_GROUP,
+    SearchFilterType.ELEMENT_COMPOSITION, SearchFilterType.STABLE,
+)
+
 /** Per v0.6.5: filter state for search result filtering. */
 private data class SearchFilterState(
     val elementCount: Int? = null,
     val crystalSystem: String? = null,
     val pointGroup: String? = null,
     val spaceGroup: String? = null,
+    // Per v0.8.27: extended filters.
+    val formula: String? = null,
+    val title: String? = null,
+    val author: String? = null,
+    val journal: String? = null,
+    val year: String? = null,
+    val elementComposition: String? = null,
+    val stable: Boolean? = null,
 ) {
-    val isActive: Boolean get() = elementCount != null || crystalSystem != null || pointGroup != null || spaceGroup != null
+    val isActive: Boolean get() = elementCount != null || crystalSystem != null || pointGroup != null ||
+        spaceGroup != null || formula != null || title != null || author != null || journal != null ||
+        year != null || elementComposition != null || stable != null
 }
 
 /** Per v0.6.5: metadata extracted from a search result for filtering. */
@@ -224,6 +256,12 @@ private data class SearchResultMeta(
     val crystalSystem: String?,
     val pointGroup: String?,
     val spaceGroup: String?,
+    // Per v0.8.27: bibliographic fields for the extended filters (COD), empty for MP.
+    val formula: String = "",
+    val title: String = "",
+    val author: String = "",
+    val journal: String = "",
+    val year: String = "",
 )
 
 /** Per v0.6.5: extract distinct element count from a formula string like "SiO2" or "Ca3(PO4)2". */
@@ -249,6 +287,7 @@ private fun MpSearchResult.meta(): SearchResultMeta {
         crystalSystem = cs ?: crystalSystem.takeIf { it != "N/A" },
         pointGroup = pg,
         spaceGroup = spaceGroup.takeIf { it != "N/A" },
+        formula = formula,
     )
 }
 
@@ -260,6 +299,11 @@ private fun CodSearchResult.meta(): SearchResultMeta {
         crystalSystem = cs,
         pointGroup = pg,
         spaceGroup = spaceGroup.takeIf { it.isNotBlank() },
+        formula = formula,
+        title = title,
+        author = author,
+        journal = journal,
+        year = year,
     )
 }
 
@@ -269,7 +313,13 @@ private fun buildFilterOptions(metas: List<SearchResultMeta>): SearchFilterOptio
     val crystalSystems = metas.mapNotNull { it.crystalSystem }.distinct().sorted()
     val pointGroups = metas.mapNotNull { it.pointGroup }.distinct().sorted()
     val spaceGroups = metas.mapNotNull { it.spaceGroup }.distinct().sorted()
-    return SearchFilterOptions(elementCounts, crystalSystems, pointGroups, spaceGroups)
+    // Per v0.8.27: extended filter options (empty when the source provides no values).
+    val formulas = metas.map { it.formula }.filter { it.isNotBlank() }.distinct().sorted()
+    val titles = metas.map { it.title }.filter { it.isNotBlank() }.distinct().sorted()
+    val authors = metas.map { it.author }.filter { it.isNotBlank() }.distinct().sorted()
+    val journals = metas.map { it.journal }.filter { it.isNotBlank() }.distinct().sorted()
+    val years = metas.map { it.year }.filter { it.isNotBlank() }.distinct().sorted()
+    return SearchFilterOptions(elementCounts, crystalSystems, pointGroups, spaceGroups, formulas, titles, authors, journals, years)
 }
 
 private data class SearchFilterOptions(
@@ -277,6 +327,12 @@ private data class SearchFilterOptions(
     val crystalSystems: List<String>,
     val pointGroups: List<String>,
     val spaceGroups: List<String>,
+    // Per v0.8.27: extended filter options.
+    val formulas: List<String> = emptyList(),
+    val titles: List<String> = emptyList(),
+    val authors: List<String> = emptyList(),
+    val journals: List<String> = emptyList(),
+    val years: List<String> = emptyList(),
 )
 
 private fun normalizeSgSymbol(s: String) = s.replace(" ", "").replace("_", "").lowercase()
@@ -3457,7 +3513,11 @@ private fun filterMpResults(results: List<MpSearchResult>, filter: SearchFilterS
         (filter.elementCount == null || meta.elementCount == filter.elementCount) &&
         (filter.crystalSystem == null || meta.crystalSystem == filter.crystalSystem) &&
         (filter.pointGroup == null || meta.pointGroup == filter.pointGroup) &&
-        (filter.spaceGroup == null || meta.spaceGroup == filter.spaceGroup)
+        (filter.spaceGroup == null || meta.spaceGroup == filter.spaceGroup) &&
+        // Per v0.8.27: extended filters.
+        (filter.formula == null || item.formula.contains(filter.formula, ignoreCase = true)) &&
+        (filter.elementComposition == null || elementsInFormula(item.formula).containsAll(parseElementSet(filter.elementComposition))) &&
+        (filter.stable == null || stableOf(item) == filter.stable)
     }
 }
 
@@ -3469,9 +3529,25 @@ private fun filterCodResults(results: List<CodSearchResult>, filter: SearchFilte
         (filter.elementCount == null || meta.elementCount == filter.elementCount) &&
         (filter.crystalSystem == null || meta.crystalSystem == filter.crystalSystem) &&
         (filter.pointGroup == null || meta.pointGroup == filter.pointGroup) &&
-        (filter.spaceGroup == null || meta.spaceGroup == filter.spaceGroup)
+        (filter.spaceGroup == null || meta.spaceGroup == filter.spaceGroup) &&
+        // Per v0.8.27: extended filters.
+        (filter.formula == null || item.formula.contains(filter.formula, ignoreCase = true)) &&
+        (filter.title == null || item.title.contains(filter.title, ignoreCase = true)) &&
+        (filter.author == null || item.author.contains(filter.author, ignoreCase = true)) &&
+        (filter.journal == null || item.journal.contains(filter.journal, ignoreCase = true)) &&
+        (filter.year == null || item.year == filter.year)
     }
 }
+
+/** Per v0.8.27: distinct element symbols in a formula like "Fe2O3" → {Fe, O}. */
+private fun elementsInFormula(formula: String): Set<String> =
+    Regex("[A-Z][a-z]?").findAll(formula).map { it.value }.toSet()
+
+/** Per v0.8.27: parse a composition filter input like "Fe O" into element symbols. */
+private fun parseElementSet(input: String): Set<String> = elementsInFormula(input)
+
+/** Per v0.8.27: true when the material is on the hull (stable). Null when no hull data. */
+private fun stableOf(item: MpSearchResult): Boolean? = item.energyAboveHull?.let { it <= 0.0 }
 
 /** Per v0.6.5: a single dropdown-chip for filtering. */
 @Composable
@@ -3551,17 +3627,100 @@ private fun IntFilterDropdownChip(
     }
 }
 
+/** Per v0.8.27: localized label for a filter type. */
+@Composable
+private fun filterTypeLabel(type: SearchFilterType): String = when (type) {
+    SearchFilterType.FORMULA -> localized("化学式", "Formula")
+    SearchFilterType.ELEMENT_COUNT -> localized("元素数量", "Elements")
+    SearchFilterType.CRYSTAL_SYSTEM -> localized("晶系", "Crystal sys.")
+    SearchFilterType.POINT_GROUP -> localized("点群", "Point group")
+    SearchFilterType.SPACE_GROUP -> localized("空间群", "Space group")
+    SearchFilterType.TITLE -> localized("标题", "Title")
+    SearchFilterType.AUTHOR -> localized("作者", "Author")
+    SearchFilterType.JOURNAL -> localized("期刊", "Journal")
+    SearchFilterType.YEAR -> localized("年份", "Year")
+    SearchFilterType.ELEMENT_COMPOSITION -> localized("元素组成", "Composition")
+    SearchFilterType.STABLE -> localized("是否稳定", "Stability")
+}
+
+/** Per v0.8.27: dialog to pick which filter chips are visible in the filter bar. */
+@Composable
+private fun FilterPickerDialog(
+    availableFilters: Set<SearchFilterType>,
+    visibleFilters: Set<SearchFilterType>,
+    onVisibleFiltersChange: (Set<SearchFilterType>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(localized("筛选项目", "Filter items")) },
+        text = {
+            Column {
+                availableFilters.forEach { type ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable {
+                            onVisibleFiltersChange(if (type in visibleFilters) visibleFilters - type else visibleFilters + type)
+                        }.padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(type in visibleFilters, onCheckedChange = { checked ->
+                            onVisibleFiltersChange(if (checked) visibleFilters + type else visibleFilters - type)
+                        })
+                        Text(filterTypeLabel(type))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.confirm)) } },
+    )
+}
+
+/** Per v0.8.27: a text-input filter chip (formula/title/author/journal/year/composition). */
+@Composable
+private fun FilterTextChip(
+    label: String,
+    value: String?,
+    onSelect: (String?) -> Unit,
+) {
+    var dialogOpen by remember { mutableStateOf(false) }
+    FilterChip(
+        selected = value != null,
+        onClick = { dialogOpen = true },
+        label = { Text(if (value != null) "$label: $value" else label, maxLines = 1) },
+    )
+    if (dialogOpen) {
+        var text by remember(value) { mutableStateOf(value ?: "") }
+        AlertDialog(
+            onDismissRequest = { dialogOpen = false },
+            title = { Text(label) },
+            text = { OutlinedTextField(text, { text = it }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
+            confirmButton = { TextButton(onClick = { onSelect(text.trim().ifBlank { null }); dialogOpen = false }) { Text(stringResource(R.string.confirm)) } },
+            dismissButton = {
+                Row {
+                    if (value != null) TextButton(onClick = { onSelect(null); dialogOpen = false }) { Text(localized("清除", "Clear")) }
+                    TextButton(onClick = { dialogOpen = false }) { Text(stringResource(R.string.cancel)) }
+                }
+            },
+        )
+    }
+}
+
 /** Per v0.6.5: horizontal filter bar for search results with cascading crystal system → point group → space group. */
 @Composable
 private fun SearchFilterBar(
     options: SearchFilterOptions,
     filterState: SearchFilterState,
     onFilterChange: (SearchFilterState) -> Unit,
+    availableFilters: Set<SearchFilterType>,
+    visibleFilters: Set<SearchFilterType>,
+    onVisibleFiltersChange: (Set<SearchFilterType>) -> Unit,
 ) {
     val elemCountLabel = localized("元素数量", "Elements")
     val crystalSystemLabel = localized("晶系", "Crystal sys.")
     val pointGroupLabel = localized("点群", "Point group")
     val spaceGroupLabel = localized("空间群", "Space group")
+    val stableLabel = localized("是否稳定", "Stability")
+    val stableOptions = listOf(localized("稳定", "Stable"), localized("不稳定", "Unstable"))
 
     val availablePointGroups = if (filterState.crystalSystem != null) {
         pointGroupsForCrystalSystem(filterState.crystalSystem).filter { it in options.pointGroups }
@@ -3585,6 +3744,7 @@ private fun SearchFilterBar(
         else -> options.spaceGroups
     }
 
+    var pickerOpen by remember { mutableStateOf(false) }
     Surface(
         tonalElevation = 2.dp,
         modifier = Modifier.fillMaxWidth(),
@@ -3594,43 +3754,121 @@ private fun SearchFilterBar(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Per v0.8.27: "+" button opens the filter-item picker.
             item {
-                IntFilterDropdownChip(
-                    label = elemCountLabel,
-                    selectedValue = filterState.elementCount,
-                    options = options.elementCounts,
-                    onSelect = { v -> onFilterChange(filterState.copy(elementCount = v)) },
-                )
+                IconButton(onClick = { pickerOpen = true }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Add, localized("筛选项目", "Filter items"), tint = MaterialTheme.colorScheme.primary)
+                }
             }
-            item {
-                FilterDropdownChip(
-                    label = crystalSystemLabel,
-                    selectedValue = filterState.crystalSystem,
-                    options = options.crystalSystems,
-                    onSelect = { v ->
-                        // Cascade: reset point group and space group when crystal system changes
-                        onFilterChange(filterState.copy(crystalSystem = v, pointGroup = null, spaceGroup = null))
-                    },
-                )
+            if (SearchFilterType.FORMULA in visibleFilters) {
+                item {
+                    FilterTextChip(
+                        label = filterTypeLabel(SearchFilterType.FORMULA),
+                        value = filterState.formula,
+                        onSelect = { v -> onFilterChange(filterState.copy(formula = v)) },
+                    )
+                }
             }
-            item {
-                FilterDropdownChip(
-                    label = pointGroupLabel,
-                    selectedValue = filterState.pointGroup,
-                    options = availablePointGroups,
-                    onSelect = { v ->
-                        // Cascade: reset space group when point group changes
-                        onFilterChange(filterState.copy(pointGroup = v, spaceGroup = null))
-                    },
-                )
+            if (SearchFilterType.ELEMENT_COUNT in visibleFilters) {
+                item {
+                    IntFilterDropdownChip(
+                        label = elemCountLabel,
+                        selectedValue = filterState.elementCount,
+                        options = options.elementCounts,
+                        onSelect = { v -> onFilterChange(filterState.copy(elementCount = v)) },
+                    )
+                }
             }
-            item {
-                FilterDropdownChip(
-                    label = spaceGroupLabel,
-                    selectedValue = filterState.spaceGroup,
-                    options = availableSpaceGroups,
-                    onSelect = { v -> onFilterChange(filterState.copy(spaceGroup = v)) },
-                )
+            if (SearchFilterType.CRYSTAL_SYSTEM in visibleFilters) {
+                item {
+                    FilterDropdownChip(
+                        label = crystalSystemLabel,
+                        selectedValue = filterState.crystalSystem,
+                        options = options.crystalSystems,
+                        onSelect = { v ->
+                            // Cascade: reset point group and space group when crystal system changes
+                            onFilterChange(filterState.copy(crystalSystem = v, pointGroup = null, spaceGroup = null))
+                        },
+                    )
+                }
+            }
+            if (SearchFilterType.POINT_GROUP in visibleFilters) {
+                item {
+                    FilterDropdownChip(
+                        label = pointGroupLabel,
+                        selectedValue = filterState.pointGroup,
+                        options = availablePointGroups,
+                        onSelect = { v ->
+                            // Cascade: reset space group when point group changes
+                            onFilterChange(filterState.copy(pointGroup = v, spaceGroup = null))
+                        },
+                    )
+                }
+            }
+            if (SearchFilterType.SPACE_GROUP in visibleFilters) {
+                item {
+                    FilterDropdownChip(
+                        label = spaceGroupLabel,
+                        selectedValue = filterState.spaceGroup,
+                        options = availableSpaceGroups,
+                        onSelect = { v -> onFilterChange(filterState.copy(spaceGroup = v)) },
+                    )
+                }
+            }
+            if (SearchFilterType.TITLE in visibleFilters) {
+                item {
+                    FilterTextChip(
+                        label = filterTypeLabel(SearchFilterType.TITLE),
+                        value = filterState.title,
+                        onSelect = { v -> onFilterChange(filterState.copy(title = v)) },
+                    )
+                }
+            }
+            if (SearchFilterType.AUTHOR in visibleFilters) {
+                item {
+                    FilterTextChip(
+                        label = filterTypeLabel(SearchFilterType.AUTHOR),
+                        value = filterState.author,
+                        onSelect = { v -> onFilterChange(filterState.copy(author = v)) },
+                    )
+                }
+            }
+            if (SearchFilterType.JOURNAL in visibleFilters) {
+                item {
+                    FilterTextChip(
+                        label = filterTypeLabel(SearchFilterType.JOURNAL),
+                        value = filterState.journal,
+                        onSelect = { v -> onFilterChange(filterState.copy(journal = v)) },
+                    )
+                }
+            }
+            if (SearchFilterType.YEAR in visibleFilters) {
+                item {
+                    FilterTextChip(
+                        label = filterTypeLabel(SearchFilterType.YEAR),
+                        value = filterState.year,
+                        onSelect = { v -> onFilterChange(filterState.copy(year = v)) },
+                    )
+                }
+            }
+            if (SearchFilterType.ELEMENT_COMPOSITION in visibleFilters) {
+                item {
+                    FilterTextChip(
+                        label = filterTypeLabel(SearchFilterType.ELEMENT_COMPOSITION),
+                        value = filterState.elementComposition,
+                        onSelect = { v -> onFilterChange(filterState.copy(elementComposition = v)) },
+                    )
+                }
+            }
+            if (SearchFilterType.STABLE in visibleFilters) {
+                item {
+                    FilterDropdownChip(
+                        label = stableLabel,
+                        selectedValue = filterState.stable?.let { if (it) stableOptions[0] else stableOptions[1] },
+                        options = stableOptions,
+                        onSelect = { v -> onFilterChange(filterState.copy(stable = v == stableOptions[0])) },
+                    )
+                }
             }
             if (filterState.isActive) {
                 item {
@@ -3640,6 +3878,14 @@ private fun SearchFilterBar(
                 }
             }
         }
+    }
+    if (pickerOpen) {
+        FilterPickerDialog(
+            availableFilters = availableFilters,
+            visibleFilters = visibleFilters,
+            onVisibleFiltersChange = onVisibleFiltersChange,
+            onDismiss = { pickerOpen = false },
+        )
     }
 }
 
@@ -3704,6 +3950,10 @@ private fun MpSearchScreen(
     var testingConnection by remember { mutableStateOf(true) }
     var connectionError by remember { mutableStateOf(false) }
     var filterState by remember { mutableStateOf(SearchFilterState()) }
+    // Per v0.8.27: filter-item visibility (persisted for the session) + help panel state.
+    var visibleFilters by remember { mutableStateOf(DEFAULT_VISIBLE_FILTERS) }
+    var helpOpen by remember { mutableStateOf(false) }
+    var helpAnchor by remember { mutableStateOf(IntOffset.Zero) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         if (MaterialsProject.testConnection()) {
@@ -3729,6 +3979,7 @@ private fun MpSearchScreen(
                 }
             }
         } else {
+        Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
@@ -3752,19 +4003,14 @@ private fun MpSearchScreen(
                 }, enabled = !searching) { Text(localized("搜索", "Search")) }
             }
             // Per v0.2.4: exact match by default; opt-in fuzzy search with `*` wildcards.
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp).onGloballyPositioned { helpAnchor = IntOffset(0, it.boundsInParent().bottom.roundToInt() + 4) }, verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(fuzzySearch, onCheckedChange = { fuzzySearch = it })
                 Text(localized("模糊搜索", "Fuzzy search"), style = MaterialTheme.typography.bodyMedium)
+                // Per v0.8.27: help button toggles the wildcard hint panel.
+                IconButton(onClick = { helpOpen = !helpOpen }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Help, localized("帮助", "Help"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
-Text(
-localized(
-"使用 * 进行元素通配搜索（如SiO*）。精确搜索中，* 仅代表一种元素；模糊搜索显示 * 代表多种元素的结果。",
-"Use * for element wildcard search (e.g. SiO*). In exact search, * represents a single element; fuzzy search shows results where * matches multiple elements.",
-),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-            )
             Spacer(Modifier.height(12.dp))
             // Per v0.6.5: snapshot `results` into a local val so the LazyColumn's item lambda never
             // re-reads a null `results` during a Compose snapshot-apply (which threw NPE on the 2nd
@@ -3774,7 +4020,14 @@ localized(
             val filterOptions = current?.let { buildFilterOptions(it.map { r -> r.meta() }) } ?: SearchFilterOptions(emptyList(), emptyList(), emptyList(), emptyList())
             LaunchedEffect(current) { filterState = SearchFilterState() }
             if (current != null && current.isNotEmpty()) {
-                SearchFilterBar(options = filterOptions, filterState = filterState, onFilterChange = { filterState = it })
+                SearchFilterBar(
+                    options = filterOptions,
+                    filterState = filterState,
+                    onFilterChange = { filterState = it },
+                    availableFilters = MP_FILTER_TYPES,
+                    visibleFilters = visibleFilters,
+                    onVisibleFiltersChange = { visibleFilters = it },
+                )
             }
             when {
                 searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索中…", "Searching…")) }
@@ -3815,12 +4068,31 @@ localized(
                 }
             }
         }
+        // Per v0.8.27: help panel — tap anywhere to dismiss.
+        if (helpOpen) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.15f)).clickable { helpOpen = false })
+            Surface(
+                modifier = Modifier.offset { helpAnchor }.padding(horizontal = 16.dp).fillMaxWidth().clickable { helpOpen = false },
+                shape = RoundedCornerShape(12.dp),
+                tonalElevation = 4.dp,
+            ) {
+                Text(
+                    localized(
+                        "使用 * 进行元素通配搜索（如SiO*）。精确搜索中，* 仅代表一种元素；模糊搜索显示 * 代表多种元素的结果。",
+                        "Use * for element wildcard search (e.g. SiO*). In exact search, * represents a single element; fuzzy search shows results where * matches multiple elements.",
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+        }
+        }
         }
         if (connectionError) {
-            AlertDialog(
-                onDismissRequest = { connectionError = false; onBack() },
-                title = { Text(localized("无法连接", "Connection failed")) },
-                text = { Text(localized("当前无法连接到Materials Project数据库，可能是网络不可用或链路异常。", "Unable to connect to the Materials Project database. The network may be unavailable or the link is abnormal.")) },
+        AlertDialog(
+            onDismissRequest = { connectionError = false; onBack() },
+            title = { Text(localized("无法连接", "Connection failed")) },
+            text = { Text(localized("当前无法连接到Materials Project数据库，可能是网络不可用或链路异常。", "Unable to connect to the Materials Project database. The network may be unavailable or the link is abnormal.")) },
                 confirmButton = {
                     TextButton(onClick = { connectionError = false; onBack() }) {
                         Text(stringResource(R.string.confirm))
@@ -3854,6 +4126,10 @@ private fun CodSearchScreen(
     var testingMirrors by remember { mutableStateOf(true) }
     var connectionError by remember { mutableStateOf(false) }
     var filterState by remember { mutableStateOf(SearchFilterState()) }
+    // Per v0.8.27: filter-item visibility (persisted for the session) + help panel state.
+    var visibleFilters by remember { mutableStateOf(DEFAULT_VISIBLE_FILTERS) }
+    var helpOpen by remember { mutableStateOf(false) }
+    var helpAnchor by remember { mutableStateOf(IntOffset.Zero) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         val mirror = CrystallographyOpenDatabase.testMirrors()
@@ -3879,6 +4155,7 @@ private fun CodSearchScreen(
                 }
             }
         } else {
+        Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
@@ -3900,7 +4177,7 @@ private fun CodSearchScreen(
                     }
                 }, enabled = !searching) { Text(localized("搜索", "Search")) }
             }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).onGloballyPositioned { helpAnchor = IntOffset(0, it.boundsInParent().bottom.roundToInt() + 4) }, verticalAlignment = Alignment.CenterVertically) {
                 val formulaLabel = localized("化学式", "Formula")
                 val elementLabel = localized("元素", "Element")
                 val textLabel = localized("文本", "Text")
@@ -3916,37 +4193,11 @@ private fun CodSearchScreen(
                         modifier = Modifier.padding(horizontal = 3.dp),
                     )
                 }
-            }
-            // Per v0.3.3: element mode exposes a "max element count" cap (COD nel2). Slider + text
-            // field mirror ExpansionCluster's integer-input pattern (range 1..8, default 8).
-            if (mode == CrystallographyOpenDatabase.SearchMode.ELEMENT) {
-                var elementsText by remember(maxElements) { mutableStateOf(maxElements.toString()) }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(localized("最大元素数量", "Max elements"), fontWeight = FontWeight.Medium, modifier = Modifier.padding(end = 8.dp))
-                    OutlinedTextField(
-                        elementsText,
-                        { input -> elementsText = input; input.toIntOrNull()?.let { n -> if (n in 1..8) maxElements = n } },
-                        singleLine = true,
-                        modifier = Modifier.width(64.dp),
-                    )
-                    Slider(
-                        value = maxElements.toFloat(),
-                        onValueChange = { v -> val n = v.toInt().coerceIn(1, 8); maxElements = n; elementsText = n.toString() },
-                        valueRange = 1f..8f,
-                        steps = 6,
-                        modifier = Modifier.weight(1f).padding(start = 8.dp),
-                    )
+                // Per v0.8.27: help button toggles the search-mode hint panel.
+                IconButton(onClick = { helpOpen = !helpOpen }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Help, localized("帮助", "Help"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            Text(
-                localized(
-                    "化学式如 SiO2（自动转为 Hill 顺序 O2 Si）。元素以空格分开，如 Si O。文本如 quartz，匹配矿物名/化学名/标题。",
-                    "Formula e.g. SiO2 (auto-converted to Hill order: O2 Si). Element sperating by space, e.g. Si O. Text e.g. quartz, matches mineral/chemical names and titles.",
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-            )
             Spacer(Modifier.height(12.dp))
             // Per v0.6.5: snapshot `results` into a local val so the LazyColumn's item lambda never
             // re-reads a null `results` during a Compose snapshot-apply (which threw NPE on the 2nd
@@ -3956,7 +4207,14 @@ private fun CodSearchScreen(
             val filterOptions = current?.let { buildFilterOptions(it.map { r -> r.meta() }) } ?: SearchFilterOptions(emptyList(), emptyList(), emptyList(), emptyList())
             LaunchedEffect(current) { filterState = SearchFilterState() }
             if (current != null && current.isNotEmpty()) {
-                SearchFilterBar(options = filterOptions, filterState = filterState, onFilterChange = { filterState = it })
+                SearchFilterBar(
+                    options = filterOptions,
+                    filterState = filterState,
+                    onFilterChange = { filterState = it },
+                    availableFilters = COD_FILTER_TYPES,
+                    visibleFilters = visibleFilters,
+                    onVisibleFiltersChange = { visibleFilters = it },
+                )
             }
             when {
                 searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索中…", "Searching…")) }
@@ -4005,6 +4263,25 @@ private fun CodSearchScreen(
                     }
                 }
             }
+        }
+        // Per v0.8.27: help panel — tap anywhere to dismiss.
+        if (helpOpen) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.15f)).clickable { helpOpen = false })
+            Surface(
+                modifier = Modifier.offset { helpAnchor }.padding(horizontal = 16.dp).fillMaxWidth().clickable { helpOpen = false },
+                shape = RoundedCornerShape(12.dp),
+                tonalElevation = 4.dp,
+            ) {
+                Text(
+                    localized(
+                        "化学式如 SiO2（自动转为 Hill 顺序 O2 Si）。元素以空格分开，如 Si O。文本如 quartz，匹配矿物名/化学名/标题。",
+                        "Formula e.g. SiO2 (auto-converted to Hill order: O2 Si). Elements separated by space, e.g. Si O. Text e.g. quartz, matches mineral/chemical names and titles.",
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+        }
         }
         }
         if (connectionError) {
