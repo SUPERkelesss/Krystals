@@ -74,6 +74,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ColorLens
@@ -1406,7 +1407,7 @@ private fun HomeScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_local)) }, leadingIcon = { Icon(Icons.Default.FileOpen, null) }, onClick = { menuOpen = false; onOpen() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.open_preset_library)) }, leadingIcon = { Icon(Icons.Default.Inventory2, null) }, onClick = { menuOpen = false; onOpenPreset() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.CloudDownload, null) }, onClick = { menuOpen = false; onOnlineSource() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.AddCircle, null) }, onClick = { menuOpen = false; onNew() })
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
                     TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -1440,7 +1441,7 @@ private fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onOnlineSource, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.CloudDownload, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.import_online)) }
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onNew, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.new_file)) }
+                Button(onClick = onNew, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.AddCircle, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.new_file)) }
             }
         }
     }
@@ -1696,7 +1697,7 @@ private fun ViewerScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_local)) }, leadingIcon = { Icon(Icons.Default.FileOpen, null) }, onClick = { menuOpen = false; onOpen() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.open_preset_library)) }, leadingIcon = { Icon(Icons.Default.Inventory2, null) }, onClick = { menuOpen = false; onOpenPreset() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.CloudDownload, null) }, onClick = { menuOpen = false; onOnlineSource() })
-                DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.Add, null) }, onClick = { menuOpen = false; onNew() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.AddCircle, null) }, onClick = { menuOpen = false; onNew() })
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text(stringResource(R.string.save)) }, leadingIcon = { Icon(Icons.Default.Save, null) }, onClick = { menuOpen = false; onSave(tab) })
                 DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = { menuOpen = false; onSaveToPreset() })
