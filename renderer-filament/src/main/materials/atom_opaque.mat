@@ -1,6 +1,6 @@
 material {
     name : KrystalsAtomOpaque,
-    shadingModel : unlit,
+    shadingModel : lit,
     blending : opaque,
     requires : [ tangents ],
     variables : [ customNormal ],
@@ -9,41 +9,25 @@ material {
         { type : float3, name : backgroundColor },
         { type : float2, name : depthRange },
         { type : float, name : depthCueEnabled },
-        { type : float, name : reflectionEnabled },
-        { type : float3, name : lightDirection },
-        { type : float, name : highlightIntensity },
-        { type : float, name : highlightRadius }
+        { type : float, name : reflectionEnabled }
     ]
 }
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        vec3 worldN = normalize(variable_customNormal.xyz);
-        vec3 viewN = normalize(mat3(getViewFromWorldMatrix()) * worldN);
-        // Edge (silhouette) darkening: view-space normals near the screen plane darken,
-        // giving spheres and cylinders stronger volume.
-        float edge = clamp(length(viewN.xy), 0.0, 1.0);
-        float edgeShade = 1.0 - materialParams.reflectionEnabled * edge * 0.30;
-        vec3 L = normalize(materialParams.lightDirection);
-        float NdotL = max(dot(viewN, L), 0.0);
-        // v0.8.14: ambient rises with intensity so the brightness slider brightens atoms.
-        float ambient = clamp(0.35 + 0.30 * materialParams.highlightIntensity, 0.35, 0.65);
-        float diffuseShade = ambient + (1.0 - ambient) * NdotL;
-        vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);
-        // Real Blinn-Phong specular: half-vector NdotH makes the highlight follow the
-        // view (orthographic camera view vector V = (0,0,1)).
-        vec3 V = vec3(0.0, 0.0, 1.0);
-        vec3 H = normalize(L + V);
-        float NdotH = max(dot(viewN, H), 0.0);
-        // v0.8.14: shininess driven by diffusion across its full range (no dead 4.0 clamp).
-        float shininess = max(2.0 / (materialParams.highlightRadius + 0.01), 1.5);
-        float specular = materialParams.reflectionEnabled * materialParams.highlightIntensity * pow(NdotH, shininess);
-        color.rgb = mix(color.rgb, vec3(1.0), specular * 0.75);
+        vec4 color = materialParams.baseColor;
+        // v0.8.24: atoms are lit PBR with a 0.4 clear coat (user spec). Depth fog is
+        // applied to the base color; the clear coat adds a second glossy layer on top.
         float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
         float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
         color.rgb = mix(color.rgb, materialParams.backgroundColor, fog);
         material.baseColor = color;
+        material.metallic = 0.0;
+        material.roughness = 0.32;
+        material.reflectance = 0.45;
+        material.clearCoat = 0.4;
+        material.clearCoatRoughness = 0.25;
     }
 }
 vertex {

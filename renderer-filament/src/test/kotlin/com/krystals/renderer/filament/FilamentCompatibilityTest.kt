@@ -45,7 +45,9 @@ class FilamentCompatibilityTest {
         val cosPhi = cos(phi)
         assertEquals((cosPhi * cos(theta)), direction.x, 1e-9)
         assertEquals((cosPhi * sin(theta)), direction.y, 1e-9)
-        assertEquals(-sin(phi), direction.z, 1e-9)
+        // v0.8.24: +sin(phi) — Filament view space has the camera looking down -Z, so
+        // the camera-facing surface normal is +Z; a 90°-elevation light points at +Z.
+        assertEquals(sin(phi), direction.z, 1e-9)
     }
 
     @Test
@@ -77,25 +79,25 @@ class FilamentCompatibilityTest {
             elevationDegrees = 90f,
             cameraRotation = rot,
         )
-        // surface-to-light at (az=0, el=90) = (0,0,-1); travel = (0,0,1) in view space.
-        // World = rotY(90).transposed() * (0,0,1). rotY(90) maps world->view, so
-        // view->world is rotY(-90) = transposed(rotY(90)): column c = (sin(-90),0,cos(-90))
-        // = (-1,0,0) applied to (0,0,1) gives... compute explicitly below.
-        val expected = com.krystals.crystal.core.math.rotY(-90.0) * com.krystals.crystal.core.math.Vec3(0.0, 0.0, 1.0)
+        // surface-to-light at (az=0, el=90) = (0,0,+1) (v0.8.24 sign fix); travel =
+        // (0,0,-1) in view space. World = rotY(90).transposed() * (0,0,-1).
+        // rotY(90) maps world->view, so view->world is rotY(-90): applied to (0,0,-1)
+        // the c column (sin(-90),0,cos(-90)) = (-1,0,0) negated gives (1,0,0).
+        val expected = com.krystals.crystal.core.math.rotY(-90.0) * com.krystals.crystal.core.math.Vec3(0.0, 0.0, -1.0)
         assertEquals(expected.x, travel.x, 1e-9)
         assertEquals(expected.y, travel.y, 1e-9)
         assertEquals(expected.z, travel.z, 1e-9)
     }
 
     @Test
-    fun `default appearance light direction has negative z`() {
+    fun `default appearance light direction has positive z`() {
         val appearance = com.krystals.renderer.core.style.ViewerAppearance()
         val direction = viewSpaceLightDirection(
             appearance.lightAzimuth,
             appearance.lightElevation,
         )
-        // 默认方位 150°、高度 45°:光从屏幕左上偏后方向来,负 Z 表示向屏幕内。
-        assertEquals(-1.0, direction.z / kotlin.math.abs(direction.z), 1e-9)
+        // 默认方位 150°、高度 45°:光从屏幕左前上方来,正 Z 表示朝向相机(v0.8.24)。
+        assertEquals(1.0, direction.z / kotlin.math.abs(direction.z), 1e-9)
         assertEquals(-1.0, direction.x / kotlin.math.abs(direction.x), 1e-9)
     }
 
@@ -143,10 +145,19 @@ class FilamentCompatibilityTest {
     }
 
     @Test
-    fun `atom base color keeps five percent desaturation`() {
-        // v0.8.23: atom materials are back to the same unlit shader as bonds; the only
-        // atom-specific material behavior left is the 5% CPK desaturation.
+    fun `atom pbr configuration matches spec`() {
+        // v0.8.24: atoms are lit PBR with a 0.4 clear coat per user spec.
+        assertEquals(0.0f, AtomPbr.METALLIC, 0.001f)
+        assertEquals(0.32f, AtomPbr.ROUGHNESS, 0.001f)
+        assertEquals(0.45f, AtomPbr.REFLECTANCE, 0.001f)
+        assertEquals(0.4f, AtomPbr.CLEAR_COAT, 0.001f)
+        assertEquals(0.25f, AtomPbr.CLEAR_COAT_ROUGHNESS, 0.001f)
         assertEquals(0.95f, AtomPbr.SATURATION_FACTOR, 0.001f)
+    }
+
+    @Test
+    fun `atom base color keeps five percent desaturation`() {
+        // CPK base color stays desaturated by 5% even with the lit PBR material.
         assertEquals(0xFF808080L, desaturateArgb(0xFF808080L, AtomPbr.SATURATION_FACTOR))
         val out = desaturateArgb(0xFFFF0000L, AtomPbr.SATURATION_FACTOR)
         assertTrue((out ushr 16 and 0xFF) > 200, "red must stay dominant")

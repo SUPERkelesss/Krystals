@@ -147,8 +147,11 @@ internal fun depthCueViewRange(cue: DepthCueing, visibleNear: Float, visibleFar:
  *
  * The world light is anchored to the camera: no matter how the crystal is rotated,
  * the light-to-camera relationship stays constant, so [cameraRotation] must NOT be
- * applied here. The phi-flip convention is kept (0° elevation = horizon, 90° = at the
- * camera, -sin(phi) on Z).
+ * applied here. The phi convention: 0° elevation = horizon, 90° = at the camera
+ * (+sin(phi) on Z). In Filament view space the camera looks down -Z, so the surface
+ * facing the camera has normal +Z; a 90° elevation light therefore points at +Z
+ * (surface-to-light). v0.8.24: Z sign flipped from -sin(phi) — the old sign put the
+ * light behind the scene, darkening the camera-facing hemisphere.
  */
 internal fun viewSpaceLightDirection(
     azimuthDegrees: Float,
@@ -157,11 +160,11 @@ internal fun viewSpaceLightDirection(
     val theta = Math.toRadians(azimuthDegrees.toDouble())
     val phi = Math.toRadians(elevationDegrees.coerceIn(0f, 90f).toDouble())
     val cosPhi = kotlin.math.cos(phi)
-    // Surface-to-light in view space: 0° elevation = horizon, 90° = toward the camera (-Z).
+    // Surface-to-light in view space: 0° elevation = horizon, 90° = toward the camera (+Z).
     return com.krystals.crystal.core.math.Vec3(
         cosPhi * kotlin.math.cos(theta),
         cosPhi * kotlin.math.sin(theta),
-        -kotlin.math.sin(phi),
+        kotlin.math.sin(phi),
     )
 }
 
@@ -223,12 +226,16 @@ internal fun atomSpecularBlend(): Float = 1.0f
 /**
  * Atom material shading parameters.
  *
- * v0.8.23: atom materials were reverted to the SAME unlit shader as bonds
- * (atom_opaque/atom_transparent now mirror opaque/transparent), because the PBR lit
- * material kept producing a bright silhouette edge at high light elevation. Only the
- * CPK base-color desaturation remains atom-specific.
+ * v0.8.24: atoms are lit PBR materials again (user spec) with a 0.4 clear coat on top
+ * of the CPK base color. Must mirror the values baked into atom_opaque.mat /
+ * atom_transparent.mat. The 5% CPK desaturation remains atom-specific.
  */
 internal object AtomPbr {
+    const val METALLIC = 0.0f
+    const val ROUGHNESS = 0.32f
+    const val REFLECTANCE = 0.45f
+    const val CLEAR_COAT = 0.4f
+    const val CLEAR_COAT_ROUGHNESS = 0.25f
     /** CPK base color is desaturated by 5% before it reaches the material. */
     const val SATURATION_FACTOR = 0.95f
 }
