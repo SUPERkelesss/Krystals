@@ -235,7 +235,8 @@ internal object AtomPbr {
     const val ROUGHNESS = 0.32f
     const val REFLECTANCE = 0.45f
     const val CLEAR_COAT = 0.4f
-    const val CLEAR_COAT_ROUGHNESS = 0.25f
+    // v0.8.25: clear-coat roughness raised 0.25 -> 0.5 for a softer coat highlight.
+    const val CLEAR_COAT_ROUGHNESS = 0.5f
     /** CPK base color is desaturated by 5% before it reaches the material. */
     const val SATURATION_FACTOR = 0.95f
 }

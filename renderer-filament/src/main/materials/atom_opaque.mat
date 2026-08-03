@@ -27,7 +27,7 @@ fragment {
         material.roughness = 0.32;
         material.reflectance = 0.45;
         material.clearCoat = 0.4;
-        material.clearCoatRoughness = 0.25;
+        material.clearCoatRoughness = 0.5;
     }
 }
 vertex {
