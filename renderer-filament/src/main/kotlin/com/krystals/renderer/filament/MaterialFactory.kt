@@ -221,17 +221,14 @@ internal fun atomDiffuseWeight(): Float = 0.0f
 internal fun atomSpecularBlend(): Float = 1.0f
 
 /**
- * v0.8.18: atoms are real Filament lit (PBR) materials with these parameters. Must
- * mirror the values baked into atom_opaque.mat / atom_transparent.mat.
+ * Atom material shading parameters.
+ *
+ * v0.8.23: atom materials were reverted to the SAME unlit shader as bonds
+ * (atom_opaque/atom_transparent now mirror opaque/transparent), because the PBR lit
+ * material kept producing a bright silhouette edge at high light elevation. Only the
+ * CPK base-color desaturation remains atom-specific.
  */
 internal object AtomPbr {
-    const val METALLIC = 0.0f
-    const val ROUGHNESS = 0.32f
-    const val REFLECTANCE = 0.45f
-    // v0.8.21: restored to 0.1 — the bright silhouette edge was highlight overexposure
-    // (150k lux directional light with post-processing disabled), not the clear coat.
-    const val CLEAR_COAT = 0.1f
-    const val CLEAR_COAT_ROUGHNESS = 0.25f
     /** CPK base color is desaturated by 5% before it reaches the material. */
     const val SATURATION_FACTOR = 0.95f
 }
