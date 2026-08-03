@@ -22,6 +22,12 @@ data class CodSearchResult(
     val sgNumber: String,
     val name: String,
     val nel: Int,
+    // Per v0.8.27: bibliographic fields parsed from the CSV when the mirror provides them
+    // (used by the title/author/journal/year filters). Empty when unavailable.
+    val title: String = "",
+    val author: String = "",
+    val journal: String = "",
+    val year: String = "",
 )
 
 data class CodMirror(val testUrl: String, val apiBase: String)
@@ -306,6 +312,8 @@ object CrystallographyOpenDatabase {
         val iFile = idx("file"); val iFormula = idx("formula"); val iSg = idx("sg")
         val iSgNumber = idx("sgNumber"); val iChem = idx("chemname"); val iMineral = idx("mineral")
         val iCommon = idx("commonname"); val iNel = idx("nel")
+        // Bibliographic columns are optional — mirrors may not return them.
+        val iTitle = idx("title"); val iAuthors = idx("authors"); val iJournal = idx("journal"); val iYear = idx("year")
         val results = mutableListOf<CodSearchResult>()
         for (i in (headerIndex + 1) until lines.size) {
             val line = lines[i].trim()
@@ -313,7 +321,7 @@ object CrystallographyOpenDatabase {
             val fields = splitCsvLine(line)
             if (fields.size < headers.size) continue
             val fileId = fields.getOrNull(iFile)?.takeIf { it.isNotBlank() } ?: continue
-            fun col(n: Int) = fields.getOrNull(n)?.trim().orEmpty()
+            fun col(n: Int) = if (n >= 0) fields.getOrNull(n)?.trim().orEmpty() else ""
             val name = listOf(col(iChem), col(iMineral), col(iCommon)).firstOrNull { it.isNotBlank() }.orEmpty()
             results += CodSearchResult(
                 fileId = fileId,
@@ -322,6 +330,10 @@ object CrystallographyOpenDatabase {
                 sgNumber = col(iSgNumber),
                 name = name,
                 nel = col(iNel).toIntOrNull() ?: 0,
+                title = col(iTitle),
+                author = col(iAuthors),
+                journal = col(iJournal),
+                year = col(iYear),
             )
         }
         return results
