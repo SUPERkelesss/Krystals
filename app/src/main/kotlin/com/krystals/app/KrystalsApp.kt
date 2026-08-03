@@ -451,7 +451,9 @@ fun KrystalsRoot(
     // Per v0.6.5: check for updates on startup.
     // Per v0.8.25: at most once per 24h — the timestamp is written before the request so a
     // failed check (offline etc.) still counts and isn't retried on every cold start.
+    // Per v0.8.26: skip update check when autoCheckUpdate is disabled.
     LaunchedEffect(Unit) {
+        if (!settingsValues.autoCheckUpdate) return@LaunchedEffect
         val now = System.currentTimeMillis()
         val lastChecked = preferences.getLong("last_update_check_ms", 0L)
         if (now - lastChecked < UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect
@@ -565,16 +567,26 @@ fun KrystalsRoot(
                 Result.success(
                     withContext(Dispatchers.Default) {
                         val expandedSize = SymmetryExpander.expand(structure).size
-                        // Per v0.8.12: all-non-metal structures default to the bonding path and
-                        // ignore the smartIonic result (v0.8.7) — skip the expensive smartIonic
-                        // pre-computation (full Voronoi + BVS) entirely for them.
-                        if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
-                            CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null)
-                        } else {
-                        val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
-                            runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon) }.getOrNull()
-                        }
-                            CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
+                        // Per v0.8.26: dispatch by user-selected bond-rule mode.
+                        when (settingsValues.bondRuleMode) {
+                            BondRuleMode.AUTO -> {
+                                if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
+                                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null)
+                                } else {
+                                    val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                                        runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon) }.getOrNull()
+                                    }
+                                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
+                                }
+                            }
+                            BondRuleMode.SMART_IONIC -> {
+                                val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                                    runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon) }.getOrNull()
+                                }
+                                CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
+                            }
+                            BondRuleMode.BONDING -> CrystalEditor.rebuildBondRules(structure, bondConfiguration, RadiusSource.BONDING, epsilon)
+                            BondRuleMode.VDW -> CrystalEditor.rebuildBondRules(structure, bondConfiguration, RadiusSource.VDW, epsilon)
                         }
                     }
                 )
@@ -623,7 +635,8 @@ fun KrystalsRoot(
         val tab = viewModel.current ?: return
         // Per v0.7.0: extract user comments from CIF source.
         tab.comments = CifComments.extract(parsed.document.source)
-        openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
+        // Per v0.8.26: skip bond computation when the user disables auto-bond-rules.
+        if (settingsValues.autoBondRules) openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
     }
 
     /** Per v0.5.0: add a parsed structure, synthesizing bond rules off-UI with the computing overlay.
@@ -662,7 +675,7 @@ fun KrystalsRoot(
                 if (pending.candidates.size == 1) {
                     // Per v0.6.4: parseStructure can be heavy (resolves space groups, creates
                     // symmetry operations) — run on Dispatchers.Default to avoid blocking the UI.
-                    val parsed = withContext(Dispatchers.Default) { CifCodec.parseStructure(pending.text, pending.candidates.first()) }
+                    val parsed = withContext(Dispatchers.Default) { CifCodec.parseStructure(pending.text, pending.candidates.first(), autoConvertConventional = settingsValues.autoConvertCell) }
                     openParsed(parsed, pending.name, pending.uri)
                 } else pendingOpen = pending
             } else {
@@ -692,7 +705,7 @@ fun KrystalsRoot(
                     val contentWithComments = CifComments.inject(content, tab.comments)
                     withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, contentWithComments) }
                     tab.uri = uri; tab.isNew = false; tab.dirty = false; tab.savedName = tab.name
-                    tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex)
+                    tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell)
                 }.onSuccess {
                     showMessage("Saved ${tab.name}")
                 }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
@@ -718,7 +731,7 @@ fun KrystalsRoot(
                 // Per v0.7.0: inject user comments into CIF before writing.
                 val contentWithComments = CifComments.inject(content, tab.comments)
                 withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, contentWithComments) }
-                tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex)
+                tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell)
                 tab.dirty = false
             }.onSuccess { showMessage("Saved ${tab.name}"); afterSave() }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
         }
@@ -1083,7 +1096,7 @@ private fun KrystalsRootDialogs(
             onDismissRequest = { pendingOpen = null },
             title = { Text(localized("选择结构", "Select structure")) },
             text = { Column { pending.candidates.forEach { index -> TextButton(onClick = {
-                runCatching { CifCodec.parseStructure(pending.text, index) }
+                runCatching { CifCodec.parseStructure(pending.text, index, autoConvertConventional = true) }
                     .onSuccess { parsed -> pendingOpen = null; openParsed(parsed, pending.name, pending.uri) }
                     .onFailure { if (it is com.krystals.crystal.core.CifParseException) { pendingOpen = null; cifWarningOpen = true } else showMessage(it.message ?: "Unable to open CIF") }
             }) { Text(document.blocks[index].name) } } } },
@@ -1801,37 +1814,39 @@ private fun ViewerScreen(
 
             // Per v0.7.0: lock button at viewer top-right.
             // Per v0.8.1: inactive = 50% opacity; active = solid circular background + hollow icon.
-            // Per v0.6.5: icon size matched (36dp outer + 24dp icon in both states).
-            IconButton(
-                onClick = { dispatchViewerCommand(ViewerCommand.ToggleLock) },
-                modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
-            ) {
-                if (tab.interactionState.session.locked) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.onSurface),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Outlined.LockOpen,
-                            null,
-                            tint = MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.size(24.dp),
-                        )
-                    }
-                } else {
-                    Box(
-                        modifier = Modifier.size(36.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Default.Lock,
-                            null,
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                            modifier = Modifier.size(24.dp),
-                        )
+            // Per v0.8.26: hidden when the user hides it, unless already locked (to prevent lock-in).
+            if (settingsValues.showLockButton || tab.interactionState.session.locked) {
+                IconButton(
+                    onClick = { dispatchViewerCommand(ViewerCommand.ToggleLock) },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+                ) {
+                    if (tab.interactionState.session.locked) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.onSurface),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Outlined.LockOpen,
+                                null,
+                                tint = MaterialTheme.colorScheme.surface,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier.size(36.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Default.Lock,
+                                null,
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -1905,13 +1920,16 @@ sceneBuildError?.let { message ->
                         else sites.sortedBy { it.label }.map { LegendEntry(it.label, argb) }
                     }
             }
-            ElementLegend(
-                entries = legendEntries,
-                expanded = legendExpanded,
-                onToggle = { legendExpanded = !legendExpanded },
-                onExpand = { legendExpanded = true },
-                modifier = Modifier.align(Alignment.BottomStart).padding(14.dp),
-            )
+            // Per v0.8.26: legend toggle respects user preference.
+            if (settingsValues.showLegend) {
+                ElementLegend(
+                    entries = legendEntries,
+                    expanded = legendExpanded,
+                    onToggle = { legendExpanded = !legendExpanded },
+                    onExpand = { legendExpanded = true },
+                    modifier = Modifier.align(Alignment.BottomStart).padding(14.dp),
+                )
+            }
 
             // Per v0.7.1: persistent overlay message for atom-edit / bond-draw flows.
             persistentMessage?.let { msg ->
@@ -1930,7 +1948,8 @@ sceneBuildError?.let { message ->
                 }
             }
 
-            val floatingAlpha by animateFloatAsState(targetValue = if (toolOpen) 1f else 0.45f, label = "floatingAlpha")
+            // Per v0.8.26: use user-configured collapsed alpha.
+            val floatingAlpha by animateFloatAsState(targetValue = if (toolOpen) 1f else settingsValues.ballCollapsedAlpha, label = "floatingAlpha")
             // Per v0.2.2: floating-ball palette uses the project's two purples (deep 0xFF7542A5 /
             // light 0xFFCFA7F5). Dark mode = deep bg + light icon; light mode = light bg + deep icon.
             // The active (measure/lock) tool buttons invert this pairing.
