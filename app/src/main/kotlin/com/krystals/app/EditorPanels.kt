@@ -1546,7 +1546,7 @@ private fun hsvToArgb(alpha: Int, hsv: FloatArray): Long {
 }
 
 @Composable
-private fun DropdownField(label: String, value: String, options: List<String>, onValue: (String) -> Unit) {
+internal fun DropdownField(label: String, value: String, options: List<String>, onValue: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         OutlinedTextField(value, {}, readOnly = true, label = { Text(label) }, modifier = Modifier.fillMaxWidth().clickable { open = true })
