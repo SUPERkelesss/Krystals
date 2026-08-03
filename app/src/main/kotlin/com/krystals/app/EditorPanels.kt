@@ -72,8 +72,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.foundation.Image
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -1070,6 +1073,10 @@ fun AppearanceDialog(
     var colorPickerOpen by remember { mutableStateOf(false) }
     var bondColorPickerOpen by remember { mutableStateOf(false) }
     var followTheme by remember { mutableStateOf(backgroundFollowTheme) }
+    // Per v0.8.32: release the dedicated preview Filament engine when the dialog closes.
+    DisposableEffect(Unit) {
+        onDispose { AppearancePreviewRenderer.release() }
+    }
     // Per v0.6.5: precompute dark/light for the follow-theme clickable.
     val surfaceColor = MaterialTheme.colorScheme.surface
     val isDarkSurface = (0.299f * surfaceColor.red + 0.587f * surfaceColor.green + 0.114f * surfaceColor.blue) < 0.5f
@@ -1317,28 +1324,28 @@ internal fun formatSliderValue(value: Float, percentage: Boolean = false, decima
 
 @Composable
 private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifier = Modifier) {
-    Surface(modifier, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-        Canvas(Modifier.fillMaxSize().padding(10.dp)) {
-            val radius = size.minDimension * 0.38f
-            val center = Offset(size.width / 2f, size.height / 2f)
-            val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
-            // Per v0.6.5: brighten the preview sphere for better visibility.
-            val gray = Color(0xFFA8A8AD).copy(alpha = opacity)
-            val theta = appearance.lightAzimuth / 180f * PI.toFloat()
-            val phi = appearance.lightElevation / 180f * PI.toFloat()
-            val cosPhi = cos(phi)
-            val lightOffset = radius * .95f * cosPhi
-            val highlight = Offset(center.x + cos(theta) * lightOffset, center.y - sin(theta) * lightOffset)
-            drawCircle(gray, radius, center)
-            if (appearance.reflectionEnabled && opacity > 0.01f) {
-                val highlightBrush = Brush.radialGradient(
-                    listOf(Color.White.copy(alpha = appearance.lightIntensity.coerceIn(.05f, 1f) * opacity), Color.Transparent),
-                    center = highlight,
-                    radius = radius * (0.35f + 0.75f * appearance.diffusion),
-                )
-                drawCircle(highlightBrush, radius, center)
-            }
-            drawCircle(Color.Black.copy(alpha = .3f * opacity), radius, center, style = androidx.compose.ui.graphics.drawscope.Stroke(1.5f))
+    // Per v0.8.32: the preview sphere is rendered by the real Filament backend (off-screen),
+    // so radius, color, reflection and opacity match the current in-dialog values exactly.
+    val context = LocalContext.current
+    val bgCompose = MaterialTheme.colorScheme.surfaceVariant
+    val bgArgb = (bgCompose.toArgb().toLong()) and 0xFFFFFFFFL
+    var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(appearance) {
+        bitmap = AppearancePreviewRenderer.renderSpheres(
+            context = context.applicationContext,
+            appearance = appearance,
+            xOffsets = listOf(0.0),
+            sphereRadius = 1.0,
+            zoom = 0.76, // sphere diameter = 76% of the preview height (matches the old Canvas layout)
+            backgroundArgb = bgArgb,
+        )
+    }
+    Surface(modifier, shape = RoundedCornerShape(16.dp), color = bgCompose) {
+        val bmp = bitmap
+        if (bmp != null) {
+            Image(bitmap = bmp.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize())
+        } else {
+            Box(Modifier.fillMaxSize())
         }
     }
 }
@@ -1347,88 +1354,88 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
 @Composable
 private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier = Modifier) {
     val bgCompose = MaterialTheme.colorScheme.surfaceVariant
+    // Per v0.8.32: the five spheres are rendered by the real Filament backend (off-screen) at
+    // the same positions/sizes as the old Canvas layout; the fog curve + axis labels stay Canvas.
+    val context = LocalContext.current
+    val bgArgb = (bgCompose.toArgb().toLong()) and 0xFFFFFFFFL
+    val depths = listOf(-3f, -1.5f, 0f, 1.5f, 3f)
+    var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(appearance) {
+        bitmap = AppearancePreviewRenderer.renderSpheres(
+            context = context.applicationContext,
+            appearance = appearance,
+            xOffsets = listOf(-3.5, -1.75, 0.0, 1.75, 3.5),
+            sphereRadius = 1.0,
+            zoom = 0.945, // sphere diameter ≈ 21% of the preview height (matches the old Canvas layout)
+            centerYFraction = 0.73f, // sphere row sits at 73% height, below the curve
+            fogFactors = depths.map { depthCueFog(it, appearance.dofNear, appearance.dofFar) },
+            backgroundArgb = bgArgb,
+        )
+    }
     Surface(modifier, shape = RoundedCornerShape(16.dp), color = bgCompose) {
-        Canvas(Modifier.fillMaxSize().padding(8.dp)) {
-            val near = appearance.dofNear.coerceIn(-5f, 5f)
-            val far = appearance.dofFar.coerceIn(-5f, 5f)
-            val depths = listOf(-3f, -1.5f, 0f, 1.5f, 3f)
-            val radius = size.minDimension * 0.105f
-            val xStart = radius * 1.25f
-            val xEnd = size.width - radius * 1.25f
-            val xPositions = depths.indices.map { index ->
-                xStart + (xEnd - xStart) * index / depths.lastIndex.toFloat()
+        Box(Modifier.fillMaxSize()) {
+            val bmp = bitmap
+            if (bmp != null) {
+                Image(bitmap = bmp.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize())
             }
-            val chartTop = size.height * 0.10f
-            val chartBottom = size.height * 0.43f
-            val atomY = size.height * 0.73f
-            val isLight = (0.299f * bgCompose.red + 0.587f * bgCompose.green + 0.114f * bgCompose.blue) > 0.5f
-            val lineColor = if (isLight) Color.Black else Color.White
-            val guideColor = lineColor.copy(alpha = 0.48f)
-            val dash = PathEffect.dashPathEffect(floatArrayOf(5f, 4f))
-            drawLine(guideColor, Offset(xStart, chartTop), Offset(xEnd, chartTop), 1.2f, pathEffect = dash)
-            drawLine(guideColor, Offset(xStart, chartBottom), Offset(xEnd, chartBottom), 1.2f, pathEffect = dash)
-
-            // Continuous opacity-depth curve: y plots OPACITY (1−fog), not fog.
-            // fog=0 (full opacity) → top; fog=1 (transparent) → bottom.
-            val samples = 60
-            val curve = Path().apply {
-                for (i in 0..samples) {
-                    val d = -3f + 6f * i / samples
-                    val fog = depthCueFog(d, near, far)
-                    val y = chartTop + fog * (chartBottom - chartTop)
-                    val x = xStart + (xEnd - xStart) * i / samples
-                    if (i == 0) moveTo(x, y) else lineTo(x, y)
+            Canvas(Modifier.fillMaxSize().padding(8.dp)) {
+                val near = appearance.dofNear.coerceIn(-5f, 5f)
+                val far = appearance.dofFar.coerceIn(-5f, 5f)
+                val radius = size.minDimension * 0.105f
+                val xStart = radius * 1.25f
+                val xEnd = size.width - radius * 1.25f
+                val xPositions = depths.indices.map { index ->
+                    xStart + (xEnd - xStart) * index / depths.lastIndex.toFloat()
                 }
-            }
-            drawPath(curve, lineColor, style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
+                val chartTop = size.height * 0.10f
+                val chartBottom = size.height * 0.43f
+                val isLight = (0.299f * bgCompose.red + 0.587f * bgCompose.green + 0.114f * bgCompose.blue) > 0.5f
+                val lineColor = if (isLight) Color.Black else Color.White
+                val guideColor = lineColor.copy(alpha = 0.48f)
+                val dash = PathEffect.dashPathEffect(floatArrayOf(5f, 4f))
+                drawLine(guideColor, Offset(xStart, chartTop), Offset(xEnd, chartTop), 1.2f, pathEffect = dash)
+                drawLine(guideColor, Offset(xStart, chartBottom), Offset(xEnd, chartBottom), 1.2f, pathEffect = dash)
 
-            depths.forEachIndexed { index, depth ->
-                val fog = depthCueFog(depth, near, far)
-                val y = chartTop + fog * (chartBottom - chartTop)
-                drawCircle(lineColor, 2.4f, Offset(xPositions[index], y))
-                drawPreviewSphere(Offset(xPositions[index], atomY), radius, appearance, fog, bgCompose)
-            }
+                // Continuous opacity-depth curve: y plots OPACITY (1−fog), not fog.
+                // fog=0 (full opacity) → top; fog=1 (transparent) → bottom.
+                val samples = 60
+                val curve = Path().apply {
+                    for (i in 0..samples) {
+                        val d = -3f + 6f * i / samples
+                        val fog = depthCueFog(d, near, far)
+                        val y = chartTop + fog * (chartBottom - chartTop)
+                        val x = xStart + (xEnd - xStart) * i / samples
+                        if (i == 0) moveTo(x, y) else lineTo(x, y)
+                    }
+                }
+                drawPath(curve, lineColor, style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
 
-            val nc = drawContext.canvas.nativeCanvas
-            val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                color = if (isLight) 0xCC000000.toInt() else 0xCCFFFFFF.toInt()
-                textSize = radius * 0.72f
-            }
-            // Opacity axis labels (1 = top/full opacity, 0 = bottom/transparent).
-            nc.drawText("1", xStart - radius, chartTop + p.textSize * 0.35f, p)
-            nc.drawText("0", xStart - radius, chartBottom + p.textSize * 0.35f, p)
-            // Depth axis labels: only −3, 0, +3 (skip −1.5 and +1.5).
-            val labelY = atomY + radius * 1.8f
-            depths.forEachIndexed { index, depth ->
-                if (depth == -1.5f || depth == 1.5f) return@forEachIndexed
-                val label = depth.toInt().toString()
-                val tw = p.measureText(label)
-                nc.drawText(label, xPositions[index] - tw / 2f, labelY, p)
+                depths.forEachIndexed { index, depth ->
+                    val fog = depthCueFog(depth, near, far)
+                    val y = chartTop + fog * (chartBottom - chartTop)
+                    drawCircle(lineColor, 2.4f, Offset(xPositions[index], y))
+                    // Per v0.8.32: the spheres themselves come from the Filament-rendered image.
+                }
+
+                val nc = drawContext.canvas.nativeCanvas
+                val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = if (isLight) 0xCC000000.toInt() else 0xCCFFFFFF.toInt()
+                    textSize = radius * 0.72f
+                }
+                // Opacity axis labels (1 = top/full opacity, 0 = bottom/transparent).
+                nc.drawText("1", xStart - radius, chartTop + p.textSize * 0.35f, p)
+                nc.drawText("0", xStart - radius, chartBottom + p.textSize * 0.35f, p)
+                // Depth axis labels: only −3, 0, +3 (skip −1.5 and +1.5).
+                val labelY = size.height * 0.73f + radius * 1.8f
+                depths.forEachIndexed { index, depth ->
+                    if (depth == -1.5f || depth == 1.5f) return@forEachIndexed
+                    val label = depth.toInt().toString()
+                    val tw = p.measureText(label)
+                    nc.drawText(label, xPositions[index] - tw / 2f, labelY, p)
+                }
             }
         }
     }
-}
-
-/** Draws one lit preview sphere at [c] with radius [r], world-light highlight; colour blends
- *  toward [bg] by [fog] (opacity unchanged), mirroring the renderer's depth cueing. */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
-    c: Offset, r: Float, appearance: ViewerAppearance, fog: Float, bg: Color,
-) {
-    val base = Color(0xFFA8A8AD).blend(bg, fog)
-    drawCircle(base, r, c)
-    if (appearance.reflectionEnabled) {
-        val theta = appearance.lightAzimuth / 180f * PI.toFloat()
-        val phi = appearance.lightElevation / 180f * PI.toFloat()
-        val cosPhi = cos(phi)
-        val highlight = Offset(c.x + cos(theta) * cosPhi * r * .95f, c.y - sin(theta) * cosPhi * r * .95f)
-        val highlightBrush = Brush.radialGradient(
-            listOf(Color.White.copy(alpha = appearance.lightIntensity.coerceIn(.05f, 1f) * (1f - fog)), Color.Transparent),
-            center = highlight,
-            radius = r * (0.35f + 0.75f * appearance.diffusion),
-        )
-        drawCircle(highlightBrush, r, c)
-    }
-    drawCircle(Color.Black.copy(alpha = .3f), r, c, style = androidx.compose.ui.graphics.drawscope.Stroke(1.2f))
 }
 
 /**

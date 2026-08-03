@@ -8,6 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.krystals.app.ui.ThemeMode
@@ -29,6 +30,8 @@ fun SettingsPanel(
     // Per v0.8.30: settings are frozen on open; only Save applies them.
     var draft by remember { mutableStateOf(settings) }
     val apply = { onChange(draft) }
+    // Per v0.8.32: restore-defaults needs confirmation before it touches the frozen draft.
+    var resetConfirmOpen by remember { mutableStateOf(false) }
     // Label mapping helpers (localized() is @Composable, so these live in composition).
     val languageLabels = listOf(localized("中文", "Chinese"), "EN")
     val themeLabels = ThemeMode.entries.map { mode -> when (mode) {
@@ -140,25 +143,32 @@ fun SettingsPanel(
                     }
                     Tog(draft.exportShowAxes, { draft = draft.copy(exportShowAxes = it) }, localized("导出时显示坐标轴", "Export Show Axes"))
                     Tog(draft.exportShowMeasurements, { draft = draft.copy(exportShowMeasurements = it) }, localized("导出时显示测量结果", "Export Show Measurements"))
-                    HorizontalDivider(Modifier.padding(vertical = 10.dp))
-
-                    // ══ Restore Defaults / Actions ══
-                    HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                    Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.Center) {
-                        TextButton(onClick = { draft = SettingsValues.defaults() }) {
-                            Text(localized("恢复默认设置", "Restore Defaults"), color = MaterialTheme.colorScheme.error)
-                        }
+                    Spacer(Modifier.height(4.dp))
+                }
+                // Per v0.8.32: footer pinned below the scroll area (Cancel/Save stay visible).
+                HorizontalDivider()
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
+                    TextButton(onClick = { resetConfirmOpen = true }) {
+                        Text(localized("恢复默认设置", "Restore Defaults"), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    // Per v0.8.30: frozen draft — only Save applies the changes.
-                    Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = onDismiss) { Text(localized("取消", "Cancel")) }
-                        Spacer(Modifier.width(12.dp))
-                        Button(onClick = { apply(); onDismiss() }) { Text(localized("保存", "Save")) }
-                    }
-                    Spacer(Modifier.height(8.dp))
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 0.dp, bottom = 12.dp), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text(localized("取消", "Cancel")) }
+                    Spacer(Modifier.width(12.dp))
+                    Button(onClick = { apply(); onDismiss() }) { Text(localized("保存", "Save")) }
                 }
             }
         }
+    }
+    // Per v0.8.32: confirm before restoring defaults (mirrors the Appearance dialog pattern).
+    if (resetConfirmOpen) {
+        AlertDialog(
+            onDismissRequest = { resetConfirmOpen = false },
+            title = { Text(localized("确认", "Confirm")) },
+            text = { Text(localized("确认将偏好设置恢复为默认吗？", "Reset all preferences to defaults?")) },
+            confirmButton = { TextButton(onClick = { resetConfirmOpen = false; draft = SettingsValues.defaults() }) { Text(stringResource(R.string.confirm)) } },
+            dismissButton = { TextButton(onClick = { resetConfirmOpen = false }) { Text(localized("取消", "Cancel")) } },
+        )
     }
 }
 
