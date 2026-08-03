@@ -13,8 +13,8 @@ Krystals is an Android CIF crystal viewer and editor built with Kotlin and Gradl
 - `renderer-core`: pure JVM renderer abstractions — scene model, camera, projection, materials, primitive instances, render style, and the `SceneRenderer` SPI. Package: `com.krystals.renderer.core`.
 - `interaction`: pure JVM viewer interaction model — camera orbit/pan/zoom/align, atom inspection, selection, measurement, and visibility management. Exposes `InteractionReducer` (reduces `InteractionState` via `ViewerCommand`) and the `Picker` SPI. Package: `com.krystals.interaction`.
 - `renderer-filament`: Android library rendering via Google Filament 1.71.5. Implements `SceneRenderer` + `Picker` for the 3D GPU backend. Package: `com.krystals.renderer.filament`.
-- `renderer-legacy`: Android library with the Compose Canvas 2D renderer. Implements `SceneRenderer` + `Picker` for the legacy backend. Package: `com.krystals.renderer.legacy`.
-- `app`: Android application, UI, file access, tabs, backend selection, and remote database clients. Package, namespace, and application ID remain `com.krystals.app`. Version 0.6.1.
+- `renderer-legacy`: **END OF LIFE.** Android library with the Compose Canvas 2D renderer. No longer built (excluded from `settings.gradle.kts`) and not used by `:app` — the app is fixed on Filament. Directory retained for reference only; receives no maintenance. Package: `com.krystals.renderer.legacy`.
+- `app`: Android application, UI, file access, tabs, and remote database clients. Renders exclusively with Filament (the `renderer-legacy` backend is end-of-life). Package, namespace, and application ID remain `com.krystals.app`. Version 0.6.1.
 
 Build requirements: JDK 17, Android SDK 36, and Gradle 8.11.1. Java 24 can fail during Gradle test task configuration with `Type T not present`; use JDK 17 for all verification.
 
@@ -31,8 +31,6 @@ Run commands from the repository root.
 | Run IO tests | `.\gradlew.bat :crystal-io:test` |
 | Run renderer-core tests | `.\gradlew.bat :renderer-core:test` |
 | Run interaction tests | `.\gradlew.bat :interaction:test` |
-| Run renderer-legacy tests | `.\gradlew.bat :renderer-legacy:test` |
-| Run renderer-filament tests | `.\gradlew.bat :renderer-filament:test` |
 | Run a single core test | `.\gradlew.bat :crystal-core:test --tests "com.krystals.crystal.core.CoreTest"` |
 | Run a single analysis test | `.\gradlew.bat :crystal-analysis:test --tests "com.krystals.crystal.analysis.AnalysisTest"` |
 | Run a single CIF test | `.\gradlew.bat :crystal-io:test --tests "com.krystals.crystal.io.CifCodecTest.parsesAndExpandsSymmetry"` |
@@ -87,7 +85,7 @@ Depends on `crystal-analysis` (`api`).
 
 Depends on `crystal-analysis` (`api`) and `crystal-data` (`implementation`). Pure JVM — no Android or Compose dependencies.
 
-- `SceneRenderer.kt`: backend-neutral SPI with `submit(RenderScene)`, `updateInteraction(InteractionState)`, and `clear()`. Both `FilamentSceneRenderer` and `LegacySceneRenderer` implement this interface.
+- `SceneRenderer.kt`: backend-neutral SPI with `submit(RenderScene)`, `updateInteraction(InteractionState)`, and `clear()`. Both `FilamentSceneRenderer` and the EOL `LegacySceneRenderer` implement this interface.
 - `scene/RenderScene.kt`: data class holding `CrystalStructure`, `Expansion`, `List<RenderObject>`, `Camera`, `Projection`, and `RenderEnvironment`. Render objects are `AtomInstance`, `BondInstance`, or `MeshInstance`.
 - `builder/CrystalSceneBuilder.kt`: constructs a `RenderScene` from a `BondNetwork` and `SceneBuildOptions` (visibility, radii, materials, bond color mode, environment).
 - `builder/CrystalRenderSceneFactory.kt`: higher-level factory composing expansion, bonding, and scene building.
@@ -132,7 +130,7 @@ Depends on `renderer-core` (`api`) and `interaction` (`api`). Android library us
 
 ### `renderer-legacy`
 
-Depends on `crystal-analysis` (`api`), `renderer-core` (`api`), and `interaction` (`api`). Android library with Compose Canvas 2D rendering.
+**END OF LIFE — not built, not used by the app.** Depends on `crystal-analysis` (`api`), `renderer-core` (`api`), and `interaction` (`api`). Android library with Compose Canvas 2D rendering, retained for reference only (excluded from `settings.gradle.kts`).
 
 - `LegacySceneRenderer.kt`: adapter implementing `SceneRenderer` + `Picker` via Compose `MutableState`. Scene/interaction/appearance state held as Compose state drives recomposition of `Content`.
 - `LegacyRenderSceneAdapter.kt`: converts `RenderScene` into the legacy `CrystalViewport`-compatible form.
@@ -143,12 +141,11 @@ Depends on `crystal-analysis` (`api`), `renderer-core` (`api`), and `interaction
 
 ### `app`
 
-Depends on `crystal-analysis`, `crystal-io`, `interaction`, `renderer-filament`, and `renderer-legacy`. Android application.
+Depends on `crystal-analysis`, `crystal-io`, `interaction`, and `renderer-filament`. Android application.
 
 - `MainActivity.kt`: single-activity entry point.
-- `KrystalsApp.kt`: top-level Compose UI, tab management, file open/save, and backend switching.
-- `RendererBackend.kt`: `RendererBackend` enum (`FILAMENT`, `CANVAS_LEGACY`) and `RendererBackendStore` for persisting the user's backend preference. Falls back to Canvas-Legacy if Filament session creation fails.
-- `ViewerBackendHost.kt`: unified Compose host that mounts the active backend (`FilamentHost` or `LegacyHost`), handles gesture dispatch, and routes `ViewerCommand` through `InteractionReducer`.
+- `KrystalsApp.kt`: top-level Compose UI, tab management, file open/save.
+- `ViewerBackendHost.kt`: unified Compose host that mounts the Filament backend, handles gesture dispatch, and routes `ViewerCommand` through `InteractionReducer`.
 - `DocumentState.kt`: per-document state — structure, expansion, bond network, scene, and interaction state.
 - `EditorPanels.kt`: editing UI panels (atom/site property editing, bond rules, etc.).
 - `FloatingBallLayout.kt`: floating-ball UI layout component for tool palettes.
@@ -168,7 +165,7 @@ Depends on `crystal-analysis`, `crystal-io`, `interaction`, `renderer-filament`,
 2. `CifCodec.parseStructure` produces a core `CrystalStructure`, bond configuration, and CIF display metadata.
 3. `SymmetryExpander` creates `AtomImage` values; `BondDetector` uses `VoronoiNeighbours` to create a `BondNetwork`.
 4. `CrystalRenderSceneFactory` (renderer-core) composes the `BondNetwork` into a backend-neutral `RenderScene` with `AtomInstance`/`BondInstance`/`MeshInstance` primitives.
-5. The active backend (`FilamentSceneRenderer` or `LegacySceneRenderer`) renders the scene via the `SceneRenderer` SPI.
+5. The Filament backend renders the scene via the `SceneRenderer` SPI.
 6. User gestures flow through `InteractionReducer.reduce(state, command)` in the `interaction` module, producing new `InteractionState`. The state update is pushed to the active renderer via `SceneRenderer.updateInteraction()`.
 7. Saving passes the edited structure, bond configuration, and converted display metadata back to `CifCodec.write`.
 
@@ -176,7 +173,7 @@ Depends on `crystal-analysis`, `crystal-io`, `interaction`, `renderer-filament`,
 
 - JVM tests use JUnit 5. The sample CIF corpus is under `res/cifs_example` and is exercised by `crystal-io` tests.
 - The app packages the root `res/` directory as assets.
-- The project has two rendering backends: Filament (GPU 3D) and Canvas-Legacy (Compose Canvas 2D). Both implement the `SceneRenderer` SPI from `renderer-core`.
+- The project renders exclusively through the Filament (GPU 3D) backend. The Canvas-Legacy 2D backend (`renderer-legacy`) is end-of-life: excluded from the build, retained for reference only.
 - The `interaction` module is a pure-JVM state machine: camera math, selection, inspection, measurement, and visibility. It has no Android or rendering dependencies — only `renderer-core` types.
 - Camera orientation is stored as a `Mat3` rotation matrix, not Euler angles. Changes to rotation logic must keep `CrystalViewport`, `CrystalImageExporter`, and the `interaction` camera controllers in sync.
 - Filament AARs are at `.tooling/filament-android-1.71.5.aar` and `.tooling/filament-utils-android-1.71.5.aar`. When absent, the build falls back to Maven.

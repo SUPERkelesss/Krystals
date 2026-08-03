@@ -31,7 +31,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
-@Deprecated("Use FilamentRenderer.renderToBitmap; retained as the Canvas fallback exporter")
+@Deprecated("Canvas-Legacy renderer is end-of-life; the app is fixed on Filament (use FilamentRenderer.renderToBitmap)")
 object CrystalImageExporter {
 
     private data class Point(val atomId: Long, val element: String, val siteId: String, val siteLabel: String, val x: Float, val y: Float, val z: Double, val radius: Float, val occupancy: Double, val fractional: Vec3, val cartesian: Vec3, val isShell: Boolean, val isBoundaryImage: Boolean = false) {

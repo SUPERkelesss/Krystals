@@ -62,9 +62,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -1062,8 +1059,6 @@ fun AppearanceDialog(
     tab: DocumentTab,
     onDismiss: () -> Unit,
     onApplied: (ViewerAppearance) -> Unit = {},
-    rendererBackend: RendererBackend,
-    onRendererBackendChanged: (RendererBackend) -> Unit = {},
     // Per v0.5.2a: press-and-hold Preview callbacks. onPreviewStart hands the in-dialog appearance
     // up so the viewer can render with it; onPreviewEnd restores the dialog.
     onPreviewStart: (ViewerAppearance) -> Unit = {},
@@ -1238,21 +1233,6 @@ followTheme = true
                 }
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
-            Text(localized("渲染引擎", "Rendering engine"), fontWeight = FontWeight.Bold)
-            val backends = listOf(
-                RendererBackend.FILAMENT to "Filament",
-                RendererBackend.CANVAS_LEGACY to "Canvas (Legacy)",
-            )
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                backends.forEachIndexed { index, (backend, label) ->
-                    SegmentedButton(
-                        selected = rendererBackend == backend,
-                        onClick = { onRendererBackendChanged(backend) },
-                        shape = SegmentedButtonDefaults.itemShape(index, backends.size),
-                        label = { Text(label) },
-                    )
-                }
-            }
         }
         // Per v0.6.3: Restore defaults button at the bottom center.
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.Center) {

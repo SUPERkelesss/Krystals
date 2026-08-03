@@ -98,7 +98,6 @@ dependencies {
     implementation(project(":crystal-io"))
     implementation(project(":interaction"))
     implementation(project(":renderer-filament"))
-    implementation(project(":renderer-legacy"))
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
