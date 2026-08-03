@@ -1341,13 +1341,27 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
             zoom = 0.76, // sphere diameter = 76% of the preview height (matches the old Canvas layout)
             backgroundArgb = bgArgb,
         )
+        // Per v0.8.33: first render can fail while the dedicated engine warms up — retry once.
+        if (bitmap == null) {
+            kotlinx.coroutines.delay(300)
+            bitmap = AppearancePreviewRenderer.renderSpheres(
+                context = context.applicationContext,
+                appearance = appearance,
+                xOffsets = listOf(0.0),
+                sphereRadius = 1.0,
+                zoom = 0.76,
+                backgroundArgb = bgArgb,
+            )
+        }
     }
     Surface(modifier, shape = RoundedCornerShape(16.dp), color = bgCompose) {
         val bmp = bitmap
         if (bmp != null) {
             Image(bitmap = bmp.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize())
         } else {
-            Box(Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                androidx.compose.material3.CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+            }
         }
     }
 }
@@ -1362,8 +1376,8 @@ private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier 
     val bgArgb = (bgCompose.toArgb().toLong()) and 0xFFFFFFFFL
     val depths = listOf(-3f, -1.5f, 0f, 1.5f, 3f)
     var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    LaunchedEffect(appearance) {
-        bitmap = AppearancePreviewRenderer.renderSpheres(
+    suspend fun renderPreview(): android.graphics.Bitmap? =
+        AppearancePreviewRenderer.renderSpheres(
             context = context.applicationContext,
             appearance = appearance,
             xOffsets = listOf(-3.5, -1.75, 0.0, 1.75, 3.5),
@@ -1373,6 +1387,13 @@ private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier 
             fogFactors = depths.map { depthCueFog(it, appearance.dofNear, appearance.dofFar) },
             backgroundArgb = bgArgb,
         )
+    LaunchedEffect(appearance) {
+        bitmap = renderPreview()
+        // Per v0.8.33: first render can fail while the dedicated engine warms up — retry once.
+        if (bitmap == null) {
+            kotlinx.coroutines.delay(300)
+            bitmap = renderPreview()
+        }
     }
     Surface(modifier, shape = RoundedCornerShape(16.dp), color = bgCompose) {
         Box(Modifier.fillMaxSize()) {

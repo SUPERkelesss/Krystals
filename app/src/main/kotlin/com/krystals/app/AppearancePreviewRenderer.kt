@@ -63,59 +63,68 @@ object AppearancePreviewRenderer {
         widthPx: Int = PREVIEW_PX,
         heightPx: Int = PREVIEW_PX,
     ): Bitmap? {
-        val r = renderer ?: FilamentRenderer(context).also { renderer = it }
-        val boundsRadius = xOffsets.maxOfOrNull { kotlin.math.abs(it) }?.plus(sphereRadius) ?: sphereRadius
-        val span = boundsRadius / zoom
-        val centerY = (centerYFraction * 2f - 1f) * span.toFloat()
-        val objects = xOffsets.mapIndexed { i, x ->
-            val fog = fogFactors.getOrElse(i) { 0f }.coerceIn(0f, 1f)
-            AtomInstance(
-                id = "preview-$i",
-                atom = AtomImage(
-                    id = i.toLong(),
-                    siteId = "preview",
-                    siteLabel = "preview",
-                    species = Species("Si"),
-                    fractionalCoordinate = FractionalCoordinate(0.0, 0.0, 0.0),
-                    cartesianCoordinate = CartesianCoordinate(x, centerY.toDouble(), 0.0),
-                    occupancy = 1.0,
-                    cellOffset = Int3(0, 0, 0),
+        return try {
+            val r = renderer ?: FilamentRenderer(context).also { renderer = it }
+            val boundsRadius = xOffsets.maxOfOrNull { kotlin.math.abs(it) }?.plus(sphereRadius) ?: sphereRadius
+            val span = boundsRadius / zoom
+            val centerY = (centerYFraction * 2f - 1f) * span.toFloat()
+            val objects = xOffsets.mapIndexed { i, x ->
+                val fog = fogFactors.getOrElse(i) { 0f }.coerceIn(0f, 1f)
+                AtomInstance(
+                    id = "preview-$i",
+                    atom = AtomImage(
+                        id = i.toLong(),
+                        siteId = "preview",
+                        siteLabel = "preview",
+                        species = Species("Si"),
+                        fractionalCoordinate = FractionalCoordinate(0.0, 0.0, 0.0),
+                        cartesianCoordinate = CartesianCoordinate(x, centerY.toDouble(), 0.0),
+                        occupancy = 1.0,
+                        cellOffset = Int3(0, 0, 0),
+                    ),
+                    radius = sphereRadius,
+                    material = Material(
+                        argb = blendColor(PREVIEW_SPHERE_ARGB, backgroundArgb, fog),
+                        opacity = appearance.atomOpacity.toDouble(),
+                        reflective = appearance.reflectionEnabled,
+                    ),
+                    visible = true,
+                )
+            }
+            val structure = CrystalStructure(
+                blockName = "preview",
+                lattice = Lattice(1.0, 1.0, 1.0, 90.0, 90.0, 90.0),
+                spaceGroup = SpaceGroupCatalog.find("P 1") ?: SpaceGroupCatalog.all.first(),
+                symmetryOperations = emptyList(),
+                sites = listOf(
+                    Site("preview", "preview", Species("Si"), FractionalCoordinate(0.0, 0.0, 0.0), 1.0),
                 ),
-                radius = sphereRadius,
-                material = Material(
-                    argb = blendColor(PREVIEW_SPHERE_ARGB, backgroundArgb, fog),
-                    opacity = appearance.atomOpacity.toDouble(),
-                    reflective = appearance.reflectionEnabled,
-                ),
-                visible = true,
             )
-        }
-        val structure = CrystalStructure(
-            blockName = "preview",
-            lattice = Lattice(1.0, 1.0, 1.0, 90.0, 90.0, 90.0),
-            spaceGroup = SpaceGroupCatalog.find("P 1") ?: SpaceGroupCatalog.all.first(),
-            symmetryOperations = emptyList(),
-            sites = listOf(
-                Site("preview", "preview", Species("Si"), FractionalCoordinate(0.0, 0.0, 0.0), 1.0),
-            ),
-        )
-        val scene = RenderScene(
-            structure = structure,
-            expansion = Expansion(),
-            objects = objects,
-            camera = Camera(zoom = zoom.toDouble()),
-            environment = RenderEnvironment(
-                backgroundArgb = backgroundArgb,
-                worldLight = WorldLight(
-                    azimuthDegrees = appearance.lightAzimuth,
-                    elevationDegrees = appearance.lightElevation,
-                    intensity = appearance.lightIntensity,
-                    diffusion = appearance.diffusion,
+            val scene = RenderScene(
+                structure = structure,
+                expansion = Expansion(),
+                objects = objects,
+                camera = Camera(zoom = zoom.toDouble()),
+                environment = RenderEnvironment(
+                    backgroundArgb = backgroundArgb,
+                    worldLight = WorldLight(
+                        azimuthDegrees = appearance.lightAzimuth,
+                        elevationDegrees = appearance.lightElevation,
+                        intensity = appearance.lightIntensity,
+                        diffusion = appearance.diffusion,
+                    ),
                 ),
-            ),
-        )
-        r.submit(scene)
-        return r.renderToBitmap(widthPx, heightPx, useMsaa = false)
+            )
+            r.submit(scene)
+            val bmp = r.renderToBitmap(widthPx, heightPx, useMsaa = false)
+            if (bmp == null) {
+                android.util.Log.e("AppearancePreview", "renderToBitmap returned null (engine=${r.hashCode()})")
+            }
+            bmp
+        } catch (e: Exception) {
+            android.util.Log.e("AppearancePreview", "renderSpheres failed", e)
+            null
+        }
     }
 
     /** Releases the dedicated preview engine (call when the dialog leaves composition). */
