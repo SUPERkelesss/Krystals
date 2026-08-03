@@ -1246,6 +1246,8 @@ followTheme = true
             }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
         }
+        // Per v0.8.33: fixed divider above the restore-defaults button, matching the Preferences footer.
+        HorizontalDivider()
         // Per v0.6.3: Restore defaults button at the bottom center.
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.Center) {
             TextButton(onClick = { resetConfirmOpen = true }) {
