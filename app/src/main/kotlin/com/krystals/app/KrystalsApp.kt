@@ -3436,16 +3436,24 @@ private fun PresetLibraryDialog(
     onMessage: (String) -> Unit,
     onOpenParsed: (ParsedStructure, String) -> Unit,
 ) {
-    var presets by remember { mutableStateOf(PresetRepository.listPresets(context)) }
-    var pendingDelete by remember { mutableStateOf<PresetEntry?>(null) }
+    // Per v0.8.34: COD-search-like library — first-level groups (folders) expand to files, a
+    // 5-filter bar (formula/element count/crystal system/point group/space group), per-file
+    // checkboxes with a batch toolbar (open / move to / delete), and user groups
+    // ("我的预设" plus groups created via 新建组) that can be renamed.
+    var groups by remember { mutableStateOf(PresetRepository.listGroups(context)) }
+    var metas by remember { mutableStateOf<Map<PresetEntry, PresetMeta>>(emptyMap()) }
     var searchQuery by remember { mutableStateOf("") }
-    fun refresh() { presets = PresetRepository.listPresets(context) }
-    // Per v0.2.3: collapsible category sections, default all collapsed (user group expanded).
-    // Expansion state persists across opens via SharedPreferences.
+    var filterState by remember { mutableStateOf(SearchFilterState()) }
+    var selected by remember { mutableStateOf<Set<PresetEntry>>(emptySet()) }
+    var newGroupOpen by remember { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<PresetGroup?>(null) }
+    var moveOpen by remember { mutableStateOf(false) }
+    var deleteConfirmOpen by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val EXPANDED_KEY = "preset_expanded_categories"
     var expanded by remember {
         mutableStateOf(
-            preferences.getString(EXPANDED_KEY, "__user__")!!.split(",").filter { it.isNotBlank() }.toMutableSet()
+            preferences.getString(EXPANDED_KEY, PresetRepository.MY_PRESETS_GROUP)!!.split(",").filter { it.isNotBlank() }.toMutableSet()
         )
     }
     fun toggle(cat: String) {
@@ -3453,15 +3461,74 @@ private fun PresetLibraryDialog(
             preferences.edit().putString(EXPANDED_KEY, it.joinToString(",")).apply()
         }
     }
-    // Per v0.6.5: search box filters presets by file name (case-insensitive).
-    val filteredPresets = if (searchQuery.isBlank()) presets else presets.filter { it.name.contains(searchQuery, ignoreCase = true) }
-    // Group by category; user presets (__user__) first, then bundled categories in directory order.
-    val grouped = filteredPresets.groupBy { it.category ?: "__user__" }
-    val userGroup = grouped["__user__"].orEmpty()
-    val bundledGroups = grouped.filterKeys { it != "__user__" }
+    fun refresh() { groups = PresetRepository.listGroups(context) }
+
+    // Per v0.8.34: parse filter metadata for every preset off the UI thread.
+    LaunchedEffect(groups) {
+        metas = withContext(Dispatchers.Default) {
+            groups.flatMap { it.entries }.mapNotNull { entry ->
+                val text = try {
+                    when (entry.source) {
+                        PresetSource.BUNDLED -> context.assets.open(entry.assetPath!!).bufferedReader().use { it.readText() }
+                        PresetSource.USER -> entry.file!!.readText()
+                    }
+                } catch (_: Exception) { return@mapNotNull null }
+                PresetRepository.parseMeta(text)?.let { entry to it }
+            }.toMap()
+        }
+    }
+
+    val filterOptions = buildFilterOptions(
+        metas.values.map { SearchResultMeta(elementCount = it.elementCount, crystalSystem = it.crystalSystem, pointGroup = it.pointGroup, spaceGroup = it.spaceGroup, formula = it.formula) }
+    )
+    val elementCountFilter = filterState.elementCount
+    val crystalSystemFilter = filterState.crystalSystem
+    val pointGroupFilter = filterState.pointGroup
+    val spaceGroupFilter = filterState.spaceGroup
+    val formulaFilter = filterState.formula
+    val filteredGroups = groups.map { group ->
+        group.copy(entries = group.entries.filter { entry ->
+            val meta = metas[entry]
+            (searchQuery.isBlank() || entry.name.contains(searchQuery, ignoreCase = true)) &&
+                (elementCountFilter == null || meta?.elementCount == elementCountFilter) &&
+                (crystalSystemFilter == null || meta?.crystalSystem == crystalSystemFilter) &&
+                (pointGroupFilter == null || meta?.pointGroup == pointGroupFilter) &&
+                (spaceGroupFilter == null || meta?.spaceGroup == spaceGroupFilter) &&
+                (formulaFilter == null || meta?.formula?.contains(formulaFilter, ignoreCase = true) == true)
+        })
+    }
+    val totalFiltered = filteredGroups.sumOf { it.entries.size }
+
+    fun openSelected() {
+        val ordered = groups.flatMap { it.entries }.filter { it in selected }
+        scope.launch {
+            ordered.forEach { entry ->
+                runCatching { withContext(Dispatchers.IO) { PresetRepository.openPreset(context, entry, autoConvertConventional = autoConvertCell) } }
+                    .onSuccess { parsed -> onOpenParsed(parsed, entry.name) }
+                    .onFailure { if (it !is CancellationException) onMessage(it.message ?: "Unable to open preset") }
+            }
+            onDismiss()
+        }
+    }
+    fun deleteSelected() {
+        selected.filter { it.source == PresetSource.USER }.forEach { PresetRepository.deletePreset(it) }
+        selected = emptySet()
+        refresh()
+    }
+    fun moveSelected(targetGroup: String) {
+        selected.filter { it.source == PresetSource.USER }.forEach { PresetRepository.movePreset(context, it, targetGroup) }
+        selected = emptySet()
+        refresh()
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.preset_library)) },
+        title = {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.preset_library), modifier = Modifier.weight(1f))
+                TextButton(onClick = { newGroupOpen = true }) { Text(localized("新建组", "New group")) }
+            }
+        },
         text = {
             Column(Modifier.fillMaxWidth()) {
                 OutlinedTextField(
@@ -3472,27 +3539,45 @@ private fun PresetLibraryDialog(
                     placeholder = { Text(localized("搜索文件名...", "Search by name...")) },
                     leadingIcon = { Icon(Icons.Default.Search, null) },
                 )
-                LazyColumn(Modifier.fillMaxWidth().height(420.dp)) {
-                    if (filteredPresets.isEmpty()) {
+                SearchFilterBar(
+                    options = filterOptions,
+                    filterState = filterState,
+                    onFilterChange = { filterState = it },
+                    availableFilters = DEFAULT_VISIBLE_FILTERS,
+                    visibleFilters = DEFAULT_VISIBLE_FILTERS,
+                    onVisibleFiltersChange = {},
+                )
+                LazyColumn(Modifier.fillMaxWidth().height(400.dp)) {
+                    if (totalFiltered == 0) {
                         item { Text(localized("无匹配结果", "No matching results"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
                     }
-                    if (userGroup.isNotEmpty()) {
-                        item(key = "header___user__") {
-                            Row(Modifier.fillMaxWidth().clickable { toggle("__user__") }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(if ("__user__" in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
-                                Text(localized("我的预设", "My presets"), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
+                    filteredGroups.forEach { group ->
+                        item(key = "h_" + group.name) {
+                            Row(Modifier.fillMaxWidth().clickable { toggle(group.name) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(if (group.name in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
+                                Text(group.name, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp).weight(1f))
+                                if (group.isUserGroup) {
+                                    IconButton(onClick = { renameTarget = group }) { Icon(Icons.Default.Edit, localized("重命名组", "Rename group"), modifier = Modifier.size(18.dp)) }
+                                }
                             }
                         }
-                        if ("__user__" in expanded) items(userGroup, key = { "u_" + it.name }) { entry -> PresetRow(entry, context, viewModel, autoConvertCell, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
+                        if (group.name in expanded) items(group.entries, key = { "e_" + group.name + "_" + it.name }) { entry ->
+                            PresetRow(
+                                entry = entry,
+                                meta = metas[entry],
+                                checked = entry in selected,
+                                onToggle = { selected = if (entry in selected) selected - entry else selected + entry },
+                            )
+                        }
                     }
-                    bundledGroups.forEach { (category, entries) ->
-                        item(key = "header_$category") {
-                            Row(Modifier.fillMaxWidth().clickable { toggle(category) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(if (category in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
-                                Text(category, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
-                            }
-                        }
-                        if (category in expanded) items(entries, key = { category + "_" + it.name }) { entry -> PresetRow(entry, context, viewModel, autoConvertCell, onDismiss, onMessage, { pendingDelete = entry }, onOpenParsed) }
+                }
+                if (selected.isNotEmpty()) {
+                    HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(localized("已选 ${selected.size} 项", "Selected ${selected.size}"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { openSelected() }) { Text(localized("打开", "Open")) }
+                        TextButton(onClick = { moveOpen = true }) { Text(localized("移动到", "Move to")) }
+                        TextButton(onClick = { deleteConfirmOpen = true }) { Text(localized("删除", "Delete")) }
                     }
                 }
             }
@@ -3500,50 +3585,98 @@ private fun PresetLibraryDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
-    pendingDelete?.let { entry ->
+
+    // Per v0.8.34: 新建组 — create a named first-level user group.
+    if (newGroupOpen) {
+        var name by remember { mutableStateOf("") }
+        val createError = localized("组已存在或创建失败", "Group exists or failed to create")
         AlertDialog(
-            onDismissRequest = { pendingDelete = null },
+            onDismissRequest = { newGroupOpen = false },
+            title = { Text(localized("新建组", "New group")) },
+            text = {
+                OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, placeholder = { Text(localized("组名", "Group name")) })
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (name.isNotBlank()) {
+                        if (PresetRepository.createGroup(context, name) != null) refresh()
+                        else onMessage(createError)
+                    }
+                    newGroupOpen = false
+                }) { Text(stringResource(R.string.confirm)) }
+            },
+            dismissButton = { TextButton(onClick = { newGroupOpen = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    // Per v0.8.34: rename a first-level user group.
+    renameTarget?.let { group ->
+        var name by remember(group) { mutableStateOf(group.name) }
+        val renameError = localized("重命名失败", "Rename failed")
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text(localized("重命名组", "Rename group")) },
+            text = {
+                OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (!PresetRepository.renameGroup(context, group.name, name)) onMessage(renameError)
+                    renameTarget = null
+                    refresh()
+                }) { Text(stringResource(R.string.confirm)) }
+            },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    // Per v0.8.34: 移动到 — pick a target user group.
+    if (moveOpen) {
+        val userGroups = groups.filter { it.isUserGroup }.map { it.name }
+        AlertDialog(
+            onDismissRequest = { moveOpen = false },
+            title = { Text(localized("移动到...", "Move to...")) },
+            text = {
+                Column {
+                    userGroups.forEach { target ->
+                        Row(Modifier.fillMaxWidth().clickable { moveSelected(target); moveOpen = false }.padding(vertical = 8.dp)) {
+                            Text(target)
+                        }
+                    }
+                    if (userGroups.isEmpty()) Text(localized("暂无文件夹", "No folders yet"), style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { moveOpen = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    // Per v0.8.34: batch delete confirmation.
+    if (deleteConfirmOpen) {
+        val deletable = selected.count { it.source == PresetSource.USER }
+        AlertDialog(
+            onDismissRequest = { deleteConfirmOpen = false },
             title = { Text(stringResource(R.string.delete_preset_title)) },
-            text = { Text(entry.name) },
-            confirmButton = { TextButton(onClick = { PresetRepository.deletePreset(entry); pendingDelete = null; refresh() }) { Text(stringResource(R.string.confirm)) } },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.cancel)) } },
+            text = { Text(localized("确定删除选中的 $deletable 个文件吗？", "Delete the $deletable selected file(s)?")) },
+            confirmButton = { TextButton(onClick = { deleteConfirmOpen = false; deleteSelected() }) { Text(stringResource(R.string.confirm)) } },
+            dismissButton = { TextButton(onClick = { deleteConfirmOpen = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
 }
 
+/** Per v0.8.34: one preset file row with a checkbox; tapping the row toggles selection. */
 @Composable
-private fun PresetRow(
-    entry: PresetEntry,
-    context: Context,
-    viewModel: KrystalsViewModel,
-    autoConvertCell: Boolean,
-    onDismiss: () -> Unit,
-    onMessage: (String) -> Unit,
-    onDelete: () -> Unit,
-    onOpenParsed: (ParsedStructure, String) -> Unit,
-) {
-    val scope = rememberCoroutineScope()
+private fun PresetRow(entry: PresetEntry, meta: PresetMeta?, checked: Boolean, onToggle: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp).clickable {
-            scope.launch {
-                runCatching { withContext(Dispatchers.IO) { PresetRepository.openPreset(context, entry, autoConvertConventional = autoConvertCell) } }
-                    .onSuccess { parsed ->
-                        onDismiss()
-                        onOpenParsed(parsed, entry.name)
-                    }
-                    .onFailure { if (it !is CancellationException) onMessage(it.message ?: "Unable to open preset") }
-            }
-        },
+        Modifier.fillMaxWidth().clickable { onToggle() }.padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(entry.name, modifier = Modifier.weight(1f))
-        Text(
-            if (entry.source == PresetSource.BUNDLED) stringResource(R.string.bundled) else stringResource(R.string.user_saved),
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 8.dp),
-        )
-        if (entry.source == PresetSource.USER) {
-            IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, null) }
+        androidx.compose.material3.Checkbox(checked = checked, onCheckedChange = { onToggle() })
+        Column(Modifier.weight(1f)) {
+            Text(entry.name)
+            meta?.let {
+                Text("${it.formula} · ${it.spaceGroup}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (entry.source == PresetSource.BUNDLED) {
+            Text(stringResource(R.string.bundled), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 8.dp))
         }
     }
     HorizontalDivider()
