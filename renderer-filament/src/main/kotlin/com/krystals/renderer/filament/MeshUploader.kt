@@ -13,7 +13,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-enum class SharedGeometry { SPHERE_HIGH, SPHERE_MEDIUM, SPHERE_LOW, CYLINDER, LINE, AXIS, MEASUREMENT }
+enum class SharedGeometry { SPHERE_HIGH, SPHERE_MEDIUM, SPHERE_LOW, CYLINDER, LINE, AXIS, MEASUREMENT, DISK }
 
 enum class SphereLod(val rings: Int, val sectors: Int) {
     HIGH(16, 24),
@@ -88,6 +88,15 @@ class MeshUploader(private val engine: Engine) : AutoCloseable {
             SphereLod.LOW -> SharedGeometry.SPHERE_LOW
         }
         return shared.getOrPut(geometry) { upload(uvSphere(lod.rings, lod.sectors)) }
+    }
+
+    /**
+     * v0.8.28: full 360° billboard disk shared by regular atoms. Atoms render as
+     * camera-facing disks with sphere-impostor normals (same trick as gathered pies),
+     * so every atom shows a perfect circle with sphere-like shading at any rotation.
+     */
+    fun sharedDisk(): UploadedMesh = shared.getOrPut(SharedGeometry.DISK) {
+        upload(diskSector(0f, 360f))
     }
 
     fun sharedCylinder(): UploadedMesh = shared.getOrPut(SharedGeometry.CYLINDER) { upload(cylinder()) }

@@ -54,7 +54,9 @@ class InstanceManager {
 
     fun sync(scene: RenderScene): SceneDiff {
         val next = linkedMapOf<String, InstanceRecord>()
-        val sphereGeometry = sphereGeometryForVisibleAtoms(scene.atoms.count(AtomInstance::visible))
+        // v0.8.28: atoms render as billboard disks (PIE_SECTOR geometry), so the
+        // sphere-LOD selection no longer applies to atom records. sphereGeometryForVisibleAtoms
+        // is retained for tests/back-compat.
         val atomsByImageId = scene.atoms.associateBy { it.atom.id }
 
         // Per v0.8.8: gather co-located mixed-occupancy atoms — per-slice sector meshes
@@ -73,9 +75,13 @@ class InstanceManager {
 
         scene.atoms.asSequence().filter(AtomInstance::visible).forEach { atom ->
             if (atom.atom.id in gatheredByMemberId) return@forEach // rendered as gathered pie
+            // v0.8.28: regular atoms render as billboard disks (same as gathered pies):
+            // camera-facing circle with sphere-impostor shading at any rotation. The
+            // transform is identity here; GpuInstanceManager applies the per-frame
+            // billboard transform via pieRegistry.
             next[atom.id] = InstanceRecord(
-                atom.id, pickId(atom.id), BatchKey(sphereGeometry, MaterialKey(atom.material, atom.atom.occupancy)),
-                transform(atom.atom.cartesianCoordinate.x, atom.atom.cartesianCoordinate.y, atom.atom.cartesianCoordinate.z, atom.radius, atom.radius, atom.radius),
+                atom.id, pickId(atom.id), BatchKey(GeometryKind.PIE_SECTOR, MaterialKey(atom.material, atom.atom.occupancy)),
+                identity(),
             )
         }
         scene.bonds.asSequence().filter(BondInstance::visible).forEach { bond ->

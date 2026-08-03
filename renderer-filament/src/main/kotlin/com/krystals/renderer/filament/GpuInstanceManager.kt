@@ -71,6 +71,12 @@ class GpuInstanceManager(
             create(record, snapshot)?.let { entity ->
                 entities[id] = entity
                 objectByEntity[entity] = id.substringBeforeLast(":a").substringBeforeLast(":b")
+                // v0.8.28: regular atoms are billboard disks — register for per-frame
+                // billboard transforms (same mechanism as gathered pie slices).
+                if (record.batch.geometry == GeometryKind.PIE_SECTOR && !id.startsWith("gathered-pie:")) {
+                    val atom = atomsById[id.toLongOrNull() ?: return@let] ?: return@let
+                    pieRegistry[entity] = atom.atom.cartesianCoordinate.toVec3() to atom.radius
+                }
             }
         }
         // Per v0.8.1: destroy() removes from entities/objectByEntity, never from these sets, so
@@ -110,7 +116,10 @@ class GpuInstanceManager(
         // Per v0.8.10: render gathered-atom groups as billboard disk sectors with atom-like
         // shading (PIE_SECTOR maps to lit atom materials). Billboard transforms are updated
         // per-frame via updateBillboardTransforms() — not baked here.
-        pieRegistry.clear()
+        // v0.8.28: regular atoms share the same billboard mechanism. Old gathered-pie
+        // entities were already destroyed (and their pieRegistry entries removed) via
+        // sceneAuxiliaryIds above, so no blanket clear() here — it would wipe the
+        // regular-atom registrations from the added/updated loop.
         val gatheredInstances = snapshot.objects.asSequence().filterIsInstance<GatheredAtomInstance>().filter(GatheredAtomInstance::visible).toList()
         gatheredInstances.forEachIndexed { gIdx, gInst ->
             val g = gInst.gathered
@@ -249,12 +258,17 @@ class GpuInstanceManager(
             GeometryKind.SPHERE_MEDIUM -> meshes.sharedSphere(SphereLod.MEDIUM)
             GeometryKind.SPHERE_LOW -> meshes.sharedSphere(SphereLod.LOW)
             GeometryKind.CYLINDER -> meshes.sharedCylinder()
-            GeometryKind.POLYHEDRON, GeometryKind.PIE_SECTOR -> {
+            GeometryKind.POLYHEDRON -> {
                 val mesh = auxiliaryMeshes[record.objectId]
                     ?: snapshot.meshes.firstOrNull { it.id == record.objectId }?.toMeshData()
                     ?: return null
                 meshes.upload(mesh)
             }
+            // v0.8.28: PIE_SECTOR is shared by gathered pie slices (per-slice mesh in
+            // auxiliaryMeshes) and regular atoms (shared 360° billboard disk).
+            GeometryKind.PIE_SECTOR -> auxiliaryMeshes[record.objectId]
+                ?.let(meshes::upload)
+                ?: meshes.sharedDisk()
             GeometryKind.FRAME, GeometryKind.AXIS, GeometryKind.MEASUREMENT -> meshes.sharedCylinder()
         }
         val materialKind = materialKindFor(record.batch.geometry, record.batch.material)
@@ -441,6 +455,7 @@ class GpuInstanceManager(
     private fun destroy(id: String) {
         val entity = entities.remove(id) ?: return
         objectByEntity.remove(entity)
+        pieRegistry.remove(entity)  // v0.8.28: drop billboard registrations for destroyed entities
         ownedMeshByEntity.remove(entity)?.let(meshes::destroy)
         scene.removeEntity(entity)
         engine.destroyEntity(entity)
