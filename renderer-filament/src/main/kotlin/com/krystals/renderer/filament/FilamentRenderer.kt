@@ -84,6 +84,10 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private var interaction = InteractionState()
     private var frameScheduled = false
     private val frameBudget = DirtyFrameBudget()
+    // Per v0.8.25: while the app is in the background (ON_STOP) frame scheduling is paused —
+    // the surface may still exist (lock screen, split view) and without this the renderer
+    // would keep drawing frames on any pending request, wasting GPU/battery.
+    private val paused = AtomicBoolean(false)
     private var sceneRadius = 10.0
     private var sceneCenter = Vec3.ZERO
     private var lastCameraPosition = Vec3.ZERO
@@ -158,7 +162,9 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         updateClearColor(scene)
         updateLightingAndDepth()
         updateCamera()
-        requestFrames(3)
+        // v0.8.25: one redundant frame is enough on scene submit (the visible frame plus a
+        // single follow-up); the previous 3-frame burst was unnecessary GPU work.
+        requestFrames(2)
     }
 
     /**
@@ -636,10 +642,31 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     }
 
     private fun scheduleFrame() {
-        if (!frameScheduled && !closed.get() && swapChain != null) {
+        if (!paused.get() && !frameScheduled && !closed.get() && swapChain != null) {
             frameScheduled = true
             Choreographer.getInstance().postFrameCallback(this)
         }
+    }
+
+    /**
+     * Pauses frame scheduling when the app goes to the background. Pending frames are dropped
+     * and any further [requestFrames] calls are ignored until [resume] — the Filament engine
+     * stays alive but renders nothing, saving GPU/battery while the surface may still exist
+     * (lock screen, split view, window covered).
+     */
+    fun pause() = onMain {
+        if (closed.get()) return@onMain
+        paused.set(true)
+        if (frameScheduled) Choreographer.getInstance().removeFrameCallback(this)
+        frameScheduled = false
+        frameBudget.reset()
+    }
+
+    /** Resumes frame scheduling after [pause] and renders one refresh frame. */
+    fun resume() = onMain {
+        if (closed.get()) return@onMain
+        paused.set(false)
+        requestFrames(1)
     }
 
     private fun detachInternal() {

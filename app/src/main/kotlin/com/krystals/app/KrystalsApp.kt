@@ -306,6 +306,9 @@ private const val BUILD_SCENE_TIMEOUT_MS = 15_000L
 /** Per v0.5.3b: warn before opening a cell whose asymmetric expansion exceeds this many atoms. */
 private const val LARGE_CELL_WARN_THRESHOLD = 1000
 
+/** Per v0.8.25: startup update check runs at most once per 24h (saves data/battery). */
+private const val UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
+
 @Composable
 fun KrystalsRoot(
     activity: MainActivity,
@@ -430,7 +433,13 @@ fun KrystalsRoot(
         if (prompt && !ActivationManager.isActivated(activity)) { sponsorLaunchCount = count; sponsorOpen = true }
     }
     // Per v0.6.5: check for updates on startup.
+    // Per v0.8.25: at most once per 24h — the timestamp is written before the request so a
+    // failed check (offline etc.) still counts and isn't retried on every cold start.
     LaunchedEffect(Unit) {
+        val now = System.currentTimeMillis()
+        val lastChecked = preferences.getLong("last_update_check_ms", 0L)
+        if (now - lastChecked < UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect
+        preferences.edit().putLong("last_update_check_ms", now).apply()
         updateScope.launch {
             val info = fetchUpdateInfo()
             if (info != null && info.versionCode > com.krystals.app.BuildConfig.VERSION_CODE) {
