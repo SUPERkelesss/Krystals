@@ -150,12 +150,11 @@ internal fun depthCueViewRange(cue: DepthCueing, visibleNear: Float, visibleFar:
  * The sun is anchored to the camera: no matter how the crystal is rotated, the
  * sun-to-camera relationship stays constant, so [cameraRotation] must NOT be applied.
  *
- * v0.8.29 direction contract (user spec): the sun stays inside the camera-facing
- * hemisphere and shines AWAY from the camera. In Filament view space the camera looks
- * down -Z, so the camera-facing surface normal is +Z; a 90°-elevation sun therefore
- * points at +Z (surface-to-light). Z = +sin(phi): 0° elevation = horizon, 90° = at the
- * camera. The LightManager travel direction (worldLightTravelDirection) negates this,
- * ending at -Z for 90° elevation — away from the camera, toward the scene.
+ * v0.8.31 sign: Z = -sin(phi) (restored from v0.8.26). The v0.8.29 "+sin(phi)" flip
+ * inverted the elevation direction on device (user: "高度角方向反了"). The working
+ * chain is the v0.8.19/0.8.26 one: -sin(phi) surface-to-light, negated again in
+ * worldLightTravelDirection, ends at +Z for 90° elevation — the sun's travel direction
+ * pointing at the scene from the camera's hemisphere.
  */
 internal fun viewSpaceLightDirection(
     azimuthDegrees: Float,
@@ -164,11 +163,11 @@ internal fun viewSpaceLightDirection(
     val theta = Math.toRadians(azimuthDegrees.toDouble())
     val phi = Math.toRadians(elevationDegrees.coerceIn(0f, 90f).toDouble())
     val cosPhi = kotlin.math.cos(phi)
-    // Surface-to-light in view space: 0° elevation = horizon, 90° = toward the camera (+Z).
+    // Surface-to-light in view space: 0° elevation = horizon, 90° = toward the camera.
     return com.krystals.crystal.core.math.Vec3(
         cosPhi * kotlin.math.cos(theta),
         cosPhi * kotlin.math.sin(theta),
-        kotlin.math.sin(phi),
+        -kotlin.math.sin(phi),
     )
 }
 
