@@ -166,6 +166,30 @@ object CrystalEditor {
         is EditCommand.Transform -> transform(structure, bondConfiguration, command.rows, command.translation)
     }
 
+    /** Per v0.8.35: default cross-cell bond-extension mode applied when opening a file. */
+    enum class ExtendBondDefaultMode { ALL, METALS_ONLY, NEVER }
+
+    /** Per v0.8.35: set every rule's extendAtoB/extendBtoA per the user's default-extension
+     *  preference: ALL → both directions always extend; METALS_ONLY → only the direction whose
+     *  inside atom is a metal extends; NEVER → no direction extends. */
+    fun applyExtendPreference(
+        structure: CrystalStructure,
+        rules: List<BondRule>,
+        mode: ExtendBondDefaultMode,
+    ): List<BondRule> = rules.map { rule ->
+        when (mode) {
+            ExtendBondDefaultMode.ALL -> rule.copy(extendAtoB = true, extendBtoA = true)
+            ExtendBondDefaultMode.NEVER -> rule.copy(extendAtoB = false, extendBtoA = false)
+            ExtendBondDefaultMode.METALS_ONLY -> rule.copy(
+                extendAtoB = isMetal(siteSymbolOf(structure, rule.siteA)),
+                extendBtoA = isMetal(siteSymbolOf(structure, rule.siteB)),
+            )
+        }
+    }
+
+    private fun siteSymbolOf(structure: CrystalStructure, siteId: String): String =
+        structure.sites.firstOrNull { it.id == siteId }?.species?.symbol ?: siteId
+
     fun ensureAutoBondRules(
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,

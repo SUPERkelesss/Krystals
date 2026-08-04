@@ -694,8 +694,25 @@ fun KrystalsRoot(
                 computationJob = null
             }
             result.onSuccess { editResult ->
-                if (CrystalEditor.SMART_IONIC_TIMEOUT in editResult.warnings) showMessage(smartIonicTimeoutMessage)
-                if (targetTab in viewModel.tabs) viewModel.updateAnalysis(targetTab, editResult)
+                // Per v0.8.35: apply the user's default cross-cell bond-extension preference to
+                // every generated rule on open — ALL extends both directions, METALS_ONLY extends
+                // only the metal atom's direction, NEVER extends nothing. (Polyhedra defaults
+                // already apply per-site in doOpenParsed.)
+                val extended = editResult.copy(
+                    bondConfiguration = editResult.bondConfiguration.copy(
+                        rules = CrystalEditor.applyExtendPreference(
+                            editResult.structure,
+                            editResult.bondConfiguration.rules,
+                            when (settingsValues.defaultExtendBonds) {
+                                ExtendBondsDefault.ALL -> CrystalEditor.ExtendBondDefaultMode.ALL
+                                ExtendBondsDefault.METALS_ONLY -> CrystalEditor.ExtendBondDefaultMode.METALS_ONLY
+                                ExtendBondsDefault.NEVER -> CrystalEditor.ExtendBondDefaultMode.NEVER
+                            },
+                        ),
+                    ),
+                )
+                if (CrystalEditor.SMART_IONIC_TIMEOUT in extended.warnings) showMessage(smartIonicTimeoutMessage)
+                if (targetTab in viewModel.tabs) viewModel.updateAnalysis(targetTab, extended)
             }.onFailure { error ->
                 if (error is VoronoiSearchLimitExceededException) voronoiWarningOpen = true
                 else if (error !is kotlin.coroutines.cancellation.CancellationException) showMessage(error.message ?: "Operation failed")
