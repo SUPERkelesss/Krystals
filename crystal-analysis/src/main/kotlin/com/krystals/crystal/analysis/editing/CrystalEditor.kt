@@ -5,8 +5,6 @@ import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.bonding.BondValence
 import com.krystals.crystal.analysis.bonding.HbondChecking
-import com.krystals.crystal.analysis.bonding.VoronoiNeighbours
-import com.krystals.crystal.analysis.bonding.VoronoiSearchLimitExceededException
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.Expansion
 import com.krystals.crystal.analysis.model.PeriodicTable
@@ -95,6 +93,9 @@ data class EditResult(
 )
 
 object CrystalEditor {
+    /** Per v0.8.36: hbond-path neighbour scan radius. Covers the widest hbond window
+     *  (H + Cl vdW x 0.95 ≈ 2.8 Å) and all covalent windows (≤ ~1.55 Å) with margin. */
+    private const val HBOND_NEIGHBOUR_CUTOFF: Double = 3.5
     const val SMART_IONIC_UNAVAILABLE: String = "smart-ionic-unavailable"
     const val SMART_IONIC_TIMEOUT: String = "smart-ionic-timeout"
 
@@ -190,6 +191,18 @@ object CrystalEditor {
     private fun siteSymbolOf(structure: CrystalStructure, siteId: String): String =
         structure.sites.firstOrNull { it.id == siteId }?.species?.symbol ?: siteId
 
+    /** Shortest periodic displacement from [from] to [to] (cartesian), via the fractional
+     *  difference wrapped into (-0.5, 0.5]. Shared with the hbond path's neighbour scan. */
+    private fun periodicDisplacement(from: com.krystals.crystal.core.math.Vec3, to: com.krystals.crystal.core.math.Vec3, lattice: com.krystals.crystal.core.math.Mat3): com.krystals.crystal.core.math.Vec3 {
+        val frac = lattice.inverse() * (to - from)
+        val wrapped = com.krystals.crystal.core.math.Vec3(
+            frac.x - kotlin.math.round(frac.x),
+            frac.y - kotlin.math.round(frac.y),
+            frac.z - kotlin.math.round(frac.z),
+        )
+        return lattice * wrapped
+    }
+
     fun ensureAutoBondRules(
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,
@@ -264,23 +277,32 @@ object CrystalEditor {
         // element (O/N/F/S/P/Cl) paid a full periodic Voronoi pass for nothing.
         // Per v0.8.16: the proton-partner set includes C (C–H donors); the H-bond ACCEPTOR set
         // (what an H-bond points at) is unchanged — C is not a hydrogen-bond acceptor.
+        // Per v0.8.36: the gate tests the ACCEPTOR set, not the proton-partner set — an H-bond
+        // needs an acceptor, so a structure with C–H donors but no O/N/F/S/P/Cl can never form
+        // one and must skip the Voronoi pass entirely.
         val hbondAcceptorElements = setOf("O", "N", "F", "S", "P", "Cl")
         val hbondPartnerElements = hbondAcceptorElements + "C"
         val hasH = atoms.any { it.species.symbol == "H" }
-        val hasPartner = atoms.any { it.species.symbol in hbondPartnerElements }
-        if (!hasH || !hasPartner) return rules
+        val hasAcceptor = atoms.any { it.species.symbol in hbondAcceptorElements }
+        if (!hasH || !hasAcceptor) return rules
 
-        // Run Voronoi first.
-        val neighboursByAtomId = try {
-            val neighbours = VoronoiNeighbours.find(structure, atoms)
-            val map = linkedMapOf<Long, MutableList<Pair<Long, Double>>>()
-            for ((a, b, dist) in neighbours) {
-                map.getOrPut(a) { mutableListOf() }.add(b to dist)
-                map.getOrPut(b) { mutableListOf() }.add(a to dist)
+        // Per v0.8.36: H neighbours via periodic distance scan instead of a periodic Voronoi
+        // pass. The proton scan and HbondChecking only look at atoms within covalent/hbond
+        // windows (<= ~2.8 AA); any atom inside such a window is necessarily a Voronoi
+        // neighbour of the H (min-image proximity), so the distance scan is equivalent for the
+        // windows used here, at O(H atoms x N atoms) instead of building every cell.
+        val hydrogenAtoms = atoms.filter { it.species.symbol == "H" }
+        val neighboursByAtomId = linkedMapOf<Long, MutableList<Pair<Long, Double>>>()
+        val lattice = structure.lattice.matrix
+        for (h in hydrogenAtoms) {
+            val hPos = h.cartesianCoordinate.toVec3()
+            val list = mutableListOf<Pair<Long, Double>>()
+            for (other in atoms) {
+                if (other.id == h.id) continue
+                val d = periodicDisplacement(hPos, other.cartesianCoordinate.toVec3(), lattice).length()
+                if (d <= HBOND_NEIGHBOUR_CUTOFF) list += other.id to d
             }
-            map
-        } catch (_: VoronoiSearchLimitExceededException) {
-            return rules
+            if (list.isNotEmpty()) neighboursByAtomId[h.id] = list
         }
 
         // Compute covalent-max thresholds per element pair using bonding radii.
