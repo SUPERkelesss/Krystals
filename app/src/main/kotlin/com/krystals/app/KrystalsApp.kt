@@ -1108,6 +1108,9 @@ fun KrystalsRoot(
             )
         }
     }
+    // Per v0.8.35: the preset library is a full-screen page; system back closes it.
+    // Registered after ViewerScreen's handler so it wins while the page is open.
+    BackHandler(enabled = presetOpen) { presetOpen = false }
     }
     }
 }
@@ -1369,7 +1372,7 @@ private fun KrystalsRootDialogs(
             },
         )
     }
-    if (presetOpen) PresetLibraryDialog(
+    if (presetOpen) PresetLibraryScreen(
             context = activity,
             viewModel = viewModel,
             preferences = preferences,
@@ -3444,7 +3447,7 @@ private fun ChoiceTile(
 }
 
 @Composable
-private fun PresetLibraryDialog(
+private fun PresetLibraryScreen(
     context: Context,
     viewModel: KrystalsViewModel,
     preferences: android.content.SharedPreferences,
@@ -3564,10 +3567,11 @@ private fun PresetLibraryDialog(
         refresh()
     }
 
-    // Per v0.8.34: full-screen page (like the COD search screen) instead of a windowed dialog.
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
+    // Per v0.8.34: full-screen page (like the COD search screen). Per v0.8.35: rendered as a
+    // plain page composable, NOT inside a Dialog — Compose DropdownMenus (the filter chips)
+    // crash during Popup measurement when hosted inside a dialog window on some devices.
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
                     Text(stringResource(R.string.preset_library), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
@@ -3627,7 +3631,6 @@ private fun PresetLibraryDialog(
                 }
             }
         }
-    }
 
     // Per v0.8.34: 新建组 — create a named first-level user group.
     if (newGroupOpen) {
