@@ -3841,10 +3841,11 @@ private fun FilterDropdownChip(
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             // Per v0.8.29: scroll when the option list is long (e.g. formulas/authors).
-            // Per v0.8.35: LazyColumn (not Column + verticalScroll) — nested scroll containers
-            // inside the DropdownMenu Popup measured every option eagerly and crashed with a
-            // MeasurePassDelegate/remeasure exception once the list grew (hundreds of formulas).
-            LazyColumn(Modifier.heightIn(max = 360.dp)) {
+            // Per v0.8.35: fixed width + LazyColumn — DropdownMenu sizes its content via
+            // intrinsic measurement (IntrinsicWidthNode), which SubcomposeLayout-based lazy
+            // lists don't support ("intrinsic measurements of SubcomposeLayout layouts");
+            // a fixed width makes the intrinsic query return immediately instead of crashing.
+            LazyColumn(Modifier.width(280.dp).heightIn(max = 360.dp)) {
                 items(options) { option ->
                     DropdownMenuItem(
                         text = { Text(option) },
@@ -3885,8 +3886,8 @@ private fun IntFilterDropdownChip(
             } else null,
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            // Per v0.8.35: LazyColumn for consistent long-list behavior (see FilterDropdownChip).
-            LazyColumn(Modifier.heightIn(max = 360.dp)) {
+            // Per v0.8.35: fixed width + LazyColumn (see FilterDropdownChip for the intrinsic caveat).
+            LazyColumn(Modifier.width(280.dp).heightIn(max = 360.dp)) {
                 items(options) { option ->
                     DropdownMenuItem(
                         text = { Text(option.toString()) },
