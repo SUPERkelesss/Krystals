@@ -3447,6 +3447,7 @@ private fun PresetLibraryDialog(
     var selected by remember { mutableStateOf<Set<PresetEntry>>(emptySet()) }
     var newGroupOpen by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<PresetGroup?>(null) }
+    var renameFileTarget by remember { mutableStateOf<PresetEntry?>(null) }
     var moveOpen by remember { mutableStateOf(false) }
     var deleteConfirmOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -3464,18 +3465,34 @@ private fun PresetLibraryDialog(
     fun refresh() { groups = PresetRepository.listGroups(context) }
 
     // Per v0.8.34: parse filter metadata for every preset off the UI thread.
+    // Per v0.8.35: cache-first — only files whose last-modified stamp is missing/stale get
+    // re-parsed, and fresh results are persisted so the library opens instantly next time.
     LaunchedEffect(groups) {
-        metas = withContext(Dispatchers.Default) {
-            groups.flatMap { it.entries }.mapNotNull { entry ->
-                val text = try {
-                    when (entry.source) {
-                        PresetSource.BUNDLED -> context.assets.open(entry.assetPath!!).bufferedReader().use { it.readText() }
-                        PresetSource.USER -> entry.file!!.readText()
+        val cache = PresetRepository.loadMetaCache(context)
+        val result = mutableMapOf<PresetEntry, PresetMeta>()
+        var dirty = false
+        withContext(Dispatchers.Default) {
+            groups.flatMap { it.entries }.forEach { entry ->
+                val cached = PresetRepository.cachedMeta(entry, cache)
+                if (cached != null) {
+                    result[entry] = cached
+                } else {
+                    val text = try {
+                        when (entry.source) {
+                            PresetSource.BUNDLED -> context.assets.open(entry.assetPath!!).bufferedReader().use { it.readText() }
+                            PresetSource.USER -> entry.file!!.readText()
+                        }
+                    } catch (_: Exception) { return@forEach }
+                    PresetRepository.parseMeta(text)?.let { meta ->
+                        result[entry] = meta
+                        cache[PresetRepository.metaKey(entry)] = PresetRepository.cacheEntry(entry, meta)
+                        dirty = true
                     }
-                } catch (_: Exception) { return@mapNotNull null }
-                PresetRepository.parseMeta(text)?.let { entry to it }
-            }.toMap()
+                }
+            }
         }
+        if (dirty) PresetRepository.saveMetaCache(context, cache)
+        metas = result
     }
 
     val filterOptions = buildFilterOptions(
@@ -3510,8 +3527,17 @@ private fun PresetLibraryDialog(
             onDismiss()
         }
     }
+    // Per v0.8.35: a single click on a file row opens it (selection is checkbox-only now).
+    fun openSingle(entry: PresetEntry) {
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { PresetRepository.openPreset(context, entry, autoConvertConventional = autoConvertCell) } }
+                .onSuccess { parsed -> onOpenParsed(parsed, entry.name) }
+                .onFailure { if (it !is CancellationException) onMessage(it.message ?: "Unable to open preset") }
+            onDismiss()
+        }
+    }
     fun deleteSelected() {
-        selected.filter { it.source == PresetSource.USER }.forEach { PresetRepository.deletePreset(it) }
+        selected.filter { it.source == PresetSource.USER }.forEach { PresetRepository.deletePreset(context, it) }
         selected = emptySet()
         refresh()
     }
@@ -3566,17 +3592,20 @@ private fun PresetLibraryDialog(
                                 meta = metas[entry],
                                 checked = entry in selected,
                                 onToggle = { selected = if (entry in selected) selected - entry else selected + entry },
+                                onOpen = { openSingle(entry) },
+                                onRename = { renameFileTarget = entry },
                             )
                         }
                     }
                 }
                 if (selected.isNotEmpty()) {
                     HorizontalDivider()
+                    // Per v0.8.35: order 删除/移动到/打开, with Open as a highlighted button.
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(localized("已选 ${selected.size} 项", "Selected ${selected.size}"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                        TextButton(onClick = { openSelected() }) { Text(localized("打开", "Open")) }
-                        TextButton(onClick = { moveOpen = true }) { Text(localized("移动到", "Move to")) }
                         TextButton(onClick = { deleteConfirmOpen = true }) { Text(localized("删除", "Delete")) }
+                        TextButton(onClick = { moveOpen = true }) { Text(localized("移动到", "Move to")) }
+                        Button(onClick = { openSelected() }) { Text(localized("打开", "Open")) }
                     }
                 }
             }
@@ -3625,6 +3654,26 @@ private fun PresetLibraryDialog(
             dismissButton = { TextButton(onClick = { renameTarget = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
+    // Per v0.8.35: rename a single user preset file (per-row 重命名 button).
+    renameFileTarget?.let { entry ->
+        var name by remember(entry) { mutableStateOf(entry.name.removeSuffix(".cif")) }
+        val renameError = localized("重命名失败", "Rename failed")
+        AlertDialog(
+            onDismissRequest = { renameFileTarget = null },
+            title = { Text(localized("重命名文件", "Rename file")) },
+            text = {
+                OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (!PresetRepository.renamePreset(context, entry, name)) onMessage(renameError)
+                    renameFileTarget = null
+                    refresh()
+                }) { Text(stringResource(R.string.confirm)) }
+            },
+            dismissButton = { TextButton(onClick = { renameFileTarget = null }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
     // Per v0.8.34: 移动到 — pick a target user group.
     if (moveOpen) {
         val userGroups = groups.filter { it.isUserGroup }.map { it.name }
@@ -3658,14 +3707,22 @@ private fun PresetLibraryDialog(
     }
 }
 
-/** Per v0.8.34: one preset file row with a checkbox; tapping the row toggles selection. */
+/** Per v0.8.34: one preset file row with a checkbox; tapping the row opens the file (v0.8.35),
+ *  the checkbox toggles selection, and user files get a per-row rename button. */
 @Composable
-private fun PresetRow(entry: PresetEntry, meta: PresetMeta?, checked: Boolean, onToggle: () -> Unit) {
+private fun PresetRow(
+    entry: PresetEntry,
+    meta: PresetMeta?,
+    checked: Boolean,
+    onToggle: () -> Unit,
+    onOpen: () -> Unit,
+    onRename: () -> Unit,
+) {
     Row(
         Modifier
             .fillMaxWidth()
             .then(if (checked) Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)) else Modifier)
-            .clickable { onToggle() }
+            .clickable { onOpen() }
             .padding(vertical = 4.dp, horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -3676,7 +3733,9 @@ private fun PresetRow(entry: PresetEntry, meta: PresetMeta?, checked: Boolean, o
                 Text("${it.formula} · ${it.spaceGroup}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (entry.source == PresetSource.BUNDLED) {
+        if (entry.source == PresetSource.USER) {
+            IconButton(onClick = onRename) { Icon(Icons.Default.Edit, localized("重命名", "Rename"), modifier = Modifier.size(18.dp)) }
+        } else {
             Text(stringResource(R.string.bundled), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 8.dp))
         }
     }

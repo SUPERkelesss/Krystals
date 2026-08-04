@@ -32,6 +32,79 @@ object PresetRepository {
     /** Per v0.8.34: the default user group, created on first save/open. */
     const val MY_PRESETS_GROUP = "我的预设"
 
+    /** Per v0.8.35: persistent filter-metadata cache file (filesDir), so the library opens
+     *  without re-parsing every CIF. Values are `lastModified|formula|elementCount|crystalSystem|pointGroup|spaceGroup`. */
+    private const val META_CACHE_FILE = "preset_meta_cache.json"
+
+    fun loadMetaCache(context: Context): MutableMap<String, String> {
+        val f = File(context.filesDir, META_CACHE_FILE)
+        return runCatching {
+            val obj = org.json.JSONObject(f.readText())
+            val map = mutableMapOf<String, String>()
+            obj.keys().forEach { key -> map[key] = obj.getString(key) }
+            map
+        }.getOrDefault(mutableMapOf())
+    }
+
+    fun saveMetaCache(context: Context, cache: Map<String, String>) {
+        File(context.filesDir, META_CACHE_FILE).writeText(org.json.JSONObject(cache).toString())
+    }
+
+    /** Stable cache key for an entry (bundled by asset path, user by file path). */
+    fun metaKey(entry: PresetEntry): String =
+        if (entry.source == PresetSource.BUNDLED) "b:" + (entry.assetPath ?: entry.name)
+        else "u:" + (entry.file?.path ?: entry.name)
+
+    private fun metaKeyForPath(path: String, isUser: Boolean): String = if (isUser) "u:$path" else "b:$path"
+
+    /** Read a cached meta when the entry's last-modified stamp matches; null otherwise. */
+    fun cachedMeta(entry: PresetEntry, cache: Map<String, String>): PresetMeta? {
+        val raw = cache[metaKey(entry)] ?: return null
+        val parts = raw.split("|")
+        if (parts.size != 6) return null
+        val stamp = if (entry.source == PresetSource.USER) entry.file?.lastModified()?.toString() else "b"
+        if (parts[0] != stamp) return null
+        return PresetMeta(
+            formula = parts[1],
+            elementCount = parts[2].toIntOrNull() ?: 0,
+            crystalSystem = parts[3].ifBlank { null },
+            pointGroup = parts[4].ifBlank { null },
+            spaceGroup = parts[5].ifBlank { null },
+        )
+    }
+
+    /** Serialize a fresh meta into a cache entry value. */
+    fun cacheEntry(entry: PresetEntry, meta: PresetMeta): String {
+        val stamp = if (entry.source == PresetSource.USER) entry.file?.lastModified()?.toString() ?: "" else "b"
+        return listOf(stamp, meta.formula, meta.elementCount, meta.crystalSystem ?: "", meta.pointGroup ?: "", meta.spaceGroup ?: "").joinToString("|")
+    }
+
+    /** Remove one key from the persisted cache (after move/rename/delete/save). */
+    fun invalidateMetaCache(context: Context, key: String) {
+        val cache = loadMetaCache(context)
+        if (cache.remove(key) != null) saveMetaCache(context, cache)
+    }
+
+    /** Drop all cache keys under a user group folder (after renaming the folder). */
+    fun invalidateMetaCachePrefix(context: Context, prefix: String) {
+        val cache = loadMetaCache(context)
+        val before = cache.size
+        cache.keys.toList().filter { it.startsWith(prefix) }.forEach { cache.remove(it) }
+        if (cache.size != before) saveMetaCache(context, cache)
+    }
+
+    /** Per v0.8.35: rename a user preset file. */
+    fun renamePreset(context: Context, entry: PresetEntry, newName: String): Boolean {
+        if (entry.source != PresetSource.USER) return false
+        val file = entry.file ?: return false
+        val safe = newName.trim().ifBlank { return false }.let { if (it.endsWith(".cif", true)) it else "$it.cif" }
+        val target = File(file.parentFile, safe)
+        if (target.exists()) return false
+        val ok = file.renameTo(target)
+        if (ok) invalidateMetaCache(context, metaKeyForPath(file.path, true))
+        return ok
+    }
+
     /** Recursively collect bundled `.cif` files under [dir] (relative to assets root), tagging each with its [category]. */
     private fun collectBundled(context: Context, dir: String, category: String?): List<PresetEntry> {
         val entries = runCatching { context.assets.list(dir).orEmpty().toList() }.getOrDefault(emptyList())
@@ -102,7 +175,10 @@ object PresetRepository {
         val old = File(userRoot(context), oldName)
         val target = File(userRoot(context), safe)
         if (!old.isDirectory || target.exists()) return false
-        return old.renameTo(target)
+        val ok = old.renameTo(target)
+        // Per v0.8.35: cached metas keyed by the old folder path are stale now.
+        if (ok) invalidateMetaCachePrefix(context, "u:" + old.path + File.separator)
+        return ok
     }
 
     /** Per v0.8.34: move a user preset file into another first-level group. */
@@ -113,7 +189,9 @@ object PresetRepository {
         if (!targetDir.isDirectory) return false
         val target = File(targetDir, file.name)
         if (target.exists()) return false
-        return file.renameTo(target)
+        val ok = file.renameTo(target)
+        if (ok) invalidateMetaCache(context, metaKeyForPath(file.path, true))
+        return ok
     }
 
     fun openPreset(context: Context, entry: PresetEntry, autoConvertConventional: Boolean = true): ParsedStructure {
@@ -163,11 +241,24 @@ object PresetRepository {
         // Per v0.7.0: inject user comments into CIF before saving to preset.
         val contentWithComments = CifComments.inject(content, comments)
         target.writeText(contentWithComments, Charsets.UTF_8)
+        // Per v0.8.35: refresh the metadata cache for this file right away (saved/modified).
+        runCatching {
+            PresetRepository.parseMeta(contentWithComments)?.let { meta ->
+                val cache = loadMetaCache(context)
+                cache[metaKeyForPath(target.path, true)] = listOf(
+                    target.lastModified().toString(), meta.formula, meta.elementCount,
+                    meta.crystalSystem ?: "", meta.pointGroup ?: "", meta.spaceGroup ?: "",
+                ).joinToString("|")
+                saveMetaCache(context, cache)
+            }
+        }
         return target
     }
 
-    fun deletePreset(entry: PresetEntry): Boolean {
+    fun deletePreset(context: Context, entry: PresetEntry): Boolean {
         if (entry.source != PresetSource.USER) return false
-        return entry.file?.delete() == true
+        val ok = entry.file?.delete() == true
+        if (ok) invalidateMetaCache(context, metaKeyForPath(entry.file!!.path, true))
+        return ok
     }
 }
