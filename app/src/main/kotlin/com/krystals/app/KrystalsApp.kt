@@ -645,6 +645,7 @@ fun KrystalsRoot(
         structure: CrystalStructure,
         bondConfiguration: com.krystals.crystal.analysis.bonding.BondConfiguration,
         epsilon: Double,
+        expandedSize: Int,
     ) {
         if (computing) return
         val targetTab = viewModel.current ?: return
@@ -653,7 +654,9 @@ fun KrystalsRoot(
             val result = try {
                 Result.success(
                     withContext(Dispatchers.Default) {
-                        val expandedSize = SymmetryExpander.expand(structure).size
+                        // Per v0.8.36: expandedSize comes from the open path (openParsed already
+                        // expanded for the large-cell check) — re-expanding here doubled the
+                        // expansion cost on big cells.
                         // Per v0.8.26: dispatch by user-selected bond-rule mode.
                         when (settingsValues.bondRuleMode) {
                             BondRuleMode.AUTO -> {
@@ -755,7 +758,9 @@ fun KrystalsRoot(
         // Per v0.7.0: extract user comments from CIF source.
         tab.comments = CifComments.extract(parsed.document.source)
         // Per v0.8.26: skip bond computation when the user disables auto-bond-rules.
-        if (settingsValues.autoBondRules) openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
+        // Per v0.8.36: pass the already-computed expansion size (openParsed expanded for the
+        // large-cell gate) so the computation path does not re-expand the cell.
+        if (settingsValues.autoBondRules) openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon, expandedEstimate)
     }
 
     /** Per v0.5.0: add a parsed structure, synthesizing bond rules off-UI with the computing overlay.
