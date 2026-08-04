@@ -250,11 +250,14 @@ internal fun sunShade(intensity: Float): Float = WorldLight.SUN_RATIO * intensit
  *
  * v0.8.21: 150_000 lux (noon sun) overexposed the PBR highlight to pure white because
  * the view has post-processing (tone mapping) disabled — the highlight clipped and its
- * arc edge read as a "bright edge" on the atom. 30_000 lux at intensity=1.0 (12_000 at
- * the 0.4 default) keeps a strong studio key light without clipping.
+ * arc edge read as a "bright edge" on the atom.
+ * v0.8.30: base raised from 30_000 to 90_000. The v0.8.29 60/40 ambient/sun split
+ * scaled BOTH lights down (~3x total), leaving atoms mostly in shadow; the raised base
+ * restores v0.8.21 brightness while the 60/40 split keeps the highlight well under the
+ * noon-sun clipping level.
  */
 internal fun worldLightIntensityLux(intensity: Float): Float =
-    (intensity * 30_000f).coerceAtLeast(1f)
+    (intensity * 90_000f).coerceAtLeast(1f)
 
 /**
  * Desaturates an ARGB color by [factor] (1.0 = identity) in HSL space, preserving hue

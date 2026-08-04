@@ -123,9 +123,12 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         // v0.8.29: light model = ambient 60% + sun 40%. The IndirectLight carries the
         // ambient share; the directional LightManager light carries the sun share. Both
         // intensities are refreshed in updateLightingAndDepth from the world light.
+        // v0.8.30: irradiance SH coefficient raised 0.5 -> 0.8 so the ambient term
+        // actually fills the shadow side of lit atoms (user: "most of the ball is in
+        // shadow").
         indirectLight = IndirectLight.Builder()
-            .irradiance(1, floatArrayOf(0.5f, 0.5f, 0.5f))
-            .intensity(WorldLight.AMBIENT_RATIO * 30_000f)
+            .irradiance(1, floatArrayOf(0.8f, 0.8f, 0.8f))
+            .intensity(WorldLight.AMBIENT_RATIO * 90_000f)
             .build(engine)
         filamentScene.indirectLight = indirectLight
         view.scene = filamentScene
@@ -412,7 +415,10 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             lightInstance,
             worldLightIntensityLux(light.intensity) * WorldLight.SUN_RATIO,
         )
-        indirectLight.setIntensity(WorldLight.AMBIENT_RATIO * 30_000f * light.intensity.coerceAtLeast(0.1f))
+        // v0.8.30: ambient base raised with the sun base (90k * 0.6) so atoms stay lit
+        // across the whole sphere — the v0.8.29 60/40 split otherwise left most of the
+        // ball in shadow.
+        indirectLight.setIntensity(WorldLight.AMBIENT_RATIO * 90_000f * light.intensity.coerceAtLeast(0.25f))
         // Depth-cueing range is derived from the visible-atoms AABB, not the preloaded
         // neighbor-cell shell. +3 maps to the nearest visible corner, -3 to the farthest.
         val visibleBounds = scene.visibleBounds()

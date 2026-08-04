@@ -158,8 +158,10 @@ class FilamentCompatibilityTest {
         // v0.8.21: with post-processing disabled (no tone mapping), 150k lux clipped the
         // PBR highlight to pure white and its arc edge read as a "bright edge" on atoms.
         // The mapping must stay strong but non-clipping.
-        assertEquals(12_000f, worldLightIntensityLux(0.4f), 1f)   // default intensity
-        assertEquals(30_000f, worldLightIntensityLux(1.0f), 1f)   // slider max
+        // v0.8.30: base raised 30k -> 90k to undo the dimming from the 60/40 split;
+        // the sun light only receives 40% of it, so the highlight stays well under clip.
+        assertEquals(36_000f, worldLightIntensityLux(0.4f), 1f)   // default intensity
+        assertEquals(90_000f, worldLightIntensityLux(1.0f), 1f)   // slider max
         assertEquals(1f, worldLightIntensityLux(0f), 1f)           // floor
         assertTrue(worldLightIntensityLux(1.0f) < 100_000f, "must not approach noon-sun levels")
     }
