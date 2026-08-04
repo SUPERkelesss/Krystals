@@ -3836,8 +3836,11 @@ private fun FilterDropdownChip(
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             // Per v0.8.29: scroll when the option list is long (e.g. formulas/authors).
-            Column(Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp)) {
-                options.forEach { option ->
+            // Per v0.8.35: LazyColumn (not Column + verticalScroll) — nested scroll containers
+            // inside the DropdownMenu Popup measured every option eagerly and crashed with a
+            // MeasurePassDelegate/remeasure exception once the list grew (hundreds of formulas).
+            LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                items(options) { option ->
                     DropdownMenuItem(
                         text = { Text(option) },
                         onClick = { onSelect(option); expanded = false },
@@ -3877,11 +3880,14 @@ private fun IntFilterDropdownChip(
             } else null,
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option.toString()) },
-                    onClick = { onSelect(option); expanded = false },
-                )
+            // Per v0.8.35: LazyColumn for consistent long-list behavior (see FilterDropdownChip).
+            LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                items(options) { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.toString()) },
+                        onClick = { onSelect(option); expanded = false },
+                    )
+                }
             }
         }
     }
