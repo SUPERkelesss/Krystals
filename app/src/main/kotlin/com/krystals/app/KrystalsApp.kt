@@ -1359,7 +1359,7 @@ private fun KrystalsRootDialogs(
             autoConvertCell = autoConvertCell,
             onDismiss = { presetOpen = false },
             onMessage = { showMessage(it) },
-            onOpenParsed = { parsed, name -> presetOpen = false; openParsed(parsed, name, null) },
+            onOpenParsed = { parsed, name -> openParsed(parsed, name, null) },
         )
     if (mpKeyDialogOpen) MpApiKeyDialog(
         context = activity,
@@ -3521,21 +3521,20 @@ private fun PresetLibraryDialog(
         refresh()
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.preset_library), modifier = Modifier.weight(1f))
-                TextButton(onClick = { newGroupOpen = true }) { Text(localized("新建组", "New group")) }
-            }
-        },
-        text = {
-            Column(Modifier.fillMaxWidth()) {
+    // Per v0.8.34: full-screen page (like the COD search screen) instead of a windowed dialog.
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
+                    Text(stringResource(R.string.preset_library), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                    TextButton(onClick = { newGroupOpen = true }) { Text(localized("新建组", "New group")) }
+                }
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                     placeholder = { Text(localized("搜索文件名...", "Search by name...")) },
                     leadingIcon = { Icon(Icons.Default.Search, null) },
                 )
@@ -3547,13 +3546,13 @@ private fun PresetLibraryDialog(
                     visibleFilters = DEFAULT_VISIBLE_FILTERS,
                     onVisibleFiltersChange = {},
                 )
-                LazyColumn(Modifier.fillMaxWidth().height(400.dp)) {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                     if (totalFiltered == 0) {
-                        item { Text(localized("无匹配结果", "No matching results"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
+                        item { Text(localized("无匹配结果", "No matching results"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(16.dp)) }
                     }
                     filteredGroups.forEach { group ->
                         item(key = "h_" + group.name) {
-                            Row(Modifier.fillMaxWidth().clickable { toggle(group.name) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier.fillMaxWidth().clickable { toggle(group.name) }.padding(vertical = 4.dp, horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(if (group.name in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
                                 Text(group.name, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp).weight(1f))
                                 if (group.isUserGroup) {
@@ -3572,8 +3571,8 @@ private fun PresetLibraryDialog(
                     }
                 }
                 if (selected.isNotEmpty()) {
-                    HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    HorizontalDivider()
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(localized("已选 ${selected.size} 项", "Selected ${selected.size}"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                         TextButton(onClick = { openSelected() }) { Text(localized("打开", "Open")) }
                         TextButton(onClick = { moveOpen = true }) { Text(localized("移动到", "Move to")) }
@@ -3581,10 +3580,8 @@ private fun PresetLibraryDialog(
                     }
                 }
             }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
-    )
+        }
+    }
 
     // Per v0.8.34: 新建组 — create a named first-level user group.
     if (newGroupOpen) {
@@ -3665,12 +3662,16 @@ private fun PresetLibraryDialog(
 @Composable
 private fun PresetRow(entry: PresetEntry, meta: PresetMeta?, checked: Boolean, onToggle: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable { onToggle() }.padding(vertical = 4.dp),
+        Modifier
+            .fillMaxWidth()
+            .then(if (checked) Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)) else Modifier)
+            .clickable { onToggle() }
+            .padding(vertical = 4.dp, horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         androidx.compose.material3.Checkbox(checked = checked, onCheckedChange = { onToggle() })
         Column(Modifier.weight(1f)) {
-            Text(entry.name)
+            Text(entry.name, color = if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
             meta?.let {
                 Text("${it.formula} · ${it.spaceGroup}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
