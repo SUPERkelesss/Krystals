@@ -25,10 +25,11 @@ fragment {
         color.rgb = mix(color.rgb, materialParams.backgroundColor, fog);
         material.baseColor = color;
         material.metallic = 0.0;
-        material.roughness = 0.5;
-        material.reflectance = 0.5;
+        // v0.8.32: stronger mirror reflection to match the bond material.
+        material.roughness = 0.32;
+        material.reflectance = 0.56;
         material.clearCoat = 1.0;
-        material.clearCoatRoughness = 0.06;
+        material.clearCoatRoughness = 0.05;
     }
 }
 vertex {

@@ -230,10 +230,12 @@ internal fun atomSpecularBlend(): Float = 1.0f
  */
 internal object AtomPbr {
     const val METALLIC = 0.0f
-    const val ROUGHNESS = 0.5f
-    const val REFLECTANCE = 0.5f
+    // v0.8.32: roughness 0.5 -> 0.32, reflectance 0.5 -> 0.56 so the atom highlight
+    // matches the bond (unlit Blinn-Phong) material's strong mirror reflection.
+    const val ROUGHNESS = 0.32f
+    const val REFLECTANCE = 0.56f
     const val CLEAR_COAT = 1.0f
-    const val CLEAR_COAT_ROUGHNESS = 0.06f
+    const val CLEAR_COAT_ROUGHNESS = 0.05f
     /** CPK base color is desaturated by 5% before it reaches the material. */
     const val SATURATION_FACTOR = 0.95f
 }
