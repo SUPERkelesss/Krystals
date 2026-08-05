@@ -162,8 +162,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.layout.ContentScale
@@ -3844,29 +3842,14 @@ private fun FilterDropdownChip(
                 }
             } else null,
         )
-        // Per v0.8.36: DropdownMenu is unreliable on this device (measurement crash even for
-        // short lists, e.g. element-count filters with few elements). Custom Popup + LazyColumn:
-        // identical tap-to-expand interaction, but no intrinsic measurement, no crash.
-        if (expanded) {
-            Popup(
-                onDismissRequest = { expanded = false },
-                properties = PopupProperties(focusable = true),
-                offset = IntOffset(0, with(LocalDensity.current) { 48.dp.roundToPx() }),
-            ) {
-                Surface(
-                    Modifier.width(280.dp).heightIn(max = 360.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 8.dp,
-                ) {
-                    LazyColumn(Modifier.padding(vertical = 4.dp)) {
-                        items(options) { option ->
-                            DropdownMenuItem(
-                                text = { Text(option) },
-                                onClick = { onSelect(option); expanded = false },
-                            )
-                        }
-                    }
+        // Per v0.8.29: scroll when the option list is long (e.g. formulas/authors).
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            Column(Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp)) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option) },
+                        onClick = { onSelect(option); expanded = false },
+                    )
                 }
             }
         }
@@ -3901,27 +3884,14 @@ private fun IntFilterDropdownChip(
                 }
             } else null,
         )
-        // Per v0.8.36: custom Popup + LazyColumn (see FilterDropdownChip).
-        if (expanded) {
-            Popup(
-                onDismissRequest = { expanded = false },
-                properties = PopupProperties(focusable = true),
-                offset = IntOffset(0, with(LocalDensity.current) { 48.dp.roundToPx() }),
-            ) {
-                Surface(
-                    Modifier.width(280.dp).heightIn(max = 360.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 8.dp,
-                ) {
-                    LazyColumn(Modifier.padding(vertical = 4.dp)) {
-                        items(options) { option ->
-                            DropdownMenuItem(
-                                text = { Text(option.toString()) },
-                                onClick = { onSelect(option); expanded = false },
-                            )
-                        }
-                    }
+        // Per v0.8.29: scrollable long lists (see FilterDropdownChip).
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            Column(Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp)) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.toString()) },
+                        onClick = { onSelect(option); expanded = false },
+                    )
                 }
             }
         }
