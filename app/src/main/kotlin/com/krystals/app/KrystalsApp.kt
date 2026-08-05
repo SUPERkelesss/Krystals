@@ -133,6 +133,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
@@ -4347,7 +4348,8 @@ private fun MpSearchScreen(
                 Text(localized("模糊搜索", "Fuzzy search"), style = MaterialTheme.typography.bodyMedium)
                 // Per v0.8.36: help hint via Material3 TooltipBox (custom panel removed).
                 TooltipBox(
-                    positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                    // Per v0.8.36: show the hint below the button.
+                    positionProvider = TooltipDefaults.rememberTooltipPositionProvider(positioning = TooltipAnchorPosition.Below),
                     tooltip = {
                         PlainTooltip {
                             Text(localized(
@@ -4544,7 +4546,8 @@ private fun CodSearchScreen(
                 }
                 // Per v0.8.36: help hint via Material3 TooltipBox (custom panel removed).
                 TooltipBox(
-                    positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                    // Per v0.8.36: show the hint below the button.
+                    positionProvider = TooltipDefaults.rememberTooltipPositionProvider(positioning = TooltipAnchorPosition.Below),
                     tooltip = {
                         PlainTooltip {
                             Text(localized(
