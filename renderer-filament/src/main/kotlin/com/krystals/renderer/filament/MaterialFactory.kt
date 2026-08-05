@@ -222,20 +222,17 @@ internal fun atomSpecularBlend(): Float = 1.0f
 /**
  * Atom material shading parameters.
  *
- * v0.8.29: atoms are a clear-coat plastic ball — a matte plastic dielectric base
- * (metallic 0, roughness 0.5, reflectance 0.5) under a smooth clear coat (1.0 / 0.06),
- * per Filament's recommended PBR config for glossy plastic. Must mirror the values
- * baked into atom_opaque.mat / atom_transparent.mat. The 5% CPK desaturation remains
- * atom-specific.
+ * v0.8.33: no clear coat — plain dielectric base (metallic 0, roughness 0.32,
+ * reflectance 0.56) with diffuse + basic Fresnel reflectance only. The 60% ambient /
+ * 40% sun scene light is applied by Filament's IndirectLight + directional light.
+ * Must mirror the values baked into atom_opaque.mat / atom_transparent.mat. The 5%
+ * CPK desaturation remains atom-specific.
  */
 internal object AtomPbr {
     const val METALLIC = 0.0f
-    // v0.8.32: roughness 0.5 -> 0.32, reflectance 0.5 -> 0.56 so the atom highlight
-    // matches the bond (unlit Blinn-Phong) material's strong mirror reflection.
     const val ROUGHNESS = 0.32f
     const val REFLECTANCE = 0.56f
-    const val CLEAR_COAT = 1.0f
-    const val CLEAR_COAT_ROUGHNESS = 0.05f
+    const val CLEAR_COAT = 0.0f
     /** CPK base color is desaturated by 5% before it reaches the material. */
     const val SATURATION_FACTOR = 0.95f
 }

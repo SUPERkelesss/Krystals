@@ -168,15 +168,12 @@ class FilamentCompatibilityTest {
 
     @Test
     fun `atom pbr configuration matches spec`() {
-        // v0.8.29: atoms are a clear-coat plastic ball — matte plastic dielectric base
-        // under a smooth clear coat (Filament's recommended glossy-plastic config).
-        // v0.8.32: roughness/reflectance raised so the atom mirror reflection matches
-        // the bond (unlit Blinn-Phong) material's strong highlight.
+        // v0.8.33: atoms have no clear coat — plain dielectric (diffuse + basic
+        // Fresnel reflectance) lit by the 60% ambient / 40% sun scene light.
         assertEquals(0.0f, AtomPbr.METALLIC, 0.001f)
         assertEquals(0.32f, AtomPbr.ROUGHNESS, 0.001f)
         assertEquals(0.56f, AtomPbr.REFLECTANCE, 0.001f)
-        assertEquals(1.0f, AtomPbr.CLEAR_COAT, 0.001f)
-        assertEquals(0.05f, AtomPbr.CLEAR_COAT_ROUGHNESS, 0.001f)
+        assertEquals(0.0f, AtomPbr.CLEAR_COAT, 0.001f)
         assertEquals(0.95f, AtomPbr.SATURATION_FACTOR, 0.001f)
     }
 
