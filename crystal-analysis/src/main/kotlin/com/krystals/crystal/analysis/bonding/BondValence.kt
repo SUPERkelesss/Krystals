@@ -319,13 +319,28 @@ object BondValence {
 
         var bestV = candidates.first()
         var bestErr = Double.POSITIVE_INFINITY
+        var bestBvs = 0.0
         for (v in candidates) {
             val param = PeriodicTable.bondValenceParam(site.species.symbol, v, anionElement, anionV)!!
             val bvs = distances.sumOf { d -> exp((param.r0 - d) / param.b) }
             val err = abs(bvs - v)
-            if (err < bestErr) { bestErr = err; bestV = v }
+            if (err < bestErr) { bestErr = err; bestV = v; bestBvs = bvs }
         }
-        val radius = PeriodicTable.shannonIonicRadius(site.species.symbol, bestV, cn)
+        // Per v0.8.36: neutral-element fallback — when the measured bond valence is closer to
+        // neutral 0 than to any real oxidation state (total BVS below half a bond-valence unit),
+        // the site is effectively neutral: use the neutral bonding radius instead of a Shannon
+        // radius at a spurious valence. null radius falls back to the bonding radius when the
+        // rule is generated. Everything else (valence, anion/cation role) is unchanged.
+        val radius = if (bestBvs < NEUTRAL_BVS_THRESHOLD) {
+            null
+        } else {
+            PeriodicTable.shannonIonicRadius(site.species.symbol, bestV, cn)
+        }
         return SiteValence(radius, bestV, isAnion = false)
     }
+
+    /** Per v0.8.36: a site whose total bond-valence sum is below this is treated as neutral
+     *  (its radius falls back to the neutral bonding radius). Half a bond-valence unit is the
+     *  point below which the site cannot be meaningfully assigned to any tabulated valence. */
+    private const val NEUTRAL_BVS_THRESHOLD: Double = 0.5
 }
