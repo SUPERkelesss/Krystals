@@ -526,6 +526,12 @@ fun KrystalsRoot(
     // Per v0.6.5: unified confirmation dialog for help/feedback/sponsor links.
     val linkConfirmUrlState = remember { mutableStateOf<String?>(null) }
     var linkConfirmUrl by linkConfirmUrlState
+    // Per v0.8.36: Save / Save-to-preset confirm the file name in a dialog first.
+    var saveNameOpen by remember { mutableStateOf(false) }
+    var saveNameIsPreset by remember { mutableStateOf(false) }
+    var saveNameTab by remember { mutableStateOf<DocumentTab?>(null) }
+    var saveNameDraft by remember { mutableStateOf("") }
+    var saveNameEdited by remember { mutableStateOf(false) }
     var sponsorLaunchCount by remember { mutableStateOf(0) }
     var aboutOpen by remember { mutableStateOf(false) }
     // Per v0.6.5: automatic update check on startup.
@@ -877,6 +883,30 @@ fun KrystalsRoot(
         }
     }
 
+    /** Per v0.8.36: confirm button of the save / save-to-preset name dialog. */
+    fun confirmSaveName() {
+        val tab = saveNameTab ?: return
+        val finalName = saveNameDraft.trim().ifEmpty { tab.name.removeSuffix(".cif") }.ensureCifExtension()
+        saveNameOpen = false
+        if (saveNameIsPreset) {
+            runCatching {
+                PresetRepository.saveToPreset(
+                    activity,
+                    tab.parsed,
+                    tab.structure,
+                    tab.bondConfiguration,
+                    tab.renderConfiguration.toCifDisplayMetadata(),
+                    finalName,
+                    tab.comments,
+                )
+                showMessage("Saved to presets")
+            }.onFailure { showMessage(it.message ?: "Save failed") }
+        } else {
+            tab.name = finalName
+            save(tab)
+        }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val bitmap = pendingExportBitmap
         pendingExportBitmap = null
@@ -968,23 +998,24 @@ fun KrystalsRoot(
                             if (language != defaults.language && defaults.language != "auto") applyLanguage(defaults.language)
                             if (themeMode != defaults.theme) { themeMode = defaults.theme; preferences.edit().putString("theme", defaults.theme.name).apply() }
                         },
-                        onSave = { save(it) },
+                        onSave = { tab ->
+                            // Per v0.8.36: confirm the file name in a dialog first.
+                            saveNameTab = tab
+                            saveNameIsPreset = false
+                            saveNameDraft = tab.name.removeSuffix(".cif")
+                            saveNameEdited = false
+                            saveNameOpen = true
+                        },
                         onOpen = { openLauncher.launch(arrayOf("chemical/x-cif", "text/plain", "application/octet-stream")) },
                         onOpenPreset = { presetOpen = true },
                         onSaveToPreset = {
                             val tab = viewModel.current ?: return@ViewerScreen
-                            runCatching {
-                                PresetRepository.saveToPreset(
-                                    activity,
-                                    tab.parsed,
-                                    tab.structure,
-                                    tab.bondConfiguration,
-                                    tab.renderConfiguration.toCifDisplayMetadata(),
-                                    tab.name,
-                                    tab.comments,
-                                )
-                                showMessage("Saved to presets")
-                            }.onFailure { showMessage(it.message ?: "Save failed") }
+                            // Per v0.8.36: confirm the file name in a dialog first.
+                            saveNameTab = tab
+                            saveNameIsPreset = true
+                            saveNameDraft = tab.name.removeSuffix(".cif")
+                            saveNameEdited = false
+                            saveNameOpen = true
                         },
                         onNew = viewModel::createNew,
                         onOnlineSource = { onlineSourceOpen = true },
@@ -1146,6 +1177,40 @@ fun KrystalsRoot(
     // Per v0.8.35: the preset library is a full-screen page; system back closes it.
     // Registered after ViewerScreen's handler so it wins while the page is open.
     BackHandler(enabled = presetOpen) { presetOpen = false }
+    // Per v0.8.36: save / save-to-preset file-name confirmation dialog.
+    if (saveNameOpen) {
+        val saveNameTitle = localized("确认文件名", "Confirm file name")
+        val saveLabel = localized("保存", "Save")
+        val cancelLabel = localized("取消", "Cancel")
+        AlertDialog(
+            onDismissRequest = { saveNameOpen = false },
+            title = { Text(saveNameTitle) },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = saveNameDraft,
+                        onValueChange = { new ->
+                            // The first keystroke replaces the grey placeholder name.
+                            if (!saveNameEdited && new.isNotEmpty()) {
+                                saveNameDraft = new
+                                saveNameEdited = true
+                            } else {
+                                saveNameDraft = new.filter { c -> c != '/' && c != '\\' && c != ':' }
+                                if (new.isNotEmpty()) saveNameEdited = true
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        textStyle = if (saveNameEdited) MaterialTheme.typography.bodyLarge
+                        else MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
+                    )
+                    Text(".cif", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+                }
+            },
+            confirmButton = { TextButton(onClick = ::confirmSaveName) { Text(saveLabel) } },
+            dismissButton = { TextButton(onClick = { saveNameOpen = false }) { Text(cancelLabel) } },
+        )
+    }
     }
     }
 }
