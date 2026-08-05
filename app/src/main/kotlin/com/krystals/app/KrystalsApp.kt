@@ -4286,6 +4286,18 @@ private fun MpSearchScreen(
     var fuzzySearch by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<MpSearchResult>?>(null) }
     var searching by remember { mutableStateOf(false) }
+    // Per v0.8.36: cancellable search — the cancel button appears 3s into a search.
+    var searchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var searchCancelVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(searching) {
+        if (searching) {
+            searchCancelVisible = false
+            kotlinx.coroutines.delay(3000)
+            searchCancelVisible = true
+        } else {
+            searchCancelVisible = false
+        }
+    }
     var downloadingId by remember { mutableStateOf<String?>(null) }
     var testingConnection by remember { mutableStateOf(true) }
     var connectionError by remember { mutableStateOf(false) }
@@ -4333,7 +4345,7 @@ private fun MpSearchScreen(
                     if (query.isBlank() || searching) return@Button
                     searching = true
                     results = null
-                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    searchJob = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                         val result = MaterialsProject.search(context, query, fuzzySearch)
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                             searching = false
@@ -4391,7 +4403,16 @@ private fun MpSearchScreen(
                 )
             }
             when {
-                searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索中…", "Searching…")) }
+                // Per v0.8.36: the search-cancel button appears below 'Searching…' after 3s.
+                searching -> Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    Text(localized("搜索中…", "Searching…"))
+                    if (searchCancelVisible) {
+                        TextButton(onClick = {
+                            searchJob?.cancel()
+                            searching = false
+                        }) { Text(localized("取消", "Cancel")) }
+                    }
+                }
                 filtered == null -> {}
                 filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -4467,6 +4488,18 @@ private fun CodSearchScreen(
     var maxElements by remember { mutableStateOf(8) }
     var results by remember { mutableStateOf<List<CodSearchResult>?>(null) }
     var searching by remember { mutableStateOf(false) }
+    // Per v0.8.36: cancellable search — the cancel button appears 3s into a search.
+    var searchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var searchCancelVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(searching) {
+        if (searching) {
+            searchCancelVisible = false
+            kotlinx.coroutines.delay(3000)
+            searchCancelVisible = true
+        } else {
+            searchCancelVisible = false
+        }
+    }
     var downloadingId by remember { mutableStateOf<String?>(null) }
     var testingMirrors by remember { mutableStateOf(true) }
     var connectionError by remember { mutableStateOf(false) }
@@ -4519,7 +4552,7 @@ private fun CodSearchScreen(
                     if (query.isBlank() || searching) return@Button
                     searching = true
                     results = null
-                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    searchJob = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                         val result = CrystallographyOpenDatabase.search(query, mode, if (mode == CrystallographyOpenDatabase.SearchMode.ELEMENT) maxElements else null)
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                             searching = false
@@ -4589,7 +4622,16 @@ private fun CodSearchScreen(
                 )
             }
             when {
-                searching -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索中…", "Searching…")) }
+                // Per v0.8.36: the search-cancel button appears below 'Searching…' after 3s.
+                searching -> Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    Text(localized("搜索中…", "Searching…"))
+                    if (searchCancelVisible) {
+                        TextButton(onClick = {
+                            searchJob?.cancel()
+                            searching = false
+                        }) { Text(localized("取消", "Cancel")) }
+                    }
+                }
                 filtered == null -> {}
                 filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
