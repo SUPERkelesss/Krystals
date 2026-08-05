@@ -3841,10 +3841,11 @@ private fun FilterDropdownChip(
                 }
             } else null,
         )
-        // Per v0.8.35: custom Popup instead of DropdownMenu — DropdownMenu sizes its content via
-        // intrinsic measurement (IntrinsicSize.Min), and any lazy list inside throws
-        // "intrinsic measurements of SubcomposeLayout layouts". A plain Popup has no intrinsic
-        // sizing step; width is fixed, height caps at 360dp with scrolling.
+        // Per v0.8.35: custom Popup + LazyColumn. DropdownMenu sizes its content via intrinsic
+        // measurement (IntrinsicSize.Min) and crashes on lazy lists / long option lists
+        // (the formula filter has hundreds of options; the short filters never hit it).
+        // A plain Popup performs no intrinsic measurement, so LazyColumn is safe here and
+        // renders hundreds of options lazily without eager measurement.
         if (expanded) {
             Popup(
                 onDismissRequest = { expanded = false },
@@ -3857,8 +3858,8 @@ private fun FilterDropdownChip(
                     color = MaterialTheme.colorScheme.surface,
                     shadowElevation = 8.dp,
                 ) {
-                    Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 4.dp)) {
-                        options.forEach { option ->
+                    LazyColumn(Modifier.padding(vertical = 4.dp)) {
+                        items(options) { option ->
                             DropdownMenuItem(
                                 text = { Text(option) },
                                 onClick = { onSelect(option); expanded = false },
@@ -3899,7 +3900,7 @@ private fun IntFilterDropdownChip(
                 }
             } else null,
         )
-        // Per v0.8.35: custom Popup (see FilterDropdownChip for why DropdownMenu is avoided).
+        // Per v0.8.35: custom Popup + LazyColumn (see FilterDropdownChip).
         if (expanded) {
             Popup(
                 onDismissRequest = { expanded = false },
@@ -3912,8 +3913,8 @@ private fun IntFilterDropdownChip(
                     color = MaterialTheme.colorScheme.surface,
                     shadowElevation = 8.dp,
                 ) {
-                    Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 4.dp)) {
-                        options.forEach { option ->
+                    LazyColumn(Modifier.padding(vertical = 4.dp)) {
+                        items(options) { option ->
                             DropdownMenuItem(
                                 text = { Text(option.toString()) },
                                 onClick = { onSelect(option); expanded = false },
