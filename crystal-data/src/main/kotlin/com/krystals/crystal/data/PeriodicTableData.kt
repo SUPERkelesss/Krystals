@@ -1776,6 +1776,11 @@ object PeriodicTableData {
         "O" to -2, "S" to -2, "Se" to -2, "Te" to -2,
         "F" to -1, "Cl" to -1, "Br" to -1, "I" to -1,
         "N" to -3, "P" to -3, "As" to -3,
+        // Per v0.8.36: C is a carbide anion (C4-) when bonded to electropositive metals
+        // (CaC2, SiC, Cu2C2, ...). The bvparm2020 table carries C4- anion parameters for
+        // several cations (As/B/Cu/Pd/Si/Sn...). C bonded to more electronegative elements
+        // (O/N/F) still falls through to the cation path via hasMoreElectronegativeNeighbour.
+        "C" to -4,
     )
 
     /** Fixed anion valence for [element], or null if the element is not treated as a simple anion. */
