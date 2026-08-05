@@ -162,6 +162,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.layout.ContentScale
@@ -3839,18 +3841,30 @@ private fun FilterDropdownChip(
                 }
             } else null,
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            // Per v0.8.29: scroll when the option list is long (e.g. formulas/authors).
-            // Per v0.8.35: fixed width + LazyColumn — DropdownMenu sizes its content via
-            // intrinsic measurement (IntrinsicWidthNode), which SubcomposeLayout-based lazy
-            // lists don't support ("intrinsic measurements of SubcomposeLayout layouts");
-            // a fixed width makes the intrinsic query return immediately instead of crashing.
-            LazyColumn(Modifier.width(280.dp).heightIn(max = 360.dp)) {
-                items(options) { option ->
-                    DropdownMenuItem(
-                        text = { Text(option) },
-                        onClick = { onSelect(option); expanded = false },
-                    )
+        // Per v0.8.35: custom Popup instead of DropdownMenu — DropdownMenu sizes its content via
+        // intrinsic measurement (IntrinsicSize.Min), and any lazy list inside throws
+        // "intrinsic measurements of SubcomposeLayout layouts". A plain Popup has no intrinsic
+        // sizing step; width is fixed, height caps at 360dp with scrolling.
+        if (expanded) {
+            Popup(
+                onDismissRequest = { expanded = false },
+                properties = PopupProperties(focusable = true),
+                offset = IntOffset(0, with(LocalDensity.current) { 48.dp.roundToPx() }),
+            ) {
+                Surface(
+                    Modifier.width(280.dp).heightIn(max = 360.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 8.dp,
+                ) {
+                    Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 4.dp)) {
+                        options.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option) },
+                                onClick = { onSelect(option); expanded = false },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -3885,14 +3899,27 @@ private fun IntFilterDropdownChip(
                 }
             } else null,
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            // Per v0.8.35: fixed width + LazyColumn (see FilterDropdownChip for the intrinsic caveat).
-            LazyColumn(Modifier.width(280.dp).heightIn(max = 360.dp)) {
-                items(options) { option ->
-                    DropdownMenuItem(
-                        text = { Text(option.toString()) },
-                        onClick = { onSelect(option); expanded = false },
-                    )
+        // Per v0.8.35: custom Popup (see FilterDropdownChip for why DropdownMenu is avoided).
+        if (expanded) {
+            Popup(
+                onDismissRequest = { expanded = false },
+                properties = PopupProperties(focusable = true),
+                offset = IntOffset(0, with(LocalDensity.current) { 48.dp.roundToPx() }),
+            ) {
+                Surface(
+                    Modifier.width(280.dp).heightIn(max = 360.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 8.dp,
+                ) {
+                    Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 4.dp)) {
+                        options.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option.toString()) },
+                                onClick = { onSelect(option); expanded = false },
+                            )
+                        }
+                    }
                 }
             }
         }
