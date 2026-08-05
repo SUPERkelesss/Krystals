@@ -94,7 +94,9 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FileOpen
@@ -130,6 +132,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -533,6 +536,8 @@ fun KrystalsRoot(
     var saveNameTab by remember { mutableStateOf<DocumentTab?>(null) }
     var saveNameDraft by remember { mutableStateOf("") }
     var saveNameEdited by remember { mutableStateOf(false) }
+    // Per v0.8.36: target user group for save-to-preset (default 我的预设).
+    var saveNameGroup by remember { mutableStateOf(PresetRepository.MY_PRESETS_GROUP) }
     var sponsorLaunchCount by remember { mutableStateOf(0) }
     var aboutOpen by remember { mutableStateOf(false) }
     // Per v0.6.5: automatic update check on startup.
@@ -899,6 +904,7 @@ fun KrystalsRoot(
                     tab.renderConfiguration.toCifDisplayMetadata(),
                     finalName,
                     tab.comments,
+                    targetGroup = saveNameGroup.ifBlank { PresetRepository.MY_PRESETS_GROUP },
                 )
                 showMessage("Saved to presets")
             }.onFailure { showMessage(it.message ?: "Save failed") }
@@ -1011,11 +1017,12 @@ fun KrystalsRoot(
                         onOpenPreset = { presetOpen = true },
                         onSaveToPreset = {
                             val tab = viewModel.current ?: return@ViewerScreen
-                            // Per v0.8.36: confirm the file name in a dialog first.
+                            // Per v0.8.36: confirm the file name in a dialog first; group selectable.
                             saveNameTab = tab
                             saveNameIsPreset = true
                             saveNameDraft = tab.name.removeSuffix(".cif")
                             saveNameEdited = false
+                            saveNameGroup = PresetRepository.MY_PRESETS_GROUP
                             saveNameOpen = true
                         },
                         onNew = viewModel::createNew,
@@ -1183,29 +1190,52 @@ fun KrystalsRoot(
         val saveNameTitle = localized("确认文件名", "Confirm file name")
         val saveLabel = localized("保存", "Save")
         val cancelLabel = localized("取消", "Cancel")
+        // Per v0.8.36: save-to-preset also picks the target user group (bundled groups excluded).
+        val presetGroups = remember(saveNameOpen) {
+            if (saveNameIsPreset) PresetRepository.listGroups(activity).filter { it.isUserGroup }.map { it.name } else emptyList()
+        }
+        var groupMenuOpen by remember { mutableStateOf(false) }
+        @Composable fun groupLabel(name: String): String =
+            if (name == PresetRepository.MY_PRESETS_GROUP) localized("我的预设", "My Presets") else name
         AlertDialog(
             onDismissRequest = { saveNameOpen = false },
             title = { Text(saveNameTitle) },
             text = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = saveNameDraft,
-                        onValueChange = { new ->
-                            // The first keystroke replaces the grey placeholder name.
-                            if (!saveNameEdited && new.isNotEmpty()) {
-                                saveNameDraft = new
-                                saveNameEdited = true
-                            } else {
-                                saveNameDraft = new.filter { c -> c != '/' && c != '\\' && c != ':' }
-                                if (new.isNotEmpty()) saveNameEdited = true
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = saveNameDraft,
+                            onValueChange = { new ->
+                                // The first keystroke replaces the grey placeholder name.
+                                if (!saveNameEdited && new.isNotEmpty()) {
+                                    saveNameDraft = new
+                                    saveNameEdited = true
+                                } else {
+                                    saveNameDraft = new.filter { c -> c != '/' && c != '\\' && c != ':' }
+                                    if (new.isNotEmpty()) saveNameEdited = true
+                                }
+                            },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                            textStyle = if (saveNameEdited) MaterialTheme.typography.bodyLarge
+                            else MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
+                        )
+                        Text(".cif", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+                    }
+                    if (saveNameIsPreset) {
+                        Text(localized("保存到组", "Save to group"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                        Box {
+                            OutlinedButton(onClick = { groupMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
+                                Text(groupLabel(saveNameGroup), modifier = Modifier.weight(1f))
+                                Icon(Icons.Default.ArrowDropDown, null)
                             }
-                        },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                        textStyle = if (saveNameEdited) MaterialTheme.typography.bodyLarge
-                        else MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
-                    )
-                    Text(".cif", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+                            DropdownMenu(expanded = groupMenuOpen, onDismissRequest = { groupMenuOpen = false }) {
+                                presetGroups.forEach { g ->
+                                    DropdownMenuItem(text = { Text(groupLabel(g)) }, onClick = { saveNameGroup = g; groupMenuOpen = false })
+                                }
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = { TextButton(onClick = ::confirmSaveName) { Text(saveLabel) } },
@@ -3568,6 +3598,11 @@ private fun PresetLibraryScreen(
     var renameFileTarget by remember { mutableStateOf<PresetEntry?>(null) }
     var moveOpen by remember { mutableStateOf(false) }
     var deleteConfirmOpen by remember { mutableStateOf(false) }
+    // Per v0.8.36: delete a whole user group (not the protected default group).
+    var deleteGroupTarget by remember { mutableStateOf<PresetGroup?>(null) }
+    // Per v0.8.36: the default group's display name follows the UI language.
+    @Composable fun groupLabel(name: String): String =
+        if (name == PresetRepository.MY_PRESETS_GROUP) localized("我的预设", "My Presets") else name
     val scope = rememberCoroutineScope()
     val EXPANDED_KEY = "preset_expanded_categories"
     var expanded by remember {
@@ -3697,11 +3732,15 @@ private fun PresetLibraryScreen(
                     }
                     filteredGroups.forEach { group ->
                         item(key = "h_" + group.name) {
+                            // Per v0.8.36: folder icon before the group name; the protected
+                            // default group cannot be renamed or deleted.
                             Row(Modifier.fillMaxWidth().clickable { toggle(group.name) }.padding(vertical = 4.dp, horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(if (group.name in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
-                                Text(group.name, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp).weight(1f))
-                                if (group.isUserGroup) {
+                                Icon(Icons.Default.Folder, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                                Text(groupLabel(group.name), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp).weight(1f))
+                                if (group.isUserGroup && group.name != PresetRepository.MY_PRESETS_GROUP) {
                                     IconButton(onClick = { renameTarget = group }) { Icon(Icons.Default.Edit, localized("重命名组", "Rename group"), modifier = Modifier.size(18.dp)) }
+                                    IconButton(onClick = { deleteGroupTarget = group }) { Icon(Icons.Default.Delete, localized("删除组", "Delete group"), modifier = Modifier.size(18.dp)) }
                                 }
                             }
                         }
@@ -3713,6 +3752,12 @@ private fun PresetLibraryScreen(
                                 onToggle = { selected = if (entry in selected) selected - entry else selected + entry },
                                 onOpen = { openSingle(entry) },
                                 onRename = { renameFileTarget = entry },
+                                // Per v0.8.36: the row delete button marks the file selected and
+                                // opens the batch-delete confirmation.
+                                onDelete = {
+                                    selected = selected + entry
+                                    deleteConfirmOpen = true
+                                },
                             )
                         }
                     }
@@ -3720,10 +3765,15 @@ private fun PresetLibraryScreen(
                 if (selected.isNotEmpty()) {
                     HorizontalDivider()
                     // Per v0.8.35: order 删除/移动到/打开, with Open as a highlighted button.
+                    // Per v0.8.36: when the selection includes non-editable (bundled) files,
+                    // Delete and Move-to are hidden entirely.
+                    val hasLocked = selected.any { it.source != PresetSource.USER }
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(localized("已选 ${selected.size} 项", "Selected ${selected.size}"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                        TextButton(onClick = { deleteConfirmOpen = true }) { Text(localized("删除", "Delete")) }
-                        TextButton(onClick = { moveOpen = true }) { Text(localized("移动到", "Move to")) }
+                        if (!hasLocked) {
+                            TextButton(onClick = { deleteConfirmOpen = true }) { Text(localized("删除", "Delete")) }
+                            TextButton(onClick = { moveOpen = true }) { Text(localized("移动到", "Move to")) }
+                        }
                         Button(onClick = { openSelected() }) { Text(localized("打开", "Open")) }
                     }
                 }
@@ -3823,10 +3873,29 @@ private fun PresetLibraryScreen(
             dismissButton = { TextButton(onClick = { deleteConfirmOpen = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
+    // Per v0.8.36: delete a whole user group (default group protected).
+    deleteGroupTarget?.let { group ->
+        val groupDeleteTitle = localized("删除组", "Delete group")
+        val groupDeleteMessage = localized("确定删除组“${groupLabel(group.name)}”及其全部文件吗？", "Delete group \"${groupLabel(group.name)}\" and all its files?")
+        val groupDeleteError = localized("删除组失败", "Failed to delete group")
+        AlertDialog(
+            onDismissRequest = { deleteGroupTarget = null },
+            title = { Text(groupDeleteTitle) },
+            text = { Text(groupDeleteMessage) },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (!PresetRepository.deleteGroup(context, group.name)) onMessage(groupDeleteError)
+                    deleteGroupTarget = null
+                    refresh()
+                }) { Text(stringResource(R.string.confirm)) }
+            },
+            dismissButton = { TextButton(onClick = { deleteGroupTarget = null }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
 }
 
 /** Per v0.8.34: one preset file row with a checkbox; tapping the row opens the file (v0.8.35),
- *  the checkbox toggles selection, and user files get a per-row rename button. */
+ *  the checkbox toggles selection, and user files get per-row rename + delete buttons (v0.8.36). */
 @Composable
 private fun PresetRow(
     entry: PresetEntry,
@@ -3835,6 +3904,7 @@ private fun PresetRow(
     onToggle: () -> Unit,
     onOpen: () -> Unit,
     onRename: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     Row(
         Modifier
@@ -3853,6 +3923,7 @@ private fun PresetRow(
         }
         if (entry.source == PresetSource.USER) {
             IconButton(onClick = onRename) { Icon(Icons.Default.Edit, localized("重命名", "Rename"), modifier = Modifier.size(18.dp)) }
+            IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, localized("删除", "Delete"), modifier = Modifier.size(18.dp)) }
         } else {
             Text(stringResource(R.string.bundled), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 8.dp))
         }

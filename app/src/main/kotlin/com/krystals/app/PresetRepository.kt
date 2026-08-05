@@ -232,9 +232,12 @@ object PresetRepository {
         displayMetadata: CifDisplayMetadata,
         name: String,
         comments: String = "",
+        targetGroup: String = MY_PRESETS_GROUP,
     ): File {
-        // Per v0.8.34: user presets are saved into the "我的预设" group directory.
-        val userDir = myPresetsDir(context)
+        // Per v0.8.34: user presets are saved into a user group directory.
+        // Per v0.8.36: the group is selectable (default "我的预设").
+        val userDir = if (targetGroup.isBlank() || targetGroup == MY_PRESETS_GROUP) myPresetsDir(context)
+        else File(userRoot(context), targetGroup).apply { if (!exists()) mkdirs() }
         val safeName = name.ifBlank { "structure.cif" }.let { if (it.endsWith(".cif", true)) it else "$it.cif" }
         val target = File(userDir, safeName)
         val content = CifCodec.write(parsed, structure, bondConfiguration, displayMetadata)
@@ -260,5 +263,17 @@ object PresetRepository {
         val ok = entry.file?.delete() == true
         if (ok) invalidateMetaCache(context, metaKeyForPath(entry.file!!.path, true))
         return ok
+    }
+
+    /** Per v0.8.36: delete a user group (whole directory). The default "我的预设" group is
+     *  protected and cannot be deleted. Returns false when the group is protected/missing. */
+    fun deleteGroup(context: Context, name: String): Boolean {
+        if (name.isBlank() || name == MY_PRESETS_GROUP) return false
+        val dir = File(userRoot(context), name)
+        if (!dir.isDirectory) return false
+        // Drop cache entries under this folder first.
+        invalidateMetaCachePrefix(context, "u:" + dir.path + File.separator)
+        val children = dir.listFiles().orEmpty()
+        return children.all { it.delete() } && dir.delete()
     }
 }
