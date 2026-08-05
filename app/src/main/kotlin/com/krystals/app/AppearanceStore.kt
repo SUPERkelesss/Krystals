@@ -31,6 +31,7 @@ object AppearanceStore {
         put("bondColorMode", bondColorMode.name)
         put("uniformBondArgb", uniformBondArgb.toString())
         put("bondReflectionEnabled", bondReflectionEnabled)
+        put("secondaryExtendBonds", secondaryExtendBonds)
         put("polyhedronEnabled", polyhedronEnabled)
         put("polyhedronOpacity", polyhedronOpacity)
         put("polyhedronReflectionEnabled", polyhedronReflectionEnabled)
@@ -62,6 +63,7 @@ object AppearanceStore {
             bondColorMode = runCatching { BondColorMode.valueOf(o.optString("bondColorMode", d.bondColorMode.name)) }.getOrDefault(d.bondColorMode),
             uniformBondArgb = o.optString("uniformBondArgb", d.uniformBondArgb.toString()).toLong(),
             bondReflectionEnabled = o.optBoolean("bondReflectionEnabled", d.bondReflectionEnabled),
+            secondaryExtendBonds = o.optBoolean("secondaryExtendBonds", d.secondaryExtendBonds),
             polyhedronEnabled = o.optBoolean("polyhedronEnabled", d.polyhedronEnabled),
             polyhedronOpacity = o.optDouble("polyhedronOpacity", d.polyhedronOpacity.toDouble()).toFloat(),
             polyhedronReflectionEnabled = o.optBoolean("polyhedronReflectionEnabled", d.polyhedronReflectionEnabled),
