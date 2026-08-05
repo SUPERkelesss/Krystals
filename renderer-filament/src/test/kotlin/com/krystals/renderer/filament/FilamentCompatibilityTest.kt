@@ -173,7 +173,6 @@ class FilamentCompatibilityTest {
         assertEquals(0.0f, AtomPbr.METALLIC, 0.001f)
         assertEquals(0.32f, AtomPbr.ROUGHNESS, 0.001f)
         assertEquals(0.56f, AtomPbr.REFLECTANCE, 0.001f)
-        assertEquals(0.0f, AtomPbr.CLEAR_COAT, 0.001f)
         assertEquals(0.95f, AtomPbr.SATURATION_FACTOR, 0.001f)
     }
 

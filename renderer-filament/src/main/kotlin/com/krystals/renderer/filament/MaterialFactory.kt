@@ -232,7 +232,6 @@ internal object AtomPbr {
     const val METALLIC = 0.0f
     const val ROUGHNESS = 0.32f
     const val REFLECTANCE = 0.56f
-    const val CLEAR_COAT = 0.0f
     /** CPK base color is desaturated by 5% before it reaches the material. */
     const val SATURATION_FACTOR = 0.95f
 }
