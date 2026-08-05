@@ -1098,6 +1098,18 @@ fun KrystalsRoot(
         onMessage = ::showMessage,
         onOpenParsed = { parsed, name -> mpSearchOpen = false; openParsed(parsed, name, null) },
     )
+    // Per v0.8.36: the preset library renders at the same top level as the COD/MP search
+    // screens — hosting it inside KrystalsRootDialogs (with the windowed dialogs) gave its
+    // DropdownMenu popups a different window context that misbehaved on some devices.
+    if (presetOpen) PresetLibraryScreen(
+        context = activity,
+        viewModel = viewModel,
+        preferences = preferences,
+        autoConvertCell = settingsValues.autoConvertCell,
+        onDismiss = { presetOpen = false },
+        onMessage = { showMessage(it) },
+        onOpenParsed = { parsed, name -> openParsed(parsed, name, null) },
+    )
     if (codSearchOpen) CodSearchScreen(
         context = activity,
         viewModel = viewModel,
@@ -1380,15 +1392,6 @@ private fun KrystalsRootDialogs(
             },
         )
     }
-    if (presetOpen) PresetLibraryScreen(
-            context = activity,
-            viewModel = viewModel,
-            preferences = preferences,
-            autoConvertCell = autoConvertCell,
-            onDismiss = { presetOpen = false },
-            onMessage = { showMessage(it) },
-            onOpenParsed = { parsed, name -> openParsed(parsed, name, null) },
-        )
     if (mpKeyDialogOpen) MpApiKeyDialog(
         context = activity,
         onDismiss = { mpKeyDialogOpen = false },
