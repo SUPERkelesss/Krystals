@@ -75,7 +75,7 @@ fun SettingsPanel(
                         draft = draft.copy(theme = ThemeMode.entries[index])
                     }
                     Tog(draft.autoCheckUpdate, { draft = draft.copy(autoCheckUpdate = it) }, localized("自动检查更新", "Auto Check Update"))
-                    LabeledSliderSetting(localized("悬浮球收起透明度", "Collapsed FAB Alpha"), draft.ballCollapsedAlpha) { draft = draft.copy(ballCollapsedAlpha = it) }
+                    LabeledSliderSetting(localized("悬浮球收起不透明度", "Collapsed FAB Transparency"), draft.ballCollapsedAlpha) { draft = draft.copy(ballCollapsedAlpha = it) }
                     Tog(draft.showLockButton, { draft = draft.copy(showLockButton = it) }, localized("显示锁定按键", "Show Lock Button"))
                     Tog(draft.showLegend, { draft = draft.copy(showLegend = it) }, localized("显示图例", "Show Legend"))
                     HorizontalDivider(Modifier.padding(vertical = 10.dp))
