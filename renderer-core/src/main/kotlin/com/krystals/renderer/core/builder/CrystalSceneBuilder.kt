@@ -20,6 +20,15 @@ import com.krystals.renderer.core.style.BondColorMode
 import com.krystals.renderer.core.style.HbondPattern
 import com.krystals.renderer.core.style.RenderEnvironment
 
+/** Per v0.8.36: non-metal elements (same set as the analysis module's bond classification). */
+private val NON_METALS: Set<String> = setOf(
+    "H", "He", "B", "C", "N", "O", "F", "Ne",
+    "Si", "P", "S", "Cl", "Ar",
+    "Ge", "As", "Se", "Br", "Kr",
+    "Sb", "Te", "I", "Xe",
+    "At", "Rn", "Po",
+)
+
 data class SceneBuildOptions(
     val hiddenSiteIds: Set<String> = emptySet(),
     val hiddenBondKeys: Set<String> = emptySet(),
@@ -169,6 +178,8 @@ class CrystalSceneBuilder {
 
         // Second pass: emit one BondInstance per dedupeKey, with surface anchoring + blended materials.
         val emittedKeys = mutableSetOf<Triple<Any, Any, Triple<Int, Int, Int>>>()
+        // Per v0.8.36: heteronuclear pairs already emitted (wrapped in-cell image identity).
+        val emittedHeteroPairs = mutableSetOf<Pair<Int, Int>>()
         for ((index, bond, dedupeKey) in bondEntries) {
             if (!emittedKeys.add(dedupeKey)) continue // skip duplicates
 
@@ -210,7 +221,54 @@ class CrystalSceneBuilder {
                 bondMaterial(start) to bondMaterial(end)
             }
 
-            val externalAllowed = !end.isExternalShell || bond.rule.shouldExtendAcrossCell(start.siteId, end.isExternalShell)
+            // Per v0.8.36: single-cell ("no extension") bond visibility. The old rule only gated
+            // external shells, so same-atom periodic images on the cell faces (e.g. Ca1-Ca1 metal
+            // bonds at 3.87 A in CaC2) leaked into the non-extended view, and boundary-image
+            // copies of in-cell coordination bonds were duplicated. Rules:
+            //  - primary-primary bonds: always shown;
+            //  - same-atom periodic self-images (Ca-Ca): only when the rule extends the cell;
+            //  - anything else touching a shell atom: shown only when the NON-METAL end is a
+            //    primary atom (the in-cell coordination of that atom) or when both ends are
+            //    non-metals (e.g. C-C dumbbells — real bonds of the displayed images).
+            val externalAllowed = when {
+                !start.isShell && !end.isShell -> true
+                // Same-atom periodic self-images are always across the cell wall, so pass
+                // outsideAtomIsExternal=true (a boundary image would otherwise short-circuit
+                // shouldExtendAcrossCell to true and leak the bond into the non-extended view).
+                isSameAtomPeriodicImage(start, end) ->
+                    bond.rule.shouldExtendAcrossCell(start.siteId, true)
+                else -> {
+                    if (start.isExternalShell || end.isExternalShell) {
+                        // Genuine out-of-cell neighbours stay behind the rule's extend flag.
+                        bond.rule.shouldExtendAcrossCell(start.siteId, end.isExternalShell)
+                    } else {
+                        // Boundary-image keys: keep the bond only when the NON-METAL end is a
+                        // primary atom (in-cell coordination) or both ends are non-metals.
+                        val startNonMetal = start.species.symbol in NON_METALS
+                        val endNonMetal = end.species.symbol in NON_METALS
+                        when {
+                            startNonMetal && endNonMetal -> true
+                            startNonMetal -> !start.isShell
+                            endNonMetal -> !end.isShell
+                            else -> false
+                        }
+                    }
+                }
+            }
+            val visible = options.showBonds && bond.rule.key !in options.hiddenBondKeys && externalAllowed
+            // Per v0.8.36: heteronuclear bonds are deduplicated to their in-cell image so each
+            // primary atom pair renders exactly once — CaC2's Ca-C coordination bonds (8) instead
+            // of their boundary-image copies (26). Homopolar bonds (C-C dumbbells) keep every
+            // displayed image (the face dumbbells are real bonds of the shown images). H-bonds
+            // are exempt too: every proton-acceptor contact is a distinct bond (ice-Ih's 21
+            // visible H-bonds include their periodic equivalents). The first instance wins;
+            // BondDetector orders bonds by (atomA, atomB, offset), so the in-cell (0,0,0)-offset
+            // image comes first and is the shortest of the pair.
+            val finalVisible = if (visible && start.species.symbol != end.species.symbol && !isHBond) {
+                emittedHeteroPairs.add(heteroPairKey(start, end))
+            } else {
+                visible
+            }
             objects += BondInstance(
                 id = "bond:${bond.atomA}:${bond.atomB}:${bond.offsetB.x}:${bond.offsetB.y}:${bond.offsetB.z}:$index",
                 bond = bond,
@@ -219,7 +277,7 @@ class CrystalSceneBuilder {
                 radius = if (isHBond) options.hbondRadius else options.bondRadius,
                 startMaterial = if (isHBond) HbondPattern.material(options.hbondOpacity.toFloat()) else startMat,
                 endMaterial = if (isHBond) HbondPattern.material(options.hbondOpacity.toFloat()) else endMat,
-                visible = options.showBonds && bond.rule.key !in options.hiddenBondKeys && externalAllowed,
+                visible = finalVisible,
             )
         }
 
@@ -311,5 +369,36 @@ class CrystalSceneBuilder {
         val ib = (b * iw).toInt().coerceIn(0, 255)
         val ia = (a * iw).toInt().coerceIn(0, 255)
         return Material(argb = (ia.toLong() shl 24) or (ir.toLong() shl 16) or (ig.toLong() shl 8) or ib.toLong(), reflective = false)
+    }
+
+    /** Per v0.8.36: true when [b] is a periodic image of the same atom as [a] — the fractional
+     *  difference is an integer lattice translation (within float tolerance). Used to gate
+     *  same-atom self-image bonds (e.g. Ca1-Ca1 metal bonds across the CaC2 cell face) behind
+     *  the rule's extend flag, while leaving different-atom image pairs (C-C dumbbells) alone. */
+    private fun isSameAtomPeriodicImage(a: AtomImage, b: AtomImage): Boolean {
+        val dx = (b.fractionalCoordinate.x - a.fractionalCoordinate.x)
+        val dy = (b.fractionalCoordinate.y - a.fractionalCoordinate.y)
+        val dz = (b.fractionalCoordinate.z - a.fractionalCoordinate.z)
+        fun nearInt(v: Double) = kotlin.math.abs(v - kotlin.math.round(v)) < 1e-4
+        return nearInt(dx) && nearInt(dy) && nearInt(dz)
+    }
+
+    /** Per v0.8.36: identity of the in-cell image of an atom — its fractional coordinate wrapped
+     *  into [0,1) and quantised to 1e-4 (same tolerance as the gathered-atom grouper). */
+    private fun inCellKey(a: AtomImage): Int {
+        fun wrap(v: Double): Int {
+            val w = v - kotlin.math.floor(v)
+            return (w * 1e4).toInt().coerceIn(0, 9999)
+        }
+        return (wrap(a.fractionalCoordinate.x) * 100_000_000) +
+            (wrap(a.fractionalCoordinate.y) * 10_000) +
+            wrap(a.fractionalCoordinate.z)
+    }
+
+    /** Per v0.8.36: canonical key of a heteronuclear bond's primary pair (sorted in-cell keys). */
+    private fun heteroPairKey(a: AtomImage, b: AtomImage): Pair<Int, Int> {
+        val ka = inCellKey(a)
+        val kb = inCellKey(b)
+        return if (ka <= kb) ka to kb else kb to ka
     }
 }
