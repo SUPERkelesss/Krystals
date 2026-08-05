@@ -18,8 +18,6 @@
     <string name="discard">不保存</string>
     <string name="language">语言</string>
     <string name="help">帮助</string>
-    <string name="help_title">视频教程</string>
-    <string name="help_message">将在浏览器中打开视频教程。</string>
     <string name="about">关于</string>
     <string name="sponsor">赞助</string>
     <string name="feedback">反馈</string>
@@ -29,7 +27,7 @@
     <string name="preset_library">预设晶体库</string>
     <string name="delete_preset_title">确认删除？</string>
     <string name="select_all">全选</string>
-    <string name="extend_across_cell">延伸至晶胞外</string>
+    <string name="extend_across_cell">扩展至晶胞外</string>
     <string name="version">版本</string>
     <string name="bundled">内置</string>
     <string name="user_saved">用户保存</string>

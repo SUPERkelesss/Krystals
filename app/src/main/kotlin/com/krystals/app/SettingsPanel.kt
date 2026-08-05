@@ -37,7 +37,7 @@ fun SettingsPanel(
     // Per v0.8.32: restore-defaults needs confirmation before it touches the frozen draft.
     var resetConfirmOpen by remember { mutableStateOf(false) }
     // Label mapping helpers (localized() is @Composable, so these live in composition).
-    val languageLabels = listOf(localized("中文", "Chinese"), "EN")
+    val languageLabels = listOf("中文", "English")
     val themeLabels = ThemeMode.entries.map { mode -> when (mode) {
         ThemeMode.SYSTEM -> localized("跟随系统", "System")
         ThemeMode.DARK -> localized("深色", "Dark")
@@ -45,13 +45,13 @@ fun SettingsPanel(
     } }
     val bondRuleLabels = listOf(
         // Per v0.8.36: vdW-radius option removed.
-        localized("自动", "Auto"), localized("智能离子", "Smart-Ionic"),
+        localized("自动", "Auto"), localized("智能离子", "Ionic"),
         localized("共价半径", "Bonding"),
     )
-    val extendLabels = listOf(localized("全部", "All"), localized("仅金属", "Metals only"), localized("从不", "Never"))
+    val extendLabels = listOf(localized("全部", "All"), localized("仅金属", "Metals"), localized("从不", "Never"))
     // Per v0.8.36: shortened option labels.
     val codModeLabels = listOf(
-        localized("自动", "Auto"), localized("固定节点", "Fixed mirror"), localized("自定义", "Custom mirror"),
+        localized("自动", "Auto"), localized("固定节点", "Fixed"), localized("自定义", "Custom"),
     )
     val qualityLabels = listOf(localized("高", "High"), localized("低", "Low"))
 
@@ -75,7 +75,7 @@ fun SettingsPanel(
                         draft = draft.copy(theme = ThemeMode.entries[index])
                     }
                     Tog(draft.autoCheckUpdate, { draft = draft.copy(autoCheckUpdate = it) }, localized("自动检查更新", "Auto Check Update"))
-                    LabeledSliderSetting(localized("悬浮球收起透明度", "Ball Collapsed Alpha"), draft.ballCollapsedAlpha, 0f, 1f) { draft = draft.copy(ballCollapsedAlpha = it) }
+                    LabeledSliderSetting(localized("悬浮球收起透明度", "Collapsed FAB Alpha"), draft.ballCollapsedAlpha, 0f, 1f) { draft = draft.copy(ballCollapsedAlpha = it) }
                     Tog(draft.showLockButton, { draft = draft.copy(showLockButton = it) }, localized("显示锁定按键", "Show Lock Button"))
                     Tog(draft.showLegend, { draft = draft.copy(showLegend = it) }, localized("显示图例", "Show Legend"))
                     HorizontalDivider(Modifier.padding(vertical = 10.dp))
@@ -84,7 +84,7 @@ fun SettingsPanel(
                     Text(localized("文件处理", "File Handling"), fontWeight = FontWeight.Bold)
                     Tog(draft.autoBondRules, { draft = draft.copy(autoBondRules = it) }, localized("自动计算键规则", "Auto Compute Bond Rules"))
                     if (draft.autoBondRules) {
-                        SegmentedSetting(null, localized("自动应用的键规则", "Bond Rule Mode"), bondRuleLabels, draft.bondRuleMode.ordinal.coerceIn(0, bondRuleLabels.lastIndex)) { index ->
+                        SegmentedSetting(null, localized("自动应用的键规则", "Auto Bond Rule Mode"), bondRuleLabels, draft.bondRuleMode.ordinal.coerceIn(0, bondRuleLabels.lastIndex)) { index ->
                             draft = draft.copy(bondRuleMode = BondRuleMode.entries[index])
                         }
                     }

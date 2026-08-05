@@ -18,8 +18,6 @@
     <string name="discard">Discard</string>
     <string name="language">Language</string>
     <string name="help">Help</string>
-    <string name="help_title">Video tutorial</string>
-    <string name="help_message">This will open the video tutorial in your browser.</string>
     <string name="about">About</string>
     <string name="sponsor">Sponsor</string>
     <string name="feedback">Feedback</string>

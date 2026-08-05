@@ -287,7 +287,7 @@ private val replacementPrefixes = listOf(
             )
         }
 
-        // Per v0.7.1: bond rules are never read back from CIF (always regenerated via
+        // Per v0.6.4: bond rules are never read back from CIF (always regenerated via
         // smart-ionic/bonding radii after parsing), so the _krystals_bond_rule_*/_vesta_bond_*/
         // _geom_bond_* loops are intentionally skipped here.
 
