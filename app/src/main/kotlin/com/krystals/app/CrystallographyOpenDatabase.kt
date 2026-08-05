@@ -56,8 +56,8 @@ object CrystallographyOpenDatabase {
         .build()
 
     private val testClient = OkHttpClient.Builder()
-        .connectTimeout(3, TimeUnit.SECONDS)
-        .readTimeout(3, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
         .build()
 
     enum class SearchMode { FORMULA, ELEMENT, TEXT }
@@ -103,24 +103,28 @@ object CrystallographyOpenDatabase {
         selectedMirror = mirror
     }
 
-    /** Per v0.8.26: set mirror from user preference. */
+    /** Per v0.8.26: set mirror from user preference. Per v0.8.36: URLs are normalized the same
+     *  way as [testCustomMirror] (scheme defaults to https, and the /cod API path is appended
+     *  when missing), so the tested URL is exactly the URL search will use. */
     fun setMirrorMode(mode: CodMirrorMode, customUrl: String = "", fixedIndex: Int = 0) {
         when (mode) {
             CodMirrorMode.AUTO -> { /* testMirrors() is called on each search — no change needed */ }
             CodMirrorMode.FIXED -> selectMirror(MIRRORS.getOrNull(fixedIndex.coerceIn(0, MIRRORS.lastIndex)) ?: MIRRORS.first())
             CodMirrorMode.CUSTOM -> {
-                val url = customUrl.trimEnd('/')
-                if (url.isNotEmpty() && (url.startsWith("http://") || url.startsWith("https://"))) {
-                    selectMirror(CodMirror(url, if (url.endsWith("/cod")) url else "$url/cod"))
+                val normalized = normalizeMirrorUrl(customUrl)
+                if (normalized.isNotEmpty()) {
+                    selectMirror(CodMirror(normalized, normalized))
                 }
             }
         }
     }
 
-    /** Per v0.8.26: test a single custom mirror URL (3s timeout, 2xx = ok). */
+    /** Per v0.8.26: test a single custom mirror URL (2xx = ok). Per v0.8.36: the URL is
+     *  normalized (https scheme + /cod API path) exactly like [setMirrorMode] uses it, so a
+     *  passing test means search will work; timeout raised to 10s for slow COD mirrors. */
     suspend fun testCustomMirror(url: String): Boolean {
-        val clean = url.trimEnd('/')
-        if (!clean.startsWith("http://") && !clean.startsWith("https://")) return false
+        val clean = normalizeMirrorUrl(url)
+        if (clean.isEmpty()) return false
         return withContext(Dispatchers.IO) {
             try {
                 val response = testClient.newCall(Request.Builder().url(clean).build()).execute()
@@ -129,6 +133,15 @@ object CrystallographyOpenDatabase {
                 false
             }
         }
+    }
+
+    /** Normalize a user-supplied COD mirror URL: default scheme to https, append the /cod API
+     *  path when missing. Returns "" for blank input. */
+    private fun normalizeMirrorUrl(url: String): String {
+        val trimmed = url.trim().trimEnd('/')
+        if (trimmed.isEmpty()) return ""
+        var u = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
+        return if (u.endsWith("/cod")) u else "$u/cod"
     }
 
     private fun request(url: HttpUrl): Request = Request.Builder()
@@ -382,7 +395,7 @@ object CrystallographyOpenDatabase {
                 if (!cif.contains(Regex("(?im)^\\s*data_"))) error("COD did not return a CIF for $fileId")
                 target.parentFile?.mkdirs()
                 target.writeText(cif, Charsets.UTF_8)
-                val parsed = CifCodec.parseStructure(cif)
+                val parsed = CifCodec.parseStructure(cif, autoConvertConventional = autoConvertConventional)
                 Log.d("COD", "downloadCif ok: $fileId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroup.symbol}")
                 // Per v0.5.0: bond-rule synthesis is deferred to the caller's async path so the UI
                 // can show a "computing" overlay — return the parsed structure as-is here.

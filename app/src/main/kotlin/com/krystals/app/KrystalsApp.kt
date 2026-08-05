@@ -770,7 +770,13 @@ fun KrystalsRoot(
         // Per v0.8.26: skip bond computation when the user disables auto-bond-rules.
         // Per v0.8.36: pass the already-computed expansion size (openParsed expanded for the
         // large-cell gate) so the computation path does not re-expand the cell.
-        if (settingsValues.autoBondRules) openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon, expandedEstimate)
+        if (settingsValues.autoBondRules) {
+            openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon, expandedEstimate)
+        } else {
+            // Per v0.8.36: with auto bond rules off, drop any rules carried in the CIF so no
+            // bonds are shown at all (previously the file's saved rules still produced bonds).
+            tab.bondConfiguration = tab.bondConfiguration.copy(rules = emptyList())
+        }
     }
 
     /** Per v0.5.0: add a parsed structure, synthesizing bond rules off-UI with the computing overlay.
@@ -1122,6 +1128,7 @@ fun KrystalsRoot(
         context = activity,
         viewModel = viewModel,
         autoConvertCell = settingsValues.autoConvertCell,
+        codMirrorMode = settingsValues.codMirrorMode,
         onBack = { codSearchOpen = false },
         onMessage = ::showMessage,
         onOpenParsed = { parsed, name -> codSearchOpen = false; openParsed(parsed, name, null) },
@@ -4374,6 +4381,7 @@ private fun CodSearchScreen(
     context: Context,
     viewModel: KrystalsViewModel,
     autoConvertCell: Boolean,
+    codMirrorMode: CodMirrorMode,
     onBack: () -> Unit,
     onMessage: (String) -> Unit,
     onOpenParsed: (ParsedStructure, String) -> Unit,
@@ -4398,13 +4406,19 @@ private fun CodSearchScreen(
     val helpTooltip = rememberTooltipState(isPersistent = true)
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
-        val mirror = CrystallographyOpenDatabase.testMirrors()
-        if (mirror != null) {
-            CrystallographyOpenDatabase.selectMirror(mirror)
-            testingMirrors = false
+        // Per v0.8.36: only AUTO mode re-tests mirrors on entry. FIXED/CUSTOM pick their
+        // mirror in KrystalsRoot's setMirrorMode; testMirrors() would overwrite that choice.
+        if (codMirrorMode == CodMirrorMode.AUTO) {
+            val mirror = CrystallographyOpenDatabase.testMirrors()
+            if (mirror != null) {
+                CrystallographyOpenDatabase.selectMirror(mirror)
+                testingMirrors = false
+            } else {
+                testingMirrors = false
+                connectionError = true
+            }
         } else {
             testingMirrors = false
-            connectionError = true
         }
     }
     BackHandler(testingMirrors) { onBack() }

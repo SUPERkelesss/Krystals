@@ -36,6 +36,10 @@ fun SettingsPanel(
     val apply = { onChange(draft) }
     // Per v0.8.32: restore-defaults needs confirmation before it touches the frozen draft.
     var resetConfirmOpen by remember { mutableStateOf(false) }
+    // Per v0.8.36: custom-mirror test state lives at panel level so Save can validate it;
+    // Save is blocked (with a hint line) until a CUSTOM mirror passes its test.
+    var customTestOk by remember { mutableStateOf<Boolean?>(null) }
+    var saveHint by remember { mutableStateOf<String?>(null) }
     // Label mapping helpers (localized() is @Composable, so these live in composition).
     val languageLabels = listOf("中文", "English")
     val themeLabels = ThemeMode.entries.map { mode -> when (mode) {
@@ -117,25 +121,26 @@ fun SettingsPanel(
                     if (draft.codMirrorMode == CodMirrorMode.CUSTOM) {
                         var url by remember(settings) { mutableStateOf(draft.codCustomUrl) }
                         var testing by remember { mutableStateOf(false) }
-                        var testResult by remember { mutableStateOf<Boolean?>(null) }
                         val scope = rememberCoroutineScope()
-                        // Per v0.8.36: test button sits on the right of the URL field.
+                        // Per v0.8.36: test button sits on the right of the URL field, and is a
+                        // highlighted Button; the result feeds the panel-level customTestOk gate.
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(url, { url = it; draft = draft.copy(codCustomUrl = it); testResult = null }, label = { Text(localized("自定义节点 URL", "Custom Mirror URL")) }, singleLine = true, modifier = Modifier.weight(1f))
+                            OutlinedTextField(url, { url = it; draft = draft.copy(codCustomUrl = it); customTestOk = null; saveHint = null }, label = { Text(localized("自定义节点 URL", "Custom Mirror URL")) }, singleLine = true, modifier = Modifier.weight(1f))
                             Spacer(Modifier.width(8.dp))
-                            TextButton(
+                            Button(
                                 enabled = !testing && url.isNotBlank(),
                                 onClick = {
                                     testing = true
-                                    testResult = null
+                                    customTestOk = null
+                                    saveHint = null
                                     scope.launch {
-                                        testResult = CrystallographyOpenDatabase.testCustomMirror(url)
+                                        customTestOk = CrystallographyOpenDatabase.testCustomMirror(url)
                                         testing = false
                                     }
                                 },
                             ) { Text(if (testing) localized("测试中...", "Testing...") else localized("测试", "Test")) }
                         }
-                        testResult?.let { ok ->
+                        customTestOk?.let { ok ->
                             Text(
                                 if (ok) localized("✓ 节点可用，已沿用", "✓ Mirror reachable") else localized("✗ 节点不可用", "✗ Mirror unreachable"),
                                 color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
@@ -161,10 +166,28 @@ fun SettingsPanel(
                         Text(localized("恢复默认设置", "Restore Defaults"), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+                val hintTestFailed = localized("自定义节点测试未通过", "Custom mirror test failed")
+                val hintNotConfigured = localized("自定义节点未配置！", "Custom mirror not configured!")
                 Row(Modifier.fillMaxWidth().padding(top = 0.dp, bottom = 12.dp), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text(localized("取消", "Cancel")) }
                     Spacer(Modifier.width(12.dp))
-                    Button(onClick = { onDismiss(); apply() }) { Text(localized("保存", "Save")) }
+                    Button(onClick = {
+                        // Per v0.8.36: a CUSTOM mirror must have passed its test before saving.
+                        if (draft.codMirrorMode == CodMirrorMode.CUSTOM && customTestOk != true) {
+                            saveHint = if (customTestOk == false) hintTestFailed else hintNotConfigured
+                        } else {
+                            saveHint = null
+                            onDismiss(); apply()
+                        }
+                    }) { Text(localized("保存", "Save")) }
+                }
+                saveHint?.let { hint ->
+                    Text(
+                        hint,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    )
                 }
             }
         }

@@ -177,7 +177,7 @@ object MaterialsProject {
             val cif = buildCif(materialId, item, realSymbol, realNumber)
             target.parentFile?.mkdirs()
             target.writeText(cif, Charsets.UTF_8)
-            val parsed = CifCodec.parseStructure(cif)
+            val parsed = CifCodec.parseStructure(cif, autoConvertConventional = autoConvertConventional)
 
             // Per v0.8.0: Avoid double-conventionalization. If CifCodec recognized the cell
             // as already conventional (metric fallback), restore full symmetry operations so
