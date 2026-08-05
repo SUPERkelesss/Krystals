@@ -75,7 +75,7 @@ fun SettingsPanel(
                         draft = draft.copy(theme = ThemeMode.entries[index])
                     }
                     Tog(draft.autoCheckUpdate, { draft = draft.copy(autoCheckUpdate = it) }, localized("自动检查更新", "Auto Check Update"))
-                    LabeledSliderSetting(localized("悬浮球收起透明度", "Collapsed FAB Alpha"), draft.ballCollapsedAlpha, 0f, 1f) { draft = draft.copy(ballCollapsedAlpha = it) }
+                    LabeledSliderSetting(localized("悬浮球收起透明度", "Collapsed FAB Alpha"), draft.ballCollapsedAlpha) { draft = draft.copy(ballCollapsedAlpha = it) }
                     Tog(draft.showLockButton, { draft = draft.copy(showLockButton = it) }, localized("显示锁定按键", "Show Lock Button"))
                     Tog(draft.showLegend, { draft = draft.copy(showLegend = it) }, localized("显示图例", "Show Legend"))
                     HorizontalDivider(Modifier.padding(vertical = 10.dp))
@@ -175,7 +175,7 @@ fun SettingsPanel(
             onDismissRequest = { resetConfirmOpen = false },
             title = { Text(localized("确认", "Confirm")) },
             text = { Text(localized("确认将偏好设置恢复为默认吗？", "Reset all preferences to defaults?")) },
-            confirmButton = { TextButton(onClick = { resetConfirmOpen = false; draft = SettingsValues.defaults() }) { Text(stringResource(R.string.confirm)) } },
+            confirmButton = { TextButton(onClick = { resetConfirmOpen = false; onRestoreDefaults?.invoke(); draft = SettingsValues.defaults() }) { Text(stringResource(R.string.confirm)) } },
             dismissButton = { TextButton(onClick = { resetConfirmOpen = false }) { Text(localized("取消", "Cancel")) } },
         )
     }
@@ -188,10 +188,11 @@ fun SettingsPanel(
     }
 }
 
-@Composable private fun LabeledSliderSetting(label: String, value: Float, min: Float, max: Float, onChange: (Float) -> Unit) {
-    // Per v0.8.33: value merged into the label line: "label: 45%". Per v0.8.36: no stray '$'.
+@Composable private fun LabeledSliderSetting(label: String, value: Float, onChange: (Float) -> Unit) {
+    // Per v0.8.33: value merged into the label line: "label: 45%". Per v0.8.36: no stray '$'
+    // and the slider range is fixed to 0..1 (the only caller).
     Text("$label: ${"%.0f%%".format(value * 100f)}", style = MaterialTheme.typography.bodyMedium)
-    Slider(value = value, onValueChange = onChange, valueRange = min..max)
+    Slider(value = value, onValueChange = onChange, valueRange = 0f..1f)
 }
 
 /** Per v0.8.36: single-choice setting as a segmented button row; icon optional (Language/Theme only). */

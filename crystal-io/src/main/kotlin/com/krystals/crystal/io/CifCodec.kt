@@ -167,10 +167,10 @@ private val replacementPrefixes = listOf(
         sites = emptyList(),
     ), bondConfiguration: BondConfiguration = BondConfiguration(), displayMetadata: CifDisplayMetadata = CifDisplayMetadata()): ParsedStructure {
         val source = canonicalStructure(structure, bondConfiguration.rules, displayMetadata, includeHeader = true)
-        return parseStructureAllowEmpty(source, autoConvertConventional = true)
+        return parseStructureAllowEmpty(source)
     }
 
-    private fun parseStructureAllowEmpty(source: String, autoConvertConventional: Boolean = true): ParsedStructure {
+    private fun parseStructureAllowEmpty(source: String): ParsedStructure {
         val document = parse(source)
         val parsedBlock = toStructure(document.blocks[0])
         val hasExplicitFlag = document.blocks[0].scalar("_krystals_is_conventional") != null
@@ -181,8 +181,9 @@ private val replacementPrefixes = listOf(
         } else {
             CrystalEditor.isConventionalCell(parsedBlock.structure)
         }
+        // Per v0.8.36: autoConvertConventional is always true here (public parseStructure
+        // keeps the opt-out), so the non-converting branch was removed.
         val structure = when {
-            !autoConvertConventional -> parsedBlock.structure
             isConventional -> parsedBlock.structure.copy(isConventional = true)
             else -> convertPrimitiveToConventional(parsedBlock.structure, parsedBlock.bondConfiguration)
         }
