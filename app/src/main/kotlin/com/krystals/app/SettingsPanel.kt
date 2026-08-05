@@ -4,10 +4,19 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CallSplit
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -61,11 +70,12 @@ fun SettingsPanel(
                 Column(Modifier.fillMaxWidth().height(480.dp).verticalScroll(rememberScrollState())) {
                     // ══ 常规 / General ══
                     Text(localized("常规", "General"), fontWeight = FontWeight.Bold)
-                    DropdownField(localized("语言", "Language"), languageLabel(draft.language), languageLabels) { label ->
-                        draft = draft.copy(language = if (label == languageLabels[0]) "zh" else "en")
+                    // Per v0.8.36: single-choice settings are segmented buttons with icons.
+                    SegmentedSetting(Icons.Default.Translate, localized("语言", "Language"), languageLabels, if (languageLabel(draft.language) == languageLabels[0]) 0 else 1) { index ->
+                        draft = draft.copy(language = if (index == 0) "zh" else "en")
                     }
-                    DropdownField(localized("主题", "Theme"), themeLabels[ThemeMode.entries.indexOf(draft.theme).coerceIn(0, themeLabels.lastIndex)], themeLabels) { label ->
-                        draft = draft.copy(theme = ThemeMode.entries[themeLabels.indexOf(label)])
+                    SegmentedSetting(Icons.Default.DarkMode, localized("主题", "Theme"), themeLabels, ThemeMode.entries.indexOf(draft.theme).coerceIn(0, themeLabels.lastIndex)) { index ->
+                        draft = draft.copy(theme = ThemeMode.entries[index])
                     }
                     Tog(draft.autoCheckUpdate, { draft = draft.copy(autoCheckUpdate = it) }, localized("自动检查更新", "Auto Check Update"))
                     LabeledSliderSetting(localized("悬浮球收起透明度", "Ball Collapsed Alpha"), draft.ballCollapsedAlpha, 0f, 1f) { draft = draft.copy(ballCollapsedAlpha = it) }
@@ -77,24 +87,24 @@ fun SettingsPanel(
                     Text(localized("文件处理", "File Handling"), fontWeight = FontWeight.Bold)
                     Tog(draft.autoBondRules, { draft = draft.copy(autoBondRules = it) }, localized("自动计算键规则", "Auto Compute Bond Rules"))
                     if (draft.autoBondRules) {
-                        DropdownField(localized("自动应用的键规则", "Bond Rule Mode"), bondRuleLabels[draft.bondRuleMode.ordinal], bondRuleLabels) { label ->
-                            draft = draft.copy(bondRuleMode = BondRuleMode.entries[bondRuleLabels.indexOf(label)])
+                        SegmentedSetting(Icons.Default.AutoAwesome, localized("自动应用的键规则", "Bond Rule Mode"), bondRuleLabels, draft.bondRuleMode.ordinal) { index ->
+                            draft = draft.copy(bondRuleMode = BondRuleMode.entries[index])
                         }
                     }
                     Tog(draft.autoConvertCell, { draft = draft.copy(autoConvertCell = it) }, localized("素晶胞自动转正当晶胞", "Auto Convert Cell"))
                     Tog(draft.defaultShowBonds, { draft = draft.copy(defaultShowBonds = it) }, localized("默认显示所有化学键", "Default Show Bonds"))
-                    DropdownField(localized("默认延伸化学键", "Default Extend Bonds"), extendLabels[draft.defaultExtendBonds.ordinal], extendLabels) { label ->
-                        draft = draft.copy(defaultExtendBonds = ExtendBondsDefault.entries[extendLabels.indexOf(label)])
+                    SegmentedSetting(Icons.Default.CallSplit, localized("默认延伸化学键", "Default Extend Bonds"), extendLabels, draft.defaultExtendBonds.ordinal) { index ->
+                        draft = draft.copy(defaultExtendBonds = ExtendBondsDefault.entries[index])
                     }
-                    DropdownField(localized("默认显示多面体", "Default Polyhedra"), extendLabels[draft.defaultPolyhedra.ordinal], extendLabels) { label ->
-                        draft = draft.copy(defaultPolyhedra = PolyhedraDefault.entries[extendLabels.indexOf(label)])
+                    SegmentedSetting(Icons.Default.Category, localized("默认显示多面体", "Default Polyhedra"), extendLabels, draft.defaultPolyhedra.ordinal) { index ->
+                        draft = draft.copy(defaultPolyhedra = PolyhedraDefault.entries[index])
                     }
                     HorizontalDivider(Modifier.padding(vertical = 10.dp))
 
                     // ══ 网络 / Network ══
                     Text(localized("网络", "Network"), fontWeight = FontWeight.Bold)
-                    DropdownField(localized("COD 下载节点", "COD Mirror"), codModeLabels[draft.codMirrorMode.ordinal], codModeLabels) { label ->
-                        draft = draft.copy(codMirrorMode = CodMirrorMode.entries[codModeLabels.indexOf(label)])
+                    SegmentedSetting(Icons.Default.Cloud, localized("COD 下载节点", "COD Mirror"), codModeLabels, draft.codMirrorMode.ordinal) { index ->
+                        draft = draft.copy(codMirrorMode = CodMirrorMode.entries[index])
                     }
                     if (draft.codMirrorMode == CodMirrorMode.FIXED) {
                         val mirrors = CrystallographyOpenDatabase.MIRRORS
@@ -138,8 +148,8 @@ fun SettingsPanel(
 
                     // ══ 显示 / Display ══
                     Text(localized("显示", "Display"), fontWeight = FontWeight.Bold)
-                    DropdownField(localized("导出图片质量", "Export Quality"), qualityLabels[draft.exportQuality.ordinal], qualityLabels) { label ->
-                        draft = draft.copy(exportQuality = ExportQuality.entries[qualityLabels.indexOf(label)])
+                    SegmentedSetting(Icons.Default.HighQuality, localized("导出图片质量", "Export Quality"), qualityLabels, draft.exportQuality.ordinal) { index ->
+                        draft = draft.copy(exportQuality = ExportQuality.entries[index])
                     }
                     Tog(draft.exportShowAxes, { draft = draft.copy(exportShowAxes = it) }, localized("导出时显示坐标轴", "Export Show Axes"))
                     Tog(draft.exportShowMeasurements, { draft = draft.copy(exportShowMeasurements = it) }, localized("导出时显示测量结果", "Export Show Measurements"))
@@ -181,6 +191,32 @@ fun SettingsPanel(
 
 @Composable private fun LabeledSliderSetting(label: String, value: Float, min: Float, max: Float, onChange: (Float) -> Unit) {
     // Per v0.8.33: value merged into the label line: "label: 45%".
-    Text("$label: ${"%.0f%%".format(value * 100f)}", style = MaterialTheme.typography.bodyMedium)
+    Text("$label: $${"%.0f%%".format(value * 100f)}", style = MaterialTheme.typography.bodyMedium)
     Slider(value = value, onValueChange = onChange, valueRange = min..max)
+}
+
+/** Per v0.8.36: single-choice setting as a segmented button row with an icon + label. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SegmentedSetting(
+    icon: ImageVector,
+    label: String,
+    options: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+) {
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+    }
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp)) {
+        options.forEachIndexed { index, option ->
+            SegmentedButton(
+                selected = index == selectedIndex,
+                onClick = { onSelect(index) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
+            ) { Text(option, maxLines = 1) }
+        }
+    }
 }

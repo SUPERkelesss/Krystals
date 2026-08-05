@@ -80,6 +80,9 @@ import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Feedback
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.ControlCamera
@@ -130,6 +133,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -1064,6 +1071,7 @@ fun KrystalsRoot(
     if (aboutOpen) {
         AboutScreen(
             onBack = { aboutOpen = false },
+            onOpenLink = { linkConfirmUrl = it },
             onCheckUpdates = {
                 updateChecking = true
                 aboutUpdateMessage = null
@@ -1458,15 +1466,15 @@ private fun HomeScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.AddCircle, null) }, onClick = { menuOpen = false; onNew() })
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
-                    TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onHelp() }) { Icon(Icons.Default.Help, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Icon(Icons.Default.Feedback, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
-                    TextButton(onClick = { menuOpen = false; onAbout() }) { Text(stringResource(R.string.about), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onAbout() }) { Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.about), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Icon(Icons.Default.Favorite, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 HorizontalDivider()
-                DropdownMenuItem(text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) }, onClick = { menuOpen = false; onExit() })
+                DropdownMenuItem(text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) }, leadingIcon = { Icon(Icons.Default.ExitToApp, null) }, onClick = { menuOpen = false; onExit() })
             }
         }
         // Per v0.4.3: in landscape the four import buttons span the full (very wide) screen and
@@ -1819,15 +1827,15 @@ private fun ViewerScreen(
                 })
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
-                    TextButton(onClick = { menuOpen = false; onHelp() }) { Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onHelp() }) { Icon(Icons.Default.Help, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Icon(Icons.Default.Feedback, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
-                    TextButton(onClick = { menuOpen = false; onAbout() }) { Text(stringResource(R.string.about), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onAbout() }) { Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.about), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Icon(Icons.Default.Favorite, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 HorizontalDivider()
-                DropdownMenuItem(text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) }, onClick = { menuOpen = false; onExit() })
+                DropdownMenuItem(text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) }, leadingIcon = { Icon(Icons.Default.ExitToApp, null) }, onClick = { menuOpen = false; onExit() })
             } } },
             actions = {
                 // Per v0.8.1: scope the history-version read to the toolbar actions so undo/redo
@@ -4205,8 +4213,8 @@ private fun MpSearchScreen(
     var filterState by remember { mutableStateOf(SearchFilterState()) }
     // Per v0.8.27: filter-item visibility (persisted for the session) + help panel state.
     var visibleFilters by remember { mutableStateOf(DEFAULT_VISIBLE_FILTERS) }
-    var helpOpen by remember { mutableStateOf(false) }
-    var helpAnchor by remember { mutableStateOf(IntOffset.Zero) }
+    // Per v0.8.36: help hint is a standard Material3 TooltipBox (custom panel removed).
+    val helpTooltip = rememberTooltipState(isPersistent = true)
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         if (MaterialsProject.testConnection()) {
@@ -4256,12 +4264,25 @@ private fun MpSearchScreen(
                 }, enabled = !searching) { Text(localized("搜索", "Search")) }
             }
             // Per v0.2.4: exact match by default; opt-in fuzzy search with `*` wildcards.
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp).onGloballyPositioned { helpAnchor = IntOffset(0, it.boundsInParent().bottom.roundToInt() + 4) }, verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(fuzzySearch, onCheckedChange = { fuzzySearch = it })
                 Text(localized("模糊搜索", "Fuzzy search"), style = MaterialTheme.typography.bodyMedium)
-                // Per v0.8.27: help button toggles the wildcard hint panel.
-                IconButton(onClick = { helpOpen = !helpOpen }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Help, localized("帮助", "Help"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Per v0.8.36: help hint via Material3 TooltipBox (custom panel removed).
+                TooltipBox(
+                    positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                    tooltip = {
+                        PlainTooltip {
+                            Text(localized(
+                                "使用 * 进行元素通配搜索（如SiO*）。精确搜索中，* 仅代表一种元素；模糊搜索显示 * 代表多种元素的结果。",
+                                "Use * for element wildcard search (e.g. SiO*). In exact search, * represents a single element; fuzzy search shows results where * matches multiple elements.",
+                            ))
+                        }
+                    },
+                    state = helpTooltip,
+                ) {
+                    IconButton(onClick = { scope.launch { if (helpTooltip.isVisible) helpTooltip.dismiss() else helpTooltip.show() } }, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Default.Help, localized("帮助", "Help"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -4328,37 +4349,14 @@ private fun MpSearchScreen(
                 }
             }
         }
-        // Per v0.8.27: help panel — tap anywhere to dismiss. Per v0.8.31: animated open/close.
-        AnimatedVisibility(
-            visible = helpOpen,
-            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(initialAlpha = 0f),
-            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
-        ) {
-            Box(Modifier.fillMaxSize()) {
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.15f)).clickable { helpOpen = false })
-                Surface(
-                    modifier = Modifier.offset { helpAnchor }.padding(horizontal = 16.dp).fillMaxWidth().clickable { helpOpen = false },
-                    shape = RoundedCornerShape(12.dp),
-                    tonalElevation = 4.dp,
-                ) {
-                    Text(
-                        localized(
-                            "使用 * 进行元素通配搜索（如SiO*）。精确搜索中，* 仅代表一种元素；模糊搜索显示 * 代表多种元素的结果。",
-                            "Use * for element wildcard search (e.g. SiO*). In exact search, * represents a single element; fuzzy search shows results where * matches multiple elements.",
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(16.dp),
-                    )
-                }
-            }
-        }
+        // Per v0.8.36: help hint moved to a TooltipBox above; the custom animated panel is gone.
         }
         }
         if (connectionError) {
-        AlertDialog(
-            onDismissRequest = { connectionError = false; onBack() },
-            title = { Text(localized("无法连接", "Connection failed")) },
-            text = { Text(localized("当前无法连接到Materials Project数据库，可能是网络不可用或链路异常。", "Unable to connect to the Materials Project database. The network may be unavailable or the link is abnormal.")) },
+            AlertDialog(
+                onDismissRequest = { connectionError = false; onBack() },
+                title = { Text(localized("无法连接", "Connection failed")) },
+                text = { Text(localized("当前无法连接到Materials Project数据库，可能是网络不可用或链路异常。", "Unable to connect to the Materials Project database. The network may be unavailable or the link is abnormal.")) },
                 confirmButton = {
                     TextButton(onClick = { connectionError = false; onBack() }) {
                         Text(stringResource(R.string.confirm))
@@ -4394,8 +4392,8 @@ private fun CodSearchScreen(
     var filterState by remember { mutableStateOf(SearchFilterState()) }
     // Per v0.8.27: filter-item visibility (persisted for the session) + help panel state.
     var visibleFilters by remember { mutableStateOf(DEFAULT_VISIBLE_FILTERS) }
-    var helpOpen by remember { mutableStateOf(false) }
-    var helpAnchor by remember { mutableStateOf(IntOffset.Zero) }
+    // Per v0.8.36: help hint is a standard Material3 TooltipBox (custom panel removed).
+    val helpTooltip = rememberTooltipState(isPersistent = true)
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         val mirror = CrystallographyOpenDatabase.testMirrors()
@@ -4443,7 +4441,7 @@ private fun CodSearchScreen(
                     }
                 }, enabled = !searching) { Text(localized("搜索", "Search")) }
             }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).onGloballyPositioned { helpAnchor = IntOffset(0, it.boundsInParent().bottom.roundToInt() + 4) }, verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 val formulaLabel = localized("化学式", "Formula")
                 val elementLabel = localized("元素", "Element")
                 val textLabel = localized("文本", "Text")
@@ -4459,9 +4457,22 @@ private fun CodSearchScreen(
                         modifier = Modifier.padding(horizontal = 3.dp),
                     )
                 }
-                // Per v0.8.27: help button toggles the search-mode hint panel.
-                IconButton(onClick = { helpOpen = !helpOpen }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Help, localized("帮助", "Help"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Per v0.8.36: help hint via Material3 TooltipBox (custom panel removed).
+                TooltipBox(
+                    positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                    tooltip = {
+                        PlainTooltip {
+                            Text(localized(
+                                "化学式如 SiO2（自动转为 Hill 顺序 O2 Si）。元素以空格分开，如 Si O。文本如 quartz，匹配矿物名/化学名/标题。",
+                                "Formula e.g. SiO2 (auto-converted to Hill order: O2 Si). Elements separated by space, e.g. Si O. Text e.g. quartz, matches mineral/chemical names and titles.",
+                            ))
+                        }
+                    },
+                    state = helpTooltip,
+                ) {
+                    IconButton(onClick = { scope.launch { if (helpTooltip.isVisible) helpTooltip.dismiss() else helpTooltip.show() } }, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Default.Help, localized("帮助", "Help"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -4537,30 +4548,7 @@ private fun CodSearchScreen(
                 }
             }
         }
-        // Per v0.8.27: help panel — tap anywhere to dismiss. Per v0.8.31: animated open/close.
-        AnimatedVisibility(
-            visible = helpOpen,
-            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(initialAlpha = 0f),
-            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
-        ) {
-            Box(Modifier.fillMaxSize()) {
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.15f)).clickable { helpOpen = false })
-                Surface(
-                    modifier = Modifier.offset { helpAnchor }.padding(horizontal = 16.dp).fillMaxWidth().clickable { helpOpen = false },
-                    shape = RoundedCornerShape(12.dp),
-                    tonalElevation = 4.dp,
-                ) {
-                    Text(
-                        localized(
-                            "化学式如 SiO2（自动转为 Hill 顺序 O2 Si）。元素以空格分开，如 Si O。文本如 quartz，匹配矿物名/化学名/标题。",
-                            "Formula e.g. SiO2 (auto-converted to Hill order: O2 Si). Elements separated by space, e.g. Si O. Text e.g. quartz, matches mineral/chemical names and titles.",
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(16.dp),
-                    )
-                }
-            }
-        }
+        // Per v0.8.36: help hint moved to a TooltipBox above; the custom animated panel is gone.
         }
         }
         if (connectionError) {
@@ -4746,7 +4734,7 @@ private fun MpCautionDialog(preferences: SharedPreferences, onDismiss: () -> Uni
 }
 
 @Composable
-private fun AboutScreen(onBack: () -> Unit, onCheckUpdates: () -> Unit = {}, isCheckingUpdates: Boolean = false, updateMessage: String? = null) {
+private fun AboutScreen(onBack: () -> Unit, onCheckUpdates: () -> Unit = {}, isCheckingUpdates: Boolean = false, updateMessage: String? = null, onOpenLink: (String) -> Unit = {}) {
     BackHandler(enabled = true) { onBack() }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.navigationBars)) {
         TopAppBar(
@@ -4795,16 +4783,15 @@ private fun AboutScreen(onBack: () -> Unit, onCheckUpdates: () -> Unit = {}, isC
                 "Bilibili" to "https://space.bilibili.com/334614292",
                 localized("Q群", "QQ group") to "https://qm.qq.com/q/YXattqg3Kg",
             )
-            val context = LocalContext.current
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                 links.forEachIndexed { index, (label, url) ->
                     if (index > 0) Text("  |  ", color = MaterialTheme.colorScheme.onBackground)
                     Text(
                         label,
                         color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable {
-                            runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
-                        },
+                        // Per v0.8.36: route through the external-link confirmation dialog (same
+                        // as Help/Sponsor/Feedback) instead of firing the browser intent directly.
+                        modifier = Modifier.clickable { onOpenLink(url) },
                     )
                 }
             }
