@@ -3845,9 +3845,11 @@ private fun FilterDropdownChip(
                 }
             } else null,
         )
-        // Per v0.8.29: scroll when the option list is long (e.g. formulas/authors).
+        // Per v0.8.29: cap the option list height. Per v0.8.36: no inner verticalScroll —
+        // DropdownMenu already scrolls internally, and nesting a second scroll container
+        // crashed with "infinity maximum height constraints" during its intrinsic measurement.
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            Column(Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp)) {
+            Column(Modifier.heightIn(max = 360.dp)) {
                 options.forEach { option ->
                     DropdownMenuItem(
                         text = { Text(option) },
@@ -3887,9 +3889,9 @@ private fun IntFilterDropdownChip(
                 }
             } else null,
         )
-        // Per v0.8.29: scrollable long lists (see FilterDropdownChip).
+        // Per v0.8.29: cap the option list height. Per v0.8.36: no inner verticalScroll (see FilterDropdownChip).
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            Column(Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp)) {
+            Column(Modifier.heightIn(max = 360.dp)) {
                 options.forEach { option ->
                     DropdownMenuItem(
                         text = { Text(option.toString()) },
