@@ -95,6 +95,7 @@ import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Edit
@@ -3708,7 +3709,8 @@ private fun PresetLibraryScreen(
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
                     Text(stringResource(R.string.preset_library), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-                    TextButton(onClick = { newGroupOpen = true }) { Text(localized("新建组", "New group")) }
+                    // Per v0.8.36: new-group is an icon button (CreateNewFolder).
+                    IconButton(onClick = { newGroupOpen = true }) { Icon(Icons.Default.CreateNewFolder, localized("新建组", "New group")) }
                 }
                 OutlinedTextField(
                     value = searchQuery,
