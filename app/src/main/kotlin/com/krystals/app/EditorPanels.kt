@@ -882,14 +882,19 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
         }
     }
     if (loading) {
-        BasicAlertDialog(onDismissRequest = {
-            // Per v0.6.3: back button cancels computation and reverts epsilon.
-            rebuildJob?.cancel()
-            loading = false
-            rebuildJob = null
-            previousEpsilon?.let { tab.bondEpsilon = it }
-            previousEpsilon = null
-        }) {
+        BasicAlertDialog(
+            onDismissRequest = {
+                // Per v0.6.3: back button cancels computation and reverts epsilon.
+                rebuildJob?.cancel()
+                loading = false
+                rebuildJob = null
+                previousEpsilon?.let { tab.bondEpsilon = it }
+                previousEpsilon = null
+            },
+            // Per v0.8.36: loading dialogs dismiss only via the system back button,
+            // never by tapping outside.
+            properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
+        ) {
             Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
                 Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     CircularProgressIndicator()

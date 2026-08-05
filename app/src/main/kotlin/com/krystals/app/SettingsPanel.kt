@@ -41,7 +41,9 @@ fun SettingsPanel(
     var customTestOk by remember { mutableStateOf<Boolean?>(null) }
     var saveHint by remember { mutableStateOf<String?>(null) }
     // Label mapping helpers (localized() is @Composable, so these live in composition).
-    val languageLabels = listOf("中文", "English")
+    // Per v0.8.36: language option labels follow the UI language (Chinese UI shows 中文,
+    // English UI shows Chinese) — was hardcoded to Chinese which leaked into English UI.
+    val languageLabels = listOf(localized("中文", "Chinese"), "English")
     val themeLabels = ThemeMode.entries.map { mode -> when (mode) {
         ThemeMode.SYSTEM -> localized("跟随系统", "System")
         ThemeMode.DARK -> localized("深色", "Dark")

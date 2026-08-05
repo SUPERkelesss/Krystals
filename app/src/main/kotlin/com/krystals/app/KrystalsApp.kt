@@ -2045,10 +2045,14 @@ private fun ViewerScreen(
 
 // Per v0.7.1: scene rebuild loading dialog — blocks user interaction during rebuild.
 if (sceneRebuilding) {
-    androidx.compose.material3.BasicAlertDialog(onDismissRequest = {
-        sceneRebuilding = false
-        tab.undo()
-    }) {
+    androidx.compose.material3.BasicAlertDialog(
+        onDismissRequest = {
+            sceneRebuilding = false
+            tab.undo()
+        },
+        // Per v0.8.36: loading dialogs dismiss only via the system back button.
+        properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
+    ) {
         androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
             Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 androidx.compose.material3.CircularProgressIndicator()
