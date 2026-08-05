@@ -4153,7 +4153,9 @@ private fun SearchFilterBar(
 
     var pickerOpen by remember { mutableStateOf(false) }
     Surface(
-        tonalElevation = 2.dp,
+        // Per v0.8.36: the filter bar blends with the page background (no elevation tint).
+        tonalElevation = 0.dp,
+        color = MaterialTheme.colorScheme.background,
         modifier = Modifier.fillMaxWidth(),
     ) {
         LazyRow(
