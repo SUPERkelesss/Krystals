@@ -1465,13 +1465,14 @@ private fun HomeScreen(
                 DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.CloudDownload, null) }, onClick = { menuOpen = false; onOnlineSource() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.AddCircle, null) }, onClick = { menuOpen = false; onNew() })
                 HorizontalDivider()
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
-                    TextButton(onClick = { menuOpen = false; onHelp() }) { Icon(Icons.Default.Help, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Icon(Icons.Default.Feedback, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                // Per v0.8.36: tighter 2x2 grid (12dp gap) and icons tinted like the other menu items.
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)) {
+                    TextButton(onClick = { menuOpen = false; onHelp() }) { Icon(Icons.Default.Help, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Icon(Icons.Default.Feedback, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
-                    TextButton(onClick = { menuOpen = false; onAbout() }) { Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.about), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Icon(Icons.Default.Favorite, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)) {
+                    TextButton(onClick = { menuOpen = false; onAbout() }) { Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.about), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Icon(Icons.Default.Favorite, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) }, leadingIcon = { Icon(Icons.Default.ExitToApp, null) }, onClick = { menuOpen = false; onExit() })
@@ -1826,13 +1827,14 @@ private fun ViewerScreen(
                     } ?: onMessage("Unable to export current crystal")
                 })
                 HorizontalDivider()
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
-                    TextButton(onClick = { menuOpen = false; onHelp() }) { Icon(Icons.Default.Help, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Icon(Icons.Default.Feedback, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                // Per v0.8.36: tighter 2x2 grid (12dp gap) and icons tinted like the other menu items.
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)) {
+                    TextButton(onClick = { menuOpen = false; onHelp() }) { Icon(Icons.Default.Help, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onFeedback() }) { Icon(Icons.Default.Feedback, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
-                    TextButton(onClick = { menuOpen = false; onAbout() }) { Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.about), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Icon(Icons.Default.Favorite, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)) {
+                    TextButton(onClick = { menuOpen = false; onAbout() }) { Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.about), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    TextButton(onClick = { menuOpen = false; onSponsor() }) { Icon(Icons.Default.Favorite, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 HorizontalDivider()
                 DropdownMenuItem(text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) }, leadingIcon = { Icon(Icons.Default.ExitToApp, null) }, onClick = { menuOpen = false; onExit() })

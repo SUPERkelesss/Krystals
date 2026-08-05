@@ -5,12 +5,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.CallSplit
-import androidx.compose.material.icons.filled.Category
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -49,12 +44,14 @@ fun SettingsPanel(
         ThemeMode.LIGHT -> localized("浅色", "Light")
     } }
     val bondRuleLabels = listOf(
+        // Per v0.8.36: vdW-radius option removed.
         localized("自动", "Auto"), localized("智能离子", "Smart-Ionic"),
-        localized("共价半径", "Bonding"), localized("vdW半径", "vdW"),
+        localized("共价半径", "Bonding"),
     )
     val extendLabels = listOf(localized("全部", "All"), localized("仅金属", "Metals only"), localized("从不", "Never"))
+    // Per v0.8.36: shortened option labels.
     val codModeLabels = listOf(
-        localized("由 Krystals 决定", "Krystals auto"), localized("固定节点", "Fixed mirror"), localized("自定义节点", "Custom mirror"),
+        localized("自动", "Auto"), localized("固定节点", "Fixed mirror"), localized("自定义", "Custom mirror"),
     )
     val qualityLabels = listOf(localized("高", "High"), localized("低", "Low"))
 
@@ -70,7 +67,7 @@ fun SettingsPanel(
                 Column(Modifier.fillMaxWidth().height(480.dp).verticalScroll(rememberScrollState())) {
                     // ══ 常规 / General ══
                     Text(localized("常规", "General"), fontWeight = FontWeight.Bold)
-                    // Per v0.8.36: single-choice settings are segmented buttons with icons.
+                    // Per v0.8.36: only Language and Theme keep icons; the rest are plain.
                     SegmentedSetting(Icons.Default.Translate, localized("语言", "Language"), languageLabels, if (languageLabel(draft.language) == languageLabels[0]) 0 else 1) { index ->
                         draft = draft.copy(language = if (index == 0) "zh" else "en")
                     }
@@ -87,23 +84,23 @@ fun SettingsPanel(
                     Text(localized("文件处理", "File Handling"), fontWeight = FontWeight.Bold)
                     Tog(draft.autoBondRules, { draft = draft.copy(autoBondRules = it) }, localized("自动计算键规则", "Auto Compute Bond Rules"))
                     if (draft.autoBondRules) {
-                        SegmentedSetting(Icons.Default.AutoAwesome, localized("自动应用的键规则", "Bond Rule Mode"), bondRuleLabels, draft.bondRuleMode.ordinal) { index ->
+                        SegmentedSetting(null, localized("自动应用的键规则", "Bond Rule Mode"), bondRuleLabels, draft.bondRuleMode.ordinal.coerceIn(0, bondRuleLabels.lastIndex)) { index ->
                             draft = draft.copy(bondRuleMode = BondRuleMode.entries[index])
                         }
                     }
                     Tog(draft.autoConvertCell, { draft = draft.copy(autoConvertCell = it) }, localized("素晶胞自动转正当晶胞", "Auto Convert Cell"))
                     Tog(draft.defaultShowBonds, { draft = draft.copy(defaultShowBonds = it) }, localized("默认显示所有化学键", "Default Show Bonds"))
-                    SegmentedSetting(Icons.Default.CallSplit, localized("默认延伸化学键", "Default Extend Bonds"), extendLabels, draft.defaultExtendBonds.ordinal) { index ->
+                    SegmentedSetting(null, localized("默认延伸化学键", "Default Extend Bonds"), extendLabels, draft.defaultExtendBonds.ordinal) { index ->
                         draft = draft.copy(defaultExtendBonds = ExtendBondsDefault.entries[index])
                     }
-                    SegmentedSetting(Icons.Default.Category, localized("默认显示多面体", "Default Polyhedra"), extendLabels, draft.defaultPolyhedra.ordinal) { index ->
+                    SegmentedSetting(null, localized("默认显示多面体", "Default Polyhedra"), extendLabels, draft.defaultPolyhedra.ordinal) { index ->
                         draft = draft.copy(defaultPolyhedra = PolyhedraDefault.entries[index])
                     }
                     HorizontalDivider(Modifier.padding(vertical = 10.dp))
 
                     // ══ 网络 / Network ══
                     Text(localized("网络", "Network"), fontWeight = FontWeight.Bold)
-                    SegmentedSetting(Icons.Default.Cloud, localized("COD 下载节点", "COD Mirror"), codModeLabels, draft.codMirrorMode.ordinal) { index ->
+                    SegmentedSetting(null, localized("COD 下载节点", "COD Mirror"), codModeLabels, draft.codMirrorMode.ordinal) { index ->
                         draft = draft.copy(codMirrorMode = CodMirrorMode.entries[index])
                     }
                     if (draft.codMirrorMode == CodMirrorMode.FIXED) {
@@ -122,8 +119,10 @@ fun SettingsPanel(
                         var testing by remember { mutableStateOf(false) }
                         var testResult by remember { mutableStateOf<Boolean?>(null) }
                         val scope = rememberCoroutineScope()
-                        OutlinedTextField(url, { url = it; draft = draft.copy(codCustomUrl = it); testResult = null }, label = { Text(localized("自定义节点 URL", "Custom Mirror URL")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                        // Per v0.8.36: test button sits on the right of the URL field.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(url, { url = it; draft = draft.copy(codCustomUrl = it); testResult = null }, label = { Text(localized("自定义节点 URL", "Custom Mirror URL")) }, singleLine = true, modifier = Modifier.weight(1f))
+                            Spacer(Modifier.width(8.dp))
                             TextButton(
                                 enabled = !testing && url.isNotBlank(),
                                 onClick = {
@@ -135,20 +134,20 @@ fun SettingsPanel(
                                     }
                                 },
                             ) { Text(if (testing) localized("测试中...", "Testing...") else localized("测试", "Test")) }
-                            testResult?.let { ok ->
-                                Text(
-                                    if (ok) localized("✓ 节点可用，已沿用", "✓ Mirror reachable") else localized("✗ 节点不可用", "✗ Mirror unreachable"),
-                                    color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
+                        }
+                        testResult?.let { ok ->
+                            Text(
+                                if (ok) localized("✓ 节点可用，已沿用", "✓ Mirror reachable") else localized("✗ 节点不可用", "✗ Mirror unreachable"),
+                                color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                     }
                     HorizontalDivider(Modifier.padding(vertical = 10.dp))
 
                     // ══ 显示 / Display ══
                     Text(localized("显示", "Display"), fontWeight = FontWeight.Bold)
-                    SegmentedSetting(Icons.Default.HighQuality, localized("导出图片质量", "Export Quality"), qualityLabels, draft.exportQuality.ordinal) { index ->
+                    SegmentedSetting(null, localized("导出图片质量", "Export Quality"), qualityLabels, draft.exportQuality.ordinal) { index ->
                         draft = draft.copy(exportQuality = ExportQuality.entries[index])
                     }
                     Tog(draft.exportShowAxes, { draft = draft.copy(exportShowAxes = it) }, localized("导出时显示坐标轴", "Export Show Axes"))
@@ -165,7 +164,7 @@ fun SettingsPanel(
                 Row(Modifier.fillMaxWidth().padding(top = 0.dp, bottom = 12.dp), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text(localized("取消", "Cancel")) }
                     Spacer(Modifier.width(12.dp))
-                    Button(onClick = { apply(); onDismiss() }) { Text(localized("保存", "Save")) }
+                    Button(onClick = { onDismiss(); apply() }) { Text(localized("保存", "Save")) }
                 }
             }
         }
@@ -190,24 +189,26 @@ fun SettingsPanel(
 }
 
 @Composable private fun LabeledSliderSetting(label: String, value: Float, min: Float, max: Float, onChange: (Float) -> Unit) {
-    // Per v0.8.33: value merged into the label line: "label: 45%".
-    Text("$label: $${"%.0f%%".format(value * 100f)}", style = MaterialTheme.typography.bodyMedium)
+    // Per v0.8.33: value merged into the label line: "label: 45%". Per v0.8.36: no stray '$'.
+    Text("$label: ${"%.0f%%".format(value * 100f)}", style = MaterialTheme.typography.bodyMedium)
     Slider(value = value, onValueChange = onChange, valueRange = min..max)
 }
 
-/** Per v0.8.36: single-choice setting as a segmented button row with an icon + label. */
+/** Per v0.8.36: single-choice setting as a segmented button row; icon optional (Language/Theme only). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SegmentedSetting(
-    icon: ImageVector,
+    icon: ImageVector?,
     label: String,
     options: List<String>,
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
 ) {
     Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(6.dp))
+        if (icon != null) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+        }
         Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
     }
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp)) {

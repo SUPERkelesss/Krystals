@@ -1331,7 +1331,8 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
             val radius = size.minDimension * 0.38f
             val center = Offset(size.width / 2f, size.height / 2f)
             val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
-            val gray = if (isLight) Color(0xFF5A5A60) else Color(0xFFD8D8DE)
+            // Per v0.8.36: fixed 75% grey sphere regardless of theme.
+            val gray = Color(0xFFBFBFBF)
             val sphereColor = gray.copy(alpha = opacity)
             val theta = appearance.lightAzimuth / 180f * PI.toFloat()
             val phi = appearance.lightElevation / 180f * PI.toFloat()
@@ -1427,7 +1428,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
     c: Offset, r: Float, appearance: ViewerAppearance, fog: Float, bg: Color,
 ) {
     val isLight = (0.299f * bg.red + 0.587f * bg.green + 0.114f * bg.blue) > 0.5f
-    val base = if (isLight) Color(0xFF5A5A60) else Color(0xFFD8D8DE)
+    // Per v0.8.36: fixed 75% grey sphere regardless of theme.
+    val base = Color(0xFFBFBFBF)
     drawCircle(base.blend(bg, fog), r, c)
     if (appearance.reflectionEnabled) {
         val theta = appearance.lightAzimuth / 180f * PI.toFloat()
