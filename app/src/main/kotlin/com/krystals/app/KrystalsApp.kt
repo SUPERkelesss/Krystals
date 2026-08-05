@@ -3845,11 +3845,12 @@ private fun FilterDropdownChip(
                 }
             } else null,
         )
-        // Per v0.8.29: cap the option list height. Per v0.8.36: no inner verticalScroll —
-        // DropdownMenu already scrolls internally, and nesting a second scroll container
-        // crashed with "infinity maximum height constraints" during its intrinsic measurement.
+        // Per v0.8.36: DropdownMenu scrolls its content internally. A plain Column keeps that
+        // scrolling working — the earlier heightIn(max 360dp) capped the list and clipped long
+        // option sets, and the earlier inner verticalScroll nested a second scroll container
+        // which crashed with "infinity maximum height constraints".
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            Column(Modifier.heightIn(max = 360.dp)) {
+            Column {
                 options.forEach { option ->
                     DropdownMenuItem(
                         text = { Text(option) },
@@ -3889,9 +3890,9 @@ private fun IntFilterDropdownChip(
                 }
             } else null,
         )
-        // Per v0.8.29: cap the option list height. Per v0.8.36: no inner verticalScroll (see FilterDropdownChip).
+        // Per v0.8.36: plain Column, DropdownMenu scrolls internally (see FilterDropdownChip).
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            Column(Modifier.heightIn(max = 360.dp)) {
+            Column {
                 options.forEach { option ->
                     DropdownMenuItem(
                         text = { Text(option.toString()) },
