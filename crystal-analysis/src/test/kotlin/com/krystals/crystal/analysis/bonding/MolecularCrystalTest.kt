@@ -99,6 +99,29 @@ class MolecularCrystalTest {
         assertTrue(network(listOf(d1, d2, d2p), listOf(b(1, 3))).isMolecularCrystal())
     }
 
+    @Test fun hydrogenBondsDoNotAffectMolecularity() {
+        // 两个水分子 + 两条跨晶胞氢键 O1···H2'、O2···H1''(若计入会构成偏移 (0,0,2)
+        // 的跨晶胞环 → False)。氢键是分子间弱作用,应被排除 → 仍为分子晶体。
+        val o1 = a(1, "O", "O", FractionalCoordinate(0.1, 0.1, 0.1))
+        val h1 = a(2, "H", "H", FractionalCoordinate(0.1, 0.1, 0.2))
+        val o2 = a(3, "O", "O", FractionalCoordinate(0.5, 0.5, 0.5))
+        val h2 = a(4, "H", "H", FractionalCoordinate(0.5, 0.5, 0.6))
+        val h2p = a(5, "H", "H", FractionalCoordinate(0.5, 0.5, 1.6), cell = Int3(0, 0, 1), shell = true)
+        val h1p = a(6, "H", "H", FractionalCoordinate(0.1, 0.1, 1.2), cell = Int3(0, 0, 1), shell = true)
+        val covalent = BondRule("O", "H", 0.5, 1.5, BondRuleSource.AUTO)
+        val hbond = BondRule("O", "H", 1.5, 2.6, BondRuleSource.AUTO, isHBond = true)
+        val net = network(
+            listOf(o1, h1, o2, h2, h2p, h1p),
+            listOf(
+                Bond(1, 2, 1.0, covalent),
+                Bond(3, 4, 1.0, covalent),
+                Bond(1, 5, 2.4, hbond),
+                Bond(3, 6, 2.4, hbond),
+            ),
+        )
+        assertTrue(net.isMolecularCrystal())
+    }
+
     @Test fun isolatedAtomsAndEmptyNetworksAreMolecular() {
         val lone = a(1, "Ar", "Ar", FractionalCoordinate(0.5, 0.5, 0.5))
         assertTrue(network(listOf(lone), emptyList()).isMolecularCrystal())
