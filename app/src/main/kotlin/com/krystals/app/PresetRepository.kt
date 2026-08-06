@@ -216,7 +216,7 @@ object PresetRepository {
             val formula = com.krystals.crystal.analysis.structure.StructureAnalyzer.info(structure).reducedFormula
             PresetMeta(
                 formula = formula,
-                elementCount = Regex("[A-Z][a-z]?").findAll(formula).map { m -> m.value }.distinct().count(),
+                elementCount = elementsInFormula(formula).size,
                 crystalSystem = resolved?.crystalSystem,
                 pointGroup = resolved?.pointGroup,
                 spaceGroup = sg.symbol,

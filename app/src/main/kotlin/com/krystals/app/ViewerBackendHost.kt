@@ -20,12 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -33,13 +30,10 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.krystals.app.ui.AppPalette
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.interaction.state.InteractionState
 import com.krystals.interaction.state.ViewerCommand
-import com.krystals.interaction.measure.AngleTool
-import com.krystals.interaction.measure.DihedralTool
-import com.krystals.interaction.measure.DistanceTool
-import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.measure.MeasurementSelection
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.scene.GatheredAtomGrouper
@@ -47,16 +41,11 @@ import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.scene.SceneBounds
 import com.krystals.renderer.core.scene.allBounds
 import com.krystals.renderer.core.scene.sceneProjection
-import com.krystals.renderer.core.style.AxisMode
 import com.krystals.renderer.core.style.SelectionColors
 import com.krystals.renderer.filament.FilamentRenderer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
 
 private class OverlayHitRegions {
     var measurements: List<Triple<Rect, MeasurementSelection?, Boolean>> = emptyList()
@@ -126,8 +115,8 @@ fun FilamentViewport(
     onCommand: (ViewerCommand) -> Unit,
     onAtomTap: (AtomImage) -> Boolean,
     onFailure: (Throwable) -> Unit,
-    bondValenceBySite: Map<String, Double> = emptyMap(),
     modifier: Modifier = Modifier,
+    bondValenceBySite: Map<String, Double> = emptyMap(),
 ) {
     val scope = rememberCoroutineScope()
     val hitRegions = remember { OverlayHitRegions() }
@@ -259,111 +248,15 @@ private fun FilamentLegacyStyleOverlay(
         val lockedIds = state.document.lockedMeasurements.flatMap { it.atomIds }.toSet() + state.document.inspection.lockedInspectedAtomIds
 
         if (scene.environment.axes.visible) {
-            val matrix = scene.structure.lattice.matrix
-            val directions = when (scene.environment.axes.mode) {
-                AxisMode.ABC -> listOf(matrix.a, matrix.b, matrix.c)
-                AxisMode.XYZ -> listOf(
-                    com.krystals.crystal.core.math.Vec3(1.0, 0.0, 0.0),
-                    com.krystals.crystal.core.math.Vec3(0.0, 1.0, 0.0),
-                    com.krystals.crystal.core.math.Vec3(0.0, 0.0, 1.0),
-                )
-            }
-            val labels = if (scene.environment.axes.mode == AxisMode.ABC) listOf("a", "b", "c") else listOf("X", "Y", "Z")
-            val colors = listOf(Color(0xFFE57373), Color(0xFF81C784), Color(0xFF64B5F6))
-            val origin = Offset(size.width * scene.environment.axes.offsetX + 28f, size.height * scene.environment.axes.offsetY + 40f - 75f)
-            val arrowLength = 75f
-            val headLengthBase = 14f
-            val light = scene.environment.worldLight
-            val theta = light.azimuthDegrees / 180f * PI.toFloat()
-            val phi = light.elevationDegrees / 180f * PI.toFloat()
-            val lightOffset = Offset(cos(theta) * cos(phi), -sin(theta) * cos(phi))
-            val axisPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                textSize = 30f
-                // v0.8.27: no text shadow on axis labels (a/b/c, X/Y/Z).
-                clearShadowLayer()
-            }
-            val rotatedDirs = directions.mapIndexed { index, axis ->
-                val direction = (camera.rotation * axis).normalized()
-                Triple(index, axis, direction)
-            }
-            fun drawArrow(index: Int, axis: com.krystals.crystal.core.math.Vec3, direction: com.krystals.crystal.core.math.Vec3) {
-                val dx = direction.x.toFloat()
-                val dy = -direction.y.toFloat()
-                // Per v0.6.3: arrow length varies with projected direction (3D perspective).
-                val projectedLength = kotlin.math.sqrt(dx * dx + dy * dy)
-                val visibleLength = arrowLength * projectedLength
-                val unit = if (projectedLength > 0.0001f) Offset(dx / projectedLength, dy / projectedLength) else Offset.Zero
-                // v0.8.27: arrow starts at the center-sphere surface (hub radius 12f),
-                // matching the sphere drawn at origin, not at the sphere's root.
-                val start = origin + unit * 12f
-                val end = start + unit * visibleLength
-                // Per v0.6.3: fixed arrowhead size (not scaled by projectedLength).
-                val headLength = headLengthBase
-                val shaftEnd = end - unit * headLength
-                val color = colors[index]
-                val perp = Offset(-unit.y, unit.x)
-                val halfWidth = 4f
-                // 3D cylinder shaft: draw as rotated rectangle with perpendicular gradient.
-                val shaftAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-                drawContext.canvas.nativeCanvas.save()
-                drawContext.canvas.nativeCanvas.rotate(shaftAngle, start.x, start.y)
-                val shaftLen = (visibleLength - headLength).coerceAtLeast(0f)
-                val shaftBrush = Brush.linearGradient(
-                    listOf(
-                        color.copy(alpha = 0.4f),
-                        color,
-                        color.copy(red = (color.red * 0.6f + 1f * 0.4f).coerceIn(0f, 1f), green = (color.green * 0.6f + 1f * 0.4f).coerceIn(0f, 1f), blue = (color.blue * 0.6f + 1f * 0.4f).coerceIn(0f, 1f)),
-                        color,
-                        color.copy(alpha = 0.4f),
-                    ),
-                    start = Offset(start.x, start.y - halfWidth),
-                    end = Offset(start.x, start.y + halfWidth),
-                )
-                drawRect(shaftBrush, topLeft = Offset(start.x, start.y - halfWidth), size = androidx.compose.ui.geometry.Size(shaftLen, halfWidth * 2f))
-                drawContext.canvas.nativeCanvas.restore()
-                // 3D cone arrowhead: filled triangle with perpendicular gradient.
-                val halfHead = headLength * 0.6f
-                val base = end - unit * headLength
-                val arrow = Path().apply {
-                    moveTo(end.x, end.y)
-                    lineTo(base.x + perp.x * halfHead, base.y + perp.y * halfHead)
-                    lineTo(base.x - perp.x * halfHead, base.y - perp.y * halfHead)
-                    close()
-                }
-                val headBrush = Brush.linearGradient(
-                    listOf(
-                        color.copy(alpha = 0.4f),
-                        color,
-                        color.copy(red = (color.red * 0.6f + 1f * 0.4f).coerceIn(0f, 1f), green = (color.green * 0.6f + 1f * 0.4f).coerceIn(0f, 1f), blue = (color.blue * 0.6f + 1f * 0.4f).coerceIn(0f, 1f)),
-                        color,
-                        color.copy(alpha = 0.4f),
-                    ),
-                    start = Offset(base.x + perp.x * halfHead, base.y + perp.y * halfHead),
-                    end = Offset(base.x - perp.x * halfHead, base.y - perp.y * halfHead),
-                )
-                drawPath(arrow, headBrush)
-                axisPaint.color = color.toArgb()
-                drawContext.canvas.nativeCanvas.drawText(labels[index], end.x + 4f, end.y - 4f, axisPaint)
-            }
-            // Draw back arrows (pointing away from viewer) first.
-            rotatedDirs.filter { it.third.z <= 0.0 }.forEach { (index, axis, direction) ->
-                drawArrow(index, axis, direction)
-            }
-            // Center sphere (radius 12f).
-            drawCircle(Color.Black.copy(alpha = 0.5f), 13f, origin + Offset(1f, 1f))
-            drawCircle(
-                Brush.radialGradient(
-                    listOf(Color(0xFFE0E0E0), Color(0xFF68686F)),
-                    center = origin + lightOffset * 4.5f,
-                    radius = 12f,
-                ),
-                12f,
-                origin,
+            // Shared native-Canvas axes drawing (same code path as ExportOverlay).
+            OverlayDraw.drawAxes(
+                drawContext.canvas.nativeCanvas,
+                size.width.toInt(),
+                size.height.toInt(),
+                scene,
+                state,
+                projection,
             )
-            // Draw front arrows (pointing toward viewer) on top of the sphere.
-            rotatedDirs.filter { it.third.z > 0.0 }.forEach { (index, axis, direction) ->
-                drawArrow(index, axis, direction)
-            }
         }
 
         // P8: 2D selection rings (replaces 3D highlight spheres from GpuInstanceManager).
@@ -381,80 +274,18 @@ private fun FilamentLegacyStyleOverlay(
             drawCircle(ringColor, r + 4f, center, style = Stroke(if (isLocked) 6f else 5f))
         }
 
-        val measurementBounds = mutableListOf<Triple<Rect, MeasurementSelection?, Boolean>>()
-        val measurements = mutableListOf<Triple<MeasurementSelection, MeasurementSelection?, Boolean>>()
-        measurements += state.document.lockedMeasurements.map { Triple(it, it, true) }
-        if (state.document.measurementMode != MeasurementMode.NONE && state.document.selection.selectedAtomIds.isNotEmpty()) {
-            measurements += Triple(MeasurementSelection(state.document.selection.selectedAtomIds, state.document.measurementMode), null, false)
+        // Shared native-Canvas measurement drawing (same code path as ExportOverlay); the hit
+        // regions are converted back to Compose Rects for tap-hit detection.
+        val measurementHits = OverlayDraw.drawMeasurements(
+            drawContext.canvas.nativeCanvas,
+            scene,
+            state,
+            projection,
+        )
+        hitRegions.measurements = measurementHits.map { hit ->
+            val b = hit.bounds
+            Triple(Rect(b.left, b.top, b.right, b.bottom), hit.selection, hit.locked)
         }
-        val measurementPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.WHITE
-            textSize = 48f
-            setShadowLayer(5f, 1f, 1f, android.graphics.Color.BLACK)
-        }
-        measurements.forEach { (selection, lockValue, locked) ->
-            val expected = when (selection.mode) {
-                MeasurementMode.LENGTH -> 2
-                MeasurementMode.ANGLE -> 3
-                MeasurementMode.DIHEDRAL -> 4
-                else -> 0
-            }
-            if (expected == 0 || selection.atomIds.size < expected) return@forEach
-            val selectedIds = selection.atomIds.takeLast(expected)
-            val points = selectedIds.mapNotNull(::point)
-            val coordinates = selectedIds.mapNotNull { atomsById[it]?.atom?.cartesianCoordinate?.toVec3() }
-            if (points.size != expected || coordinates.size != expected) return@forEach
-            // Per v0.6: dihedral planes are gradient canvas overlays (matching the Legacy
-            // renderer), same as FilamentRenderer.composeOverlay — they were missing here.
-            if (selection.mode == MeasurementMode.DIHEDRAL) {
-                DihedralTool.planes(coordinates[0], coordinates[1], coordinates[2], coordinates[3]).forEach { plane ->
-                    val sv = plane.vertices.map { v ->
-                        val (px, py) = projection.project(v)
-                        Offset(px.toFloat(), py.toFloat())
-                    }
-                    if (sv.size == 4) {
-                        val path = Path().apply {
-                            moveTo(sv[0].x, sv[0].y)
-                            sv.drop(1).forEach { lineTo(it.x, it.y) }
-                            close()
-                        }
-                        drawPath(
-                            path,
-                            Brush.linearGradient(
-                                colors = listOf(
-                                    Color(150, 95, 205, 112),
-                                    Color(128, 72, 180, 56),
-                                    Color.Transparent,
-                                ),
-                                start = sv[0],
-                                end = sv[3],
-                            ),
-                        )
-                    }
-                }
-            }
-            val label = when (selection.mode) {
-                MeasurementMode.LENGTH -> "%.4f \u00C5".format(DistanceTool.calculate(coordinates[0], coordinates[1]))
-                MeasurementMode.ANGLE -> "%.3f\u00B0".format(AngleTool.calculate(coordinates[0], coordinates[1], coordinates[2]))
-                MeasurementMode.DIHEDRAL -> "%.3f\u00B0".format(DihedralTool.calculate(coordinates[0], coordinates[1], coordinates[2], coordinates[3]))
-                else -> return@forEach
-            }
-            val anchor = points.reduce { first, second -> first + second } / points.size.toFloat()
-            val nativeBounds = android.graphics.Rect()
-            measurementPaint.getTextBounds(label, 0, label.length, nativeBounds)
-            val pad = 16f
-            val rect = Rect(
-                anchor.x + 12f - pad,
-                anchor.y - 12f - nativeBounds.height() - pad,
-                anchor.x + 12f + nativeBounds.width() + pad,
-                anchor.y - 12f + pad,
-            )
-            val panelColor = if (locked) Color(0xFF9966CC).copy(alpha = 0.82f) else Color.Black.copy(alpha = 0.65f)
-            drawRoundRect(panelColor, rect.topLeft, Size(rect.width, rect.height), androidx.compose.ui.geometry.CornerRadius(14f, 14f))
-            drawContext.canvas.nativeCanvas.drawText(label, anchor.x + 12f, anchor.y - 12f, measurementPaint)
-            measurementBounds += Triple(rect, lockValue, locked)
-        }
-        hitRegions.measurements = measurementBounds
 
         val inspectionBounds = mutableListOf<Triple<Rect, Long, Boolean>>()
         val inspectionIds = state.document.inspection.lockedInspectedAtomIds + listOfNotNull(state.document.inspection.inspectedAtomId).filterNot { it in state.document.inspection.lockedInspectedAtomIds }
@@ -493,7 +324,7 @@ private fun FilamentLegacyStyleOverlay(
             val left = anchor.x + atomRadius + 14f
             val top = anchor.y - atomRadius - 14f - lines.size * lineHeight - pad
             val rect = Rect(left, top, left + maxWidth + pad * 2f, anchor.y - atomRadius - 14f + pad)
-            val panelColor = if (locked) Color(0xFF9966CC).copy(alpha = 0.82f) else Color.Black.copy(alpha = 0.65f)
+            val panelColor = if (locked) Color(AppPalette.BRAND_MID).copy(alpha = 0.82f) else Color.Black.copy(alpha = 0.65f)
             drawRoundRect(panelColor, rect.topLeft, Size(rect.width, rect.height), androidx.compose.ui.geometry.CornerRadius(14f, 14f))
             lines.forEachIndexed { index, line ->
                 drawContext.canvas.nativeCanvas.drawText(

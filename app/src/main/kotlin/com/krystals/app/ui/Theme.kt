@@ -9,9 +9,16 @@ import androidx.compose.ui.graphics.Color
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
-private val Purple = Color(0xFF9966CC)
-private val DarkScheme = darkColorScheme(primary = Color(0xFFCFA7F5), secondary = Purple, tertiary = Color(0xFFE4C6FF))
-private val LightScheme = lightColorScheme(primary = Color(0xFF7542A5), secondary = Purple, tertiary = Color(0xFF61308F))
+private val DarkScheme = darkColorScheme(
+    primary = Color(AppPalette.BRAND_LIGHT),
+    secondary = Color(AppPalette.BRAND_MID),
+    tertiary = Color(0xFFE4C6FF),
+)
+private val LightScheme = lightColorScheme(
+    primary = Color(AppPalette.BRAND_DEEP),
+    secondary = Color(AppPalette.BRAND_MID),
+    tertiary = Color(0xFF61308F),
+)
 
 @Composable
 fun KrystalsTheme(mode: ThemeMode, content: @Composable () -> Unit) {

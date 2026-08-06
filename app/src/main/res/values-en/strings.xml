@@ -1,6 +1,5 @@
 <resources>
     <string name="app_name">Krystals</string>
-    <string name="open_file">Open existing file…</string>
     <string name="import_local">Import local file…</string>
     <string name="new_file">Create new file</string>
     <string name="materials_project">Import from Materials Project</string>
@@ -8,7 +7,6 @@
     <string name="import_cod">Import from COD</string>
     <string name="save">Save to local path…</string>
     <string name="export_image">Export image</string>
-    <string name="exit">Exit</string>
     <string name="basic_info">Basic</string>
     <string name="atoms">Atoms</string>
     <string name="bonds">Bonds</string>
@@ -16,19 +14,15 @@
     <string name="cancel">Cancel</string>
     <string name="confirm">OK</string>
     <string name="discard">Discard</string>
-    <string name="language">Language</string>
     <string name="help">Help</string>
     <string name="about">About</string>
     <string name="sponsor">Sponsor</string>
     <string name="feedback">Feedback</string>
-    <string name="sponsor_title">Sponsor Krystals</string>
     <string name="open_preset_library">Open from preset library</string>
     <string name="save_to_presets">Save to presets</string>
     <string name="preset_library">Preset library</string>
     <string name="delete_preset_title">Delete preset?</string>
     <string name="select_all">Select all</string>
-    <string name="extend_across_cell">Extend across cell</string>
     <string name="version">Version</string>
     <string name="bundled">Bundled</string>
-    <string name="user_saved">User saved</string>
 </resources>

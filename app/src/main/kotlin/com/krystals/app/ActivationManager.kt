@@ -1,5 +1,6 @@
 package com.krystals.app
 
+import androidx.core.content.edit
 import android.content.Context
 import android.content.SharedPreferences
 import java.security.MessageDigest
@@ -51,7 +52,7 @@ object ActivationManager {
     fun activate(context: Context, code: String): Boolean {
         val normalised = code.trim().uppercase()
         if (!isValidCode(normalised)) return false
-        prefs(context).edit().putString(PREFS_CODE, normalised).apply()
+        prefs(context).edit { putString(PREFS_CODE, normalised) }
         return true
     }
 

@@ -1,10 +1,11 @@
 package com.krystals.app
 
+import androidx.core.content.edit
 import android.content.SharedPreferences
 import com.krystals.app.ui.ThemeMode
 
 /** Per v0.8.26: bond-rule strategy applied when opening a file. */
-enum class BondRuleMode { AUTO, SMART_IONIC, BONDING, VDW }
+enum class BondRuleMode { AUTO, SMART_IONIC, BONDING }
 
 /** Default "extend bonds across cell" behaviour for new tabs. */
 enum class ExtendBondsDefault { ALL, METALS_ONLY, NEVER }
@@ -112,49 +113,36 @@ object PreferencesStore {
 
     /** Persist [SettingsValues] to SharedPreferences. */
     fun save(prefs: SharedPreferences, settings: SettingsValues) {
-        prefs.edit()
-            .putString(KEY_LANGUAGE, settings.language)
-            .putString(KEY_THEME, settings.theme.name)
-            .putBoolean(KEY_AUTO_CHECK_UPDATE, settings.autoCheckUpdate)
-            .putFloat(KEY_BALL_COLLAPSED_ALPHA, settings.ballCollapsedAlpha)
-            .putBoolean(KEY_SHOW_LOCK_BUTTON, settings.showLockButton)
-            .putBoolean(KEY_SHOW_LEGEND, settings.showLegend)
-            .putBoolean(KEY_AUTO_BOND_RULES, settings.autoBondRules)
-            .putString(KEY_BOND_RULE_MODE, settings.bondRuleMode.name)
-            .putBoolean(KEY_AUTO_CONVERT_CELL, settings.autoConvertCell)
-            .putBoolean(KEY_DEFAULT_SHOW_BONDS, settings.defaultShowBonds)
-            .putString(KEY_DEFAULT_EXTEND_BONDS, settings.defaultExtendBonds.name)
-            .putString(KEY_DEFAULT_POLYHEDRA, settings.defaultPolyhedra.name)
-            .putString(KEY_COD_MIRROR_MODE, settings.codMirrorMode.name)
-            .putInt(KEY_COD_FIXED_INDEX, settings.codFixedIndex)
-            .putString(KEY_COD_CUSTOM_URL, settings.codCustomUrl)
-            .putString(KEY_EXPORT_QUALITY, settings.exportQuality.name)
-            .putBoolean(KEY_EXPORT_SHOW_AXES, settings.exportShowAxes)
-            .putBoolean(KEY_EXPORT_SHOW_MEASUREMENTS, settings.exportShowMeasurements)
-            .apply()
+        prefs.edit {
+            putString(KEY_LANGUAGE, settings.language)
+            putString(KEY_THEME, settings.theme.name)
+            putBoolean(KEY_AUTO_CHECK_UPDATE, settings.autoCheckUpdate)
+            putFloat(KEY_BALL_COLLAPSED_ALPHA, settings.ballCollapsedAlpha)
+            putBoolean(KEY_SHOW_LOCK_BUTTON, settings.showLockButton)
+            putBoolean(KEY_SHOW_LEGEND, settings.showLegend)
+            putBoolean(KEY_AUTO_BOND_RULES, settings.autoBondRules)
+            putString(KEY_BOND_RULE_MODE, settings.bondRuleMode.name)
+            putBoolean(KEY_AUTO_CONVERT_CELL, settings.autoConvertCell)
+            putBoolean(KEY_DEFAULT_SHOW_BONDS, settings.defaultShowBonds)
+            putString(KEY_DEFAULT_EXTEND_BONDS, settings.defaultExtendBonds.name)
+            putString(KEY_DEFAULT_POLYHEDRA, settings.defaultPolyhedra.name)
+            putString(KEY_COD_MIRROR_MODE, settings.codMirrorMode.name)
+            putInt(KEY_COD_FIXED_INDEX, settings.codFixedIndex)
+            putString(KEY_COD_CUSTOM_URL, settings.codCustomUrl)
+            putString(KEY_EXPORT_QUALITY, settings.exportQuality.name)
+            putBoolean(KEY_EXPORT_SHOW_AXES, settings.exportShowAxes)
+            putBoolean(KEY_EXPORT_SHOW_MEASUREMENTS, settings.exportShowMeasurements)
+        }
     }
 
     /** Clear all keys managed by PreferencesStore (existing non-settings keys untouched). */
     fun clearAll(prefs: SharedPreferences) {
-        prefs.edit()
-            .remove(KEY_LANGUAGE)
-            .remove(KEY_THEME)
-            .remove(KEY_AUTO_CHECK_UPDATE)
-            .remove(KEY_BALL_COLLAPSED_ALPHA)
-            .remove(KEY_SHOW_LOCK_BUTTON)
-            .remove(KEY_SHOW_LEGEND)
-            .remove(KEY_AUTO_BOND_RULES)
-            .remove(KEY_BOND_RULE_MODE)
-            .remove(KEY_AUTO_CONVERT_CELL)
-            .remove(KEY_DEFAULT_SHOW_BONDS)
-            .remove(KEY_DEFAULT_EXTEND_BONDS)
-            .remove(KEY_DEFAULT_POLYHEDRA)
-            .remove(KEY_COD_MIRROR_MODE)
-            .remove(KEY_COD_FIXED_INDEX)
-            .remove(KEY_COD_CUSTOM_URL)
-            .remove(KEY_EXPORT_QUALITY)
-            .remove(KEY_EXPORT_SHOW_AXES)
-            .remove(KEY_EXPORT_SHOW_MEASUREMENTS)
-            .apply()
+        prefs.edit {
+            remove(KEY_LANGUAGE); remove(KEY_THEME); remove(KEY_AUTO_CHECK_UPDATE); remove(KEY_BALL_COLLAPSED_ALPHA)
+            remove(KEY_SHOW_LOCK_BUTTON); remove(KEY_SHOW_LEGEND); remove(KEY_AUTO_BOND_RULES); remove(KEY_BOND_RULE_MODE)
+            remove(KEY_AUTO_CONVERT_CELL); remove(KEY_DEFAULT_SHOW_BONDS); remove(KEY_DEFAULT_EXTEND_BONDS); remove(KEY_DEFAULT_POLYHEDRA)
+            remove(KEY_COD_MIRROR_MODE); remove(KEY_COD_FIXED_INDEX); remove(KEY_COD_CUSTOM_URL); remove(KEY_EXPORT_QUALITY)
+            remove(KEY_EXPORT_SHOW_AXES); remove(KEY_EXPORT_SHOW_MEASUREMENTS)
+        }
     }
 }

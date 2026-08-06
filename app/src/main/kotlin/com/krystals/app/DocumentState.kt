@@ -1,6 +1,7 @@
 package com.krystals.app
 
 import android.net.Uri
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,33 +54,33 @@ data class DocumentSnapshot(
     val isPrimitiveCell: Boolean,
     val savedConventionalStructure: CrystalStructure?,
     val savedConventionalBondConfig: BondConfiguration?,
-val savedPrimitiveStructure: CrystalStructure?,
-val savedPrimitiveBondConfig: BondConfiguration?,
-val structuralExpansion: Boolean,
+    val savedPrimitiveStructure: CrystalStructure?,
+    val savedPrimitiveBondConfig: BondConfiguration?,
+    val structuralExpansion: Boolean,
 ) {
-fun restore(tab: DocumentTab) {
-tab.structure = structure; tab.bondConfiguration = bondConfiguration; tab.renderConfiguration = renderConfiguration
-tab.name = name; tab.dirty = dirty; tab.editorOpen = editorOpen; tab.appearance = appearance
-tab.expansion = expansion; tab.interactionState = tab.interactionState.copy(document = interactionDocument)
-tab.atomEditMode = atomEditMode; tab.editingSiteId = editingSiteId
-tab.bondEpsilon = bondEpsilon; tab.lastRadiusSource = lastRadiusSource
-tab.isPrimitiveCell = isPrimitiveCell
-tab.savedConventionalStructure = savedConventionalStructure
-tab.savedConventionalBondConfig = savedConventionalBondConfig
-tab.savedPrimitiveStructure = savedPrimitiveStructure
-tab.savedPrimitiveBondConfig = savedPrimitiveBondConfig
-tab.structuralExpansion = structuralExpansion
-}
+    fun restore(tab: DocumentTab) {
+        tab.structure = structure; tab.bondConfiguration = bondConfiguration; tab.renderConfiguration = renderConfiguration
+        tab.name = name; tab.dirty = dirty; tab.editorOpen = editorOpen; tab.appearance = appearance
+        tab.expansion = expansion; tab.interactionState = tab.interactionState.copy(document = interactionDocument)
+        tab.atomEditMode = atomEditMode; tab.editingSiteId = editingSiteId
+        tab.bondEpsilon = bondEpsilon; tab.lastRadiusSource = lastRadiusSource
+        tab.isPrimitiveCell = isPrimitiveCell
+        tab.savedConventionalStructure = savedConventionalStructure
+        tab.savedConventionalBondConfig = savedConventionalBondConfig
+        tab.savedPrimitiveStructure = savedPrimitiveStructure
+        tab.savedPrimitiveBondConfig = savedPrimitiveBondConfig
+        tab.structuralExpansion = structuralExpansion
+    }
     companion object {
-fun capture(tab: DocumentTab) = DocumentSnapshot(
-tab.structure, tab.bondConfiguration, tab.renderConfiguration, tab.name, tab.dirty, tab.editorOpen,
-tab.appearance, tab.expansion, tab.interactionState.document,
-tab.atomEditMode, tab.editingSiteId, tab.bondEpsilon, tab.lastRadiusSource,
-tab.isPrimitiveCell,
-tab.savedConventionalStructure, tab.savedConventionalBondConfig,
-tab.savedPrimitiveStructure, tab.savedPrimitiveBondConfig,
-tab.structuralExpansion,
-)
+        fun capture(tab: DocumentTab) = DocumentSnapshot(
+            tab.structure, tab.bondConfiguration, tab.renderConfiguration, tab.name, tab.dirty, tab.editorOpen,
+            tab.appearance, tab.expansion, tab.interactionState.document,
+            tab.atomEditMode, tab.editingSiteId, tab.bondEpsilon, tab.lastRadiusSource,
+            tab.isPrimitiveCell,
+            tab.savedConventionalStructure, tab.savedConventionalBondConfig,
+            tab.savedPrimitiveStructure, tab.savedPrimitiveBondConfig,
+            tab.structuralExpansion,
+        )
     }
 }
 
@@ -131,7 +132,7 @@ class DocumentTab(
     // Per v0.5.0: bond-rule threshold ε (max = rA + rB + ε). Per-tab UI setting, not persisted to
     // CIF; new files default to 0.45. lastRadiusSource remembers which source the ε slider should
     // reapply when adjusted (default smart-ionic).
-    var bondEpsilon by mutableStateOf(0.45)
+    var bondEpsilon by mutableDoubleStateOf(0.45)
     var lastRadiusSource by mutableStateOf(RadiusSource.SMART_IONIC)
     // Per v0.7.0: user crystal comments stored in CIF as "# Krystals Comments" block.
     var comments by mutableStateOf("")
@@ -142,8 +143,8 @@ class DocumentTab(
     // the exact data without matrix rounding errors.
     var savedConventionalStructure by mutableStateOf<CrystalStructure?>(null)
     var savedConventionalBondConfig by mutableStateOf<BondConfiguration?>(null)
-var savedPrimitiveStructure by mutableStateOf<CrystalStructure?>(null)
-var savedPrimitiveBondConfig by mutableStateOf<BondConfiguration?>(null)
+    var savedPrimitiveStructure by mutableStateOf<CrystalStructure?>(null)
+    var savedPrimitiveBondConfig by mutableStateOf<BondConfiguration?>(null)
 // Per v0.6.5: true when the current expansion is structural (from a 3×3 matrix transform),
 // not a display-only supercell. Controls whether SINGLE_CELL frame mode shows the
 // entire supercell frame or just one cell.
@@ -166,7 +167,7 @@ var savedPrimitiveBondConfig by mutableStateOf<BondConfiguration?>(null)
 
 class KrystalsViewModel : ViewModel() {
     val tabs = mutableStateListOf<DocumentTab>()
-    var selectedIndex by mutableStateOf(0)
+    var selectedIndex by mutableIntStateOf(0)
         private set
     var defaultAppearance by mutableStateOf(ViewerAppearance())
 

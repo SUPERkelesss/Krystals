@@ -1,5 +1,6 @@
 package com.krystals.app
 
+import androidx.core.content.edit
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
@@ -65,7 +66,7 @@ object MaterialsProject {
     fun getKey(context: Context): String? = prefs(context).getString(PREFS_KEY, null)
 
     fun saveKey(context: Context, key: String) {
-        prefs(context).edit().putString(PREFS_KEY, key).apply()
+        prefs(context).edit { putString(PREFS_KEY, key) }
     }
 
     /**
