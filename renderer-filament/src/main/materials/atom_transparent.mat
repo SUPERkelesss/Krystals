@@ -5,6 +5,8 @@ material {
     depthWrite : true,
     doubleSided : true,
     transparency : twoPassesOneSide,
+    requires : [ tangents ],
+    variables : [ customNormal ],
     parameters : [
         { type : float4, name : baseColor },
         { type : float3, name : backgroundColor },
@@ -18,14 +20,15 @@ fragment {
         prepareMaterial(material);
         vec4 color = materialParams.baseColor;
         // v0.8.33: plain dielectric PBR — no clear coat. Diffuse (baseColor) plus
-        // basic Fresnel reflectance (metallic 0 / roughness 0.32 / reflectance 0.56).
-        // Occupancy sector cutout preserved for partial-occupancy sites.
-        // TEMP DEBUG (v0.8.42): customNormal disabled — mesh normals used directly.
+        // basic Fresnel reflectance. Occupancy sector cutout preserved.
+        // v0.8.43: customNormal restored — the mesh carries its normals encoded in
+        // the TANGENTS quaternion (no NORMAL attribute uploaded), so the sphere's
+        // true smooth normal must be decoded in the vertex block.
         float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
         float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
         color.rgb = mix(color.rgb, materialParams.backgroundColor, fog);
-        vec3 worldN = normalize(getWorldGeometricNormalVector());
+        vec3 worldN = normalize(variable_customNormal.xyz);
         vec3 viewN = normalize(mat3(getViewFromWorldMatrix()) * worldN);
         float clockwiseFromTwelve = fract(atan(viewN.x, viewN.y) / 6.28318530 + 1.0);
         color.a *= mix(0.15, 1.0, step(clockwiseFromTwelve, clamp(materialParams.occupancy, 0.0, 1.0)));
@@ -36,5 +39,16 @@ fragment {
         // IndirectLight + 50% sun directional LightManager light.
         material.roughness = 0.32;
         material.reflectance = 0.56;
+    }
+}
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec4 q = mesh_tangents;
+        vec3 n = vec3(
+            2.0 * (q.x * q.z + q.w * q.y),
+            2.0 * (q.y * q.z - q.w * q.x),
+            1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+        );
+        material.customNormal = vec4(normalize(getWorldFromModelNormalMatrix() * n), 0.0);
     }
 }
