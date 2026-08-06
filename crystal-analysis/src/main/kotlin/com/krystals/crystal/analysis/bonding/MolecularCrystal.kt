@@ -11,28 +11,23 @@ private operator fun Int3.minus(o: Int3) = Int3(x - o.x, y - o.y, z - o.z)
 private operator fun Int3.unaryMinus() = Int3(-x, -y, -z)
 
 /**
- * 判断键网络是否为分子晶体(molecular crystal)。
+ * 原胞归一化键图:把键网络(含 shell/边界映像)折叠回原胞原子集合上的周期图。
  *
- * 判据:分子晶体中每个分子是有限团簇,分子间没有共价键,因此把键网络提升到周期
- * 空间(晶胞偏移 [Int3])后,每个连通分量都是有限的;反之,共价框架、聚合物链、
- * 离子/金属网络会沿周期方向无限延伸。氢键([Bond.rule].[BondRule.isHBond])是
- * 分子间弱相互作用,不参与判据 —— 冰、尿素等氢键晶体仍视为分子晶体。
+ * 节点 = 原胞原子(cellOffset == (0,0,0) 的非 shell 原子);边 = (邻居原胞原子,
+ * 周期偏移)。键的周期偏移 = 两端真实晶胞坐标之差,归一化使跨晶胞键的端点闭合
+ * 回原胞原子 —— 否则单胞内链段的跨晶胞键不会成环,无限聚合物会被误判为分子。
  *
- * 算法(对单个晶胞内键网络):
- * 1. 排除氢键,只保留共价键。
- * 2. 把所有原子归一化到其原胞代表原子(cellOffset == (0,0,0) 的同 site 原子,
- *    分数坐标差为整数平移);键的周期偏移 = 两端真实晶胞坐标之差。归一化使
- *    跨晶胞键的端点闭合回原胞原子 —— 否则单胞内链段的跨晶胞键不会成环,
- *    无限聚合物会被误判为分子。
- * 3. 对每个连通分量做生成树(迭代 DFS);每条非树边与树路径构成一个基本环。
- * 4. 若某基本环沿周期方向的偏移和不为零(如 (0,0,0) -> (0,0,1) 的跨晶胞环),
- *    或原子与其平移映像直接成键(周期自连接),键网络无限延伸 —— 立即返回
- *    false。所有分量通过检查则返回 true。
- *
- * 结果与 [com.krystals.crystal.analysis.model.Expansion] 无关(归一化后等价于
- * 单胞键网络)。孤立原子(无键)视为单原子分子,贡献 true。
+ * 氢键([Bond.rule].[BondRule.isHBond])是分子间弱相互作用,不参与分子判据,
+ * 构建时直接排除。原子与其平移映像成键(周期自连接)时保留自环边
+ * (同 id、偏移非零),由调用方判定是否非法。
  */
-fun BondNetwork.isMolecularCrystal(): Boolean {
+internal data class CellBondGraph(
+    val cellAtoms: List<AtomImage>,               // 原胞原子(归一化目标节点)
+    val edges: Map<Long, List<Pair<Long, Int3>>>, // 原子 id → (邻居原胞原子 id, 周期偏移)
+)
+
+/** 构建 [CellBondGraph]:排除氢键,把所有原子归一化到原胞代表,边带周期偏移。 */
+internal fun BondNetwork.toCellBondGraph(): CellBondGraph {
     val byId = atoms.associateBy { it.id }
     // 原胞原子:非壳且位于零晶胞偏移 —— 归一化的目标节点集合。
     val cellAtoms = atoms.filter { !it.isShell && it.cellOffset == ZERO_OFFSET }
@@ -46,7 +41,6 @@ fun BondNetwork.isMolecularCrystal(): Boolean {
         }
     }
 
-    // 归一化后的原胞图:节点 = 原胞原子,边 = (邻居原胞原子, 周期偏移)。
     val edges = HashMap<Long, MutableList<Pair<Long, Int3>>>()
     for (bond in bonds) {
         // 氢键是分子间弱作用,不参与分子晶体判据(冰/尿素等氢键晶体仍为分子晶体)。
@@ -57,18 +51,38 @@ fun BondNetwork.isMolecularCrystal(): Boolean {
         val rv = rep(v) ?: continue
         val off = v.cellOffset - u.cellOffset
         if (ru.id == rv.id) {
-            // 原子与其平移映像成键:周期自连接(如金属密堆积),非分子晶体。
-            if (off != ZERO_OFFSET) return false
+            // 周期自连接(如金属密堆积):保留自环边,由调用方判定是否非法。
+            edges.getOrPut(ru.id) { mutableListOf() } += ru.id to off
             continue
         }
         edges.getOrPut(ru.id) { mutableListOf() } += rv.id to off
         edges.getOrPut(rv.id) { mutableListOf() } += ru.id to -off
     }
+    return CellBondGraph(cellAtoms, edges)
+}
 
-    // 每个连通分量做生成树;DFS 全边检查:边偏移必须与两端展开位置一致,
-    // 不一致即存在跨晶胞基本环。
+/**
+ * 判断键网络是否为分子晶体(molecular crystal)。
+ *
+ * 判据:分子晶体中每个分子是有限团簇,分子间没有共价键,因此把键网络提升到周期
+ * 空间(晶胞偏移 [Int3])后,每个连通分量都是有限的;反之,共价框架、聚合物链、
+ * 离子/金属网络会沿周期方向无限延伸。氢键([Bond.rule].[BondRule.isHBond])是
+ * 分子间弱相互作用,不参与判据 —— 冰、尿素等氢键晶体仍视为分子晶体。
+ *
+ * 算法(对单个晶胞内键网络,基于共享的 [toCellBondGraph] 归一化图):
+ * 1. 归一化图把跨晶胞键的端点闭合回原胞原子,边带周期偏移。
+ * 2. 对每个连通分量做生成树(迭代 DFS);每条非树边与树路径构成一个基本环。
+ * 3. 若某基本环沿周期方向的偏移和不为零(如 (0,0,0) -> (0,0,1) 的跨晶胞环),
+ *    或原子与其平移映像直接成键(自环边、周期自连接),键网络无限延伸 ——
+ *    立即返回 false。所有分量通过检查则返回 true。
+ *
+ * 结果与 [com.krystals.crystal.analysis.model.Expansion] 无关(归一化后等价于
+ * 单胞键网络)。孤立原子(无键)视为单原子分子,贡献 true。
+ */
+fun BondNetwork.isMolecularCrystal(): Boolean {
+    val g = toCellBondGraph()
     val pos = HashMap<Long, Int3>()
-    for (root in cellAtoms) {
+    for (root in g.cellAtoms) {
         if (root.id in pos) continue
         pos[root.id] = ZERO_OFFSET
         val stack = ArrayDeque<Long>()
@@ -76,13 +90,13 @@ fun BondNetwork.isMolecularCrystal(): Boolean {
         while (stack.isNotEmpty()) {
             val u = stack.removeLast()
             val pu = pos.getValue(u)
-            val uEdges = edges[u] ?: continue
-            for ((v, off) in uEdges) {
+            for ((v, off) in g.edges[u] ?: continue) {
                 val pv = pos[v]
                 if (pv == null) {
                     pos[v] = pu + off
                     stack.addLast(v)
                 } else if (pu + off != pv) {
+                    // 含自环(ru==rv、off≠0)与跨晶胞基本环:无限延伸,非分子晶体。
                     return false
                 }
             }
