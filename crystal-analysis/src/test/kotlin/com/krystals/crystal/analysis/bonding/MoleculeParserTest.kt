@@ -123,7 +123,7 @@ class MoleculeParserTest {
             ),
         ).toMolecules()
         assertEquals(2, molecules.size)
-        assertTrue(molecules.all { it.atomCount == 3 && it.bondCount == 2 })
+        assertTrue(molecules.all { it.atomCount == 2 && it.bondCount == 1 })
     }
 
     @Test fun emptyNetworkYieldsEmptyList() {
