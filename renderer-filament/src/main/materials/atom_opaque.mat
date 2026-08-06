@@ -15,10 +15,10 @@ fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         vec4 color = materialParams.baseColor;
-        // v0.8.29: atom = clear-coat plastic ball (Filament recommended PBR config).
-        // Base layer is a matte plastic dielectric; a smooth clear coat on top gives
-        // the glossy plastic-ball look. Lighting (ambient 60% / sun 40%) is provided
-        // by the scene's IndirectLight + directional LightManager light.
+        // v0.8.33: plain dielectric PBR — no clear coat. Diffuse (baseColor) plus
+        // basic Fresnel reflectance (metallic 0 / roughness 0.32 / reflectance 0.56).
+        // Lighting (ambient 60% / sun 40%) is provided by the scene's IndirectLight +
+        // directional LightManager light.
         float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
         float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
