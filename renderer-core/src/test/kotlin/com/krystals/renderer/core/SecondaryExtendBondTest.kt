@@ -101,25 +101,6 @@ class SecondaryExtendBondTest {
     }
 
     @Test
-    fun extendingCaC_neverShowsCaCaSelfImages() {
-        // The metal-extend preference (METALS_ONLY, the default) sets Ca-Ca extendAtoB=true.
-        // The same-atom periodic self-images (Ca1-Ca1 at 3.87 A) must still never render —
-        // they are not chemical bonds (v0.8.41).
-        val structure = caC2Structure()
-        val net = BondDetector.buildNetwork(structure, BondConfiguration(extendingRules(structure)))
-        val scene = CrystalSceneBuilder().build(structure, net)
-        val atomById = net.atoms.associateBy { it.id }
-        val caCa = scene.objects.filterIsInstance<BondInstance>()
-            .filter { it.visible }
-            .count { b ->
-                val a = atomById.getValue(b.bond.atomA)
-                val c = atomById.getValue(b.bond.atomB)
-                a.species.symbol == "Ca" && c.species.symbol == "Ca"
-            }
-        assertEquals(0, caCa, "no Ca-Ca self-image bonds even with metal extension")
-    }
-
-    @Test
     fun nonExtendingSceneKeepsNoCaCaAndFullCoordination() {
         // Regression: without extension rules the single cell shows no Ca-Ca self-image bonds,
         // keeps the C-C dumbbells, and (since v0.8.40) the full Ca-C coordination (>= 8).

@@ -233,16 +233,20 @@ class CrystalSceneBuilder {
 
             // Per v0.8.36/0.8.40: single-cell ("no extension") bond visibility.
             //  - primary-primary bonds: always shown;
-            //  - same-atom periodic self-images (Ca-Ca metal bonds): NEVER shown — the bond
-            //    between an atom and its own periodic image is not a chemical bond, and the
-            //    metal-extend preference (METALS_ONLY) would otherwise resurrect the Ca-Ca
-            //    "bonds" in the default CaC2 view (v0.8.41);
+            //  - same-atom periodic self-images (Ca-Ca metal bonds): only when the rule extends
+            //    the cell (the CaC2 8/4/0 acceptance forbids them in the non-extended view);
             //  - external-shell bonds: gated by the rule's extend flag (primary extension);
             //  - boundary-image bonds (at least one end is a displayed face image): always
-            //    shown — both ends are displayed atoms, their bonds are part of the picture.
+            //    shown — both ends are displayed atoms, their bonds are part of the picture
+            //    (v0.8.38 fixed the totally-bondless case, v0.8.40 removes the remaining
+            //    non-metal-end filter so e.g. NaCl face images keep ALL their bonds).
             val externalAllowed = when {
                 !start.isShell && !end.isShell -> true
-                isSameAtomPeriodicImage(start, end) -> false
+                // Same-atom periodic self-images are always across the cell wall, so pass
+                // outsideAtomIsExternal=true (a boundary image would otherwise short-circuit
+                // shouldExtendAcrossCell to true and leak the bond into the non-extended view).
+                isSameAtomPeriodicImage(start, end) ->
+                    bond.rule.shouldExtendAcrossCell(start.siteId, true)
                 else -> {
                     if (start.isExternalShell || end.isExternalShell) {
                         // Genuine out-of-cell neighbours stay behind the rule's extend flag.
