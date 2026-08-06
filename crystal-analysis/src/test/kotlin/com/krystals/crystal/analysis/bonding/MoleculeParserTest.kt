@@ -6,6 +6,7 @@ import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.periodic.Int3
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
@@ -37,6 +38,54 @@ class MoleculeParserTest {
 
     private fun network(atoms: List<AtomImage>, bonds: List<Bond>): BondNetwork =
         BondNetwork(atoms, bonds, dummyStructure, Expansion())
+
+    // ── 端到端:BondDetector 真实成键 ─────────────────────────────────────
+
+    private fun buildNet(sites: List<Site>, aLength: Double): BondNetwork {
+        val structure = CrystalStructure(
+            "test", Lattice(aLength, aLength, aLength, 90.0, 90.0, 90.0),
+            SpaceGroupCatalog.resolve("P1", 1), listOf(SymmetryOperation.IDENTITY), sites,
+        )
+        return BondDetector.buildNetwork(structure, BondConfiguration())
+    }
+
+    @Test fun waterCrystalParsesToTwoMolecules() {
+        // 单胞 2 个独立水分子(a=10,4 条 O-H 键)→ 2 个 Molecule,名称 "H2O"。
+        val net = buildNet(
+            listOf(
+                Site("O", "O1", Species("O"), FractionalCoordinate(0.3, 0.3, 0.3)),
+                Site("H", "H1", Species("H"), FractionalCoordinate(0.3, 0.3, 0.396)),
+                Site("H", "H2", Species("H"), FractionalCoordinate(0.3, 0.396, 0.3)),
+                Site("O", "O2", Species("O"), FractionalCoordinate(0.7, 0.7, 0.7)),
+                Site("H", "H3", Species("H"), FractionalCoordinate(0.7, 0.7, 0.796)),
+                Site("H", "H4", Species("H"), FractionalCoordinate(0.7, 0.796, 0.7)),
+            ),
+            10.0,
+        )
+        val molecules = net.toMolecules()
+        assertEquals(2, molecules.size)
+        assertTrue(molecules.all { it.name == "H2O" })
+        assertTrue(molecules.all { it.atomCount == 3 && it.bondCount == 2 })
+    }
+
+    @Test fun whitePhosphorusParsesToOneP4Molecule() {
+        // P4 四面体,中心 (0.25,0.25,0.25),P-P 键长 2.21 Å(a=18.5,d=0.0423),
+        // 6 条分子内键 → 1 个 Molecule,名 "P4",6 键。
+        val d = 0.0423
+        val c = 0.25
+        val molecules = buildNet(
+            listOf(
+                Site("P", "P1", Species("P"), FractionalCoordinate(c + d, c + d, c + d)),
+                Site("P", "P2", Species("P"), FractionalCoordinate(c - d, c - d, c + d)),
+                Site("P", "P3", Species("P"), FractionalCoordinate(c - d, c + d, c - d)),
+                Site("P", "P4", Species("P"), FractionalCoordinate(c + d, c - d, c - d)),
+            ),
+            18.5,
+        ).toMolecules()
+        assertEquals(1, molecules.size)
+        assertEquals("P4", molecules[0].name)
+        assertEquals(6, molecules[0].bondCount)
+    }
 
     // ── 算法逻辑:手造原子/键 ──────────────────────────────────────────────
 
