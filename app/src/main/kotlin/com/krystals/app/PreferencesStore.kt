@@ -73,6 +73,16 @@ object PreferencesStore {
     const val KEY_EXPORT_QUALITY = "export_quality"
     const val KEY_EXPORT_SHOW_AXES = "export_show_axes"
     const val KEY_EXPORT_SHOW_MEASUREMENTS = "export_show_measurements"
+    // Per v0.8.39: keys for runtime prefs written outside SettingsValues (moved from ad-hoc
+    // string literals scattered across KrystalsRoot/Dialogs/MainActivity/PresetLibrary/MaterialsProject).
+    const val KEY_MP_CAUTION_DISMISSED = "mp_caution_dismissed"
+    const val KEY_BG_FOLLOW_THEME = "bg_follow_theme"
+    const val KEY_PENDING_LANGUAGE_RESTART = "pending_language_restart"
+    const val KEY_LAUNCH_COUNT = "launch_count"
+    const val KEY_LAST_UPDATE_CHECK_MS = "last_update_check_ms"
+    const val KEY_SKIPPED_VERSION_CODE = "skipped_version_code"
+    const val KEY_PRESET_EXPANDED_CATEGORIES = "preset_expanded_categories"
+    const val KEY_MP_API_KEY = "mp_api_key"
 
     /** Read [SettingsValues] from persistent storage, falling back to defaults. */
     fun load(prefs: SharedPreferences): SettingsValues {

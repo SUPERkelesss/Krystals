@@ -30,16 +30,9 @@ data class MpSearchResult(
 
 object MaterialsProject {
     private const val BASE_HOST = "api.materialsproject.org"
-    private const val PREFS_KEY = "mp_api_key"
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private val client: OkHttpClient = HttpClients.default
 
-    private val testClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .build()
+    private val testClient: OkHttpClient = HttpClients.quick
 
     /**
      * Test connectivity to the Materials Project API host. Any HTTP response (even 4xx/5xx)
@@ -53,7 +46,7 @@ object MaterialsProject {
                 .header("User-Agent", "Krystals/${com.krystals.app.BuildConfig.VERSION_NAME}")
                 .build()
             testClient.newCall(request).execute().use { response ->
-                Log.d("MP", "connection test: HTTP ${response.code}")
+                debugLog("MP") { "connection test: HTTP ${response.code}" }
                 true
             }
         }.getOrDefault(false)
@@ -61,12 +54,12 @@ object MaterialsProject {
 
     private fun prefs(context: Context): SharedPreferences = context.getSharedPreferences("krystals", Context.MODE_PRIVATE)
 
-    fun hasKey(context: Context): Boolean = !prefs(context).getString(PREFS_KEY, null).isNullOrBlank()
+    fun hasKey(context: Context): Boolean = !prefs(context).getString(PreferencesStore.KEY_MP_API_KEY, null).isNullOrBlank()
 
-    fun getKey(context: Context): String? = prefs(context).getString(PREFS_KEY, null)
+    fun getKey(context: Context): String? = prefs(context).getString(PreferencesStore.KEY_MP_API_KEY, null)
 
     fun saveKey(context: Context, key: String) {
-        prefs(context).edit { putString(PREFS_KEY, key) }
+        prefs(context).edit { putString(PreferencesStore.KEY_MP_API_KEY, key) }
     }
 
     /**
@@ -105,14 +98,14 @@ object MaterialsProject {
             client.newCall(request).execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
-                    Log.d("MP", "validateKey ok: HTTP ${response.code} bodyLen=${body.length}")
+                    debugLog("MP") { "validateKey ok: HTTP ${response.code} bodyLen=${body.length}" }
                     body.isNotBlank()
                 } else {
-                    Log.w("MP", "validateKey failed: HTTP ${response.code} body=${body.take(300)}")
+                    warnLog("MP") { "validateKey failed: HTTP ${response.code} body=${body.take(300)}" }
                     false
                 }
             }
-        }.onFailure { Log.w("MP", "validateKey exception", it) }.getOrDefault(false)
+        }.onFailure { warnLog("MP", throwable = it) { "validateKey exception" } }.getOrDefault(false)
     }
 
     /**
@@ -131,7 +124,7 @@ object MaterialsProject {
             client.newCall(request).execute().use { response ->
                 val body = response.body?.string() ?: ""
                 if (!response.isSuccessful) {
-                    Log.w("MP", "search failed: HTTP ${response.code} url=$url body=${body.take(300)}")
+                    warnLog("MP") { "search failed: HTTP ${response.code} url=$url body=${body.take(300)}" }
                     error("HTTP ${response.code}: ${body.take(200)}")
                 }
                 val json = JSONObject(body)
@@ -150,7 +143,7 @@ object MaterialsProject {
                 }
                 // Per v0.7.1: sort by energy_above_hull ascending (nulls last).
                 val sorted = results.sortedWith(compareBy(nullsLast()) { it.energyAboveHull })
-                Log.d("MP", "search ok: ${sorted.size} items for '$query'")
+                debugLog("MP") { "search ok: ${sorted.size} items for '$query'" }
                 sorted
             }
         }
@@ -192,11 +185,10 @@ object MaterialsProject {
             } else {
                 parsed.structure
             }
-            Log.d(
-                "MP",
+            debugLog("MP") {
                 "downloadCif ok: $materialId -> ${finalStructure.sites.size} sites, " +
-                    "sg=${finalStructure.spaceGroup.symbol}, conventional=${finalStructure.isConventional}",
-            )
+                    "sg=${finalStructure.spaceGroup.symbol}, conventional=${finalStructure.isConventional}"
+            }
             parsed.copy(structure = finalStructure)
         }
     }
@@ -207,7 +199,7 @@ object MaterialsProject {
         client.newCall(apiRequest(key, url)).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                Log.w("MP", "fetchNextgenStructure failed: HTTP ${response.code} id=$materialId body=${body.take(300)}")
+                warnLog("MP") { "fetchNextgenStructure failed: HTTP ${response.code} id=$materialId body=${body.take(300)}" }
                 error("HTTP ${response.code}: ${body.take(200)}")
             }
             val data = JSONObject(body).optJSONArray("data")

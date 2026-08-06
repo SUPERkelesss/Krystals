@@ -92,7 +92,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-private data class PendingOpen(val uri: Uri, val name: String, val text: String, val candidates: List<Int>)
+private data class PendingOpen(val uri: Uri, val name: String, val text: String, val candidates: List<Int>, val document: com.krystals.crystal.io.CifDocument)
 
 /** Per v0.8.27: user-toggleable search filter types shown in the filter bar. */
 
@@ -126,19 +126,19 @@ fun KrystalsRoot(
     val preferences = remember { activity.getSharedPreferences("krystals", 0) }
     var settingsValues by remember { mutableStateOf(PreferencesStore.load(preferences)) }
     var themeMode by remember {
-        mutableStateOf(runCatching { ThemeMode.valueOf(preferences.getString("theme", ThemeMode.SYSTEM.name)!!) }.getOrDefault(ThemeMode.SYSTEM))
+        mutableStateOf(runCatching { ThemeMode.valueOf(preferences.getString(PreferencesStore.KEY_THEME, ThemeMode.SYSTEM.name)!!) }.getOrDefault(ThemeMode.SYSTEM))
     }
     var language by remember {
-        mutableStateOf(preferences.getString("language", if (java.util.Locale.getDefault().language == "zh") "zh" else "en") ?: "en")
+        mutableStateOf(preferences.getString(PreferencesStore.KEY_LANGUAGE, defaultSystemLanguage()) ?: "en")
     }
     val systemDark = isSystemInDarkTheme()
     var backgroundFollowTheme by remember {
-        mutableStateOf(preferences.getBoolean("bg_follow_theme", true))
+        mutableStateOf(preferences.getBoolean(PreferencesStore.KEY_BG_FOLLOW_THEME, true))
     }
     fun applyLanguage(value: String) {
         if (language == value) return
         language = value
-        preferences.edit { putString("language", value); putBoolean("pending_language_restart", true) }
+        preferences.edit { putString(PreferencesStore.KEY_LANGUAGE, value); putBoolean(PreferencesStore.KEY_PENDING_LANGUAGE_RESTART, true) }
         activity.recreate()
     }
     val onSettingsChange: (SettingsValues) -> Unit = { sv ->
@@ -166,12 +166,12 @@ fun KrystalsRoot(
     val localizedContext = remember(language) { activity.createConfigurationContext(localizedConfiguration) }
     // Per v0.8.26: show a loading overlay on language-switch restart.
     var languageSwitching by remember {
-        mutableStateOf(preferences.getBoolean("pending_language_restart", false))
+        mutableStateOf(preferences.getBoolean(PreferencesStore.KEY_PENDING_LANGUAGE_RESTART, false))
     }
     LaunchedEffect(languageSwitching) {
         if (languageSwitching) {
             kotlinx.coroutines.delay(500)
-            preferences.edit { putBoolean("pending_language_restart", false) }
+            preferences.edit { putBoolean(PreferencesStore.KEY_PENDING_LANGUAGE_RESTART, false) }
             languageSwitching = false
         }
     }
@@ -189,7 +189,7 @@ fun KrystalsRoot(
     }
     fun applyBackgroundFollowTheme(value: Boolean) {
         backgroundFollowTheme = value
-        preferences.edit { putBoolean("bg_follow_theme", value) }
+        preferences.edit { putBoolean(PreferencesStore.KEY_BG_FOLLOW_THEME, value) }
         if (value) {
             val dark = themeMode == ThemeMode.DARK || themeMode == ThemeMode.SYSTEM && systemDark
             applyViewerBackground(dark)
@@ -202,7 +202,7 @@ fun KrystalsRoot(
     }
     fun applyTheme(mode: ThemeMode) {
         themeMode = mode
-        preferences.edit { putString("theme", mode.name) }
+        preferences.edit { putString(PreferencesStore.KEY_THEME, mode.name) }
         applyViewerBackground(mode == ThemeMode.DARK || mode == ThemeMode.SYSTEM && systemDark)
     }
     LaunchedEffect(themeMode, systemDark) {
@@ -260,8 +260,8 @@ fun KrystalsRoot(
     // Per v0.2.2: prompt for sponsorship on the 5th, 20th, 50th, and every 50th launch thereafter.
     // Per v0.4.0: once the device holds a valid activation code the automatic prompt is suppressed.
     LaunchedEffect(Unit) {
-        val count = preferences.getInt("launch_count", 0) + 1
-        preferences.edit { putInt("launch_count", count) }
+        val count = preferences.getInt(PreferencesStore.KEY_LAUNCH_COUNT, 0) + 1
+        preferences.edit { putInt(PreferencesStore.KEY_LAUNCH_COUNT, count) }
         val prompt = count == 5 || count == 20 || count == 50 || (count > 50 && count % 50 == 0)
         if (prompt && !ActivationManager.isActivated(activity)) { sponsorLaunchCount = count; sponsorOpen = true }
     }
@@ -272,13 +272,13 @@ fun KrystalsRoot(
     LaunchedEffect(Unit) {
         if (!settingsValues.autoCheckUpdate) return@LaunchedEffect
         val now = System.currentTimeMillis()
-        val lastChecked = preferences.getLong("last_update_check_ms", 0L)
+        val lastChecked = preferences.getLong(PreferencesStore.KEY_LAST_UPDATE_CHECK_MS, 0L)
         if (now - lastChecked < UPDATE_CHECK_INTERVAL_MS) return@LaunchedEffect
-        preferences.edit { putLong("last_update_check_ms", now) }
+        preferences.edit { putLong(PreferencesStore.KEY_LAST_UPDATE_CHECK_MS, now) }
         updateScope.launch {
             val info = fetchUpdateInfo()
             if (info != null && info.versionCode > com.krystals.app.BuildConfig.VERSION_CODE) {
-                val skipped = preferences.getInt("skipped_version_code", -1)
+                val skipped = preferences.getInt(PreferencesStore.KEY_SKIPPED_VERSION_CODE, -1)
                 if (info.versionCode > skipped) {
                     updateInfo = info
                     updateDialogOpen = true
@@ -526,7 +526,7 @@ fun KrystalsRoot(
                     val document = CifCodec.parse(text)
                     val candidates = CifCodec.structuralBlockIndices(document)
                     require(candidates.isNotEmpty()) { "No crystal structure found" }
-                    PendingOpen(uri, FileRepository.displayName(resolver, uri), text, candidates)
+                    PendingOpen(uri, FileRepository.displayName(resolver, uri), text, candidates, document)
                 }
             }
             val pending = result.getOrNull()
@@ -564,7 +564,7 @@ fun KrystalsRoot(
                     val contentWithComments = CifComments.inject(content, tab.comments)
                     withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, contentWithComments) }
                     tab.uri = uri; tab.isNew = false; tab.dirty = false; tab.savedName = tab.name
-                    tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell)
+                    tab.parsed = withContext(Dispatchers.Default) { CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell) }
                 }.onSuccess {
                     showMessage("Saved ${tab.name}")
                 }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
@@ -590,7 +590,7 @@ fun KrystalsRoot(
                 // Per v0.7.0: inject user comments into CIF before writing.
                 val contentWithComments = CifComments.inject(content, tab.comments)
                 withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, contentWithComments) }
-                tab.parsed = CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell)
+                tab.parsed = withContext(Dispatchers.Default) { CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell) }
                 tab.dirty = false
             }.onSuccess { showMessage("Saved ${tab.name}"); afterSave() }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
         }
@@ -602,19 +602,21 @@ fun KrystalsRoot(
         val finalName = saveNameDraft.trim().ifEmpty { tab.name.removeSuffix(".cif") }.ensureCifExtension()
         saveNameOpen = false
         if (saveNameIsPreset) {
-            runCatching {
-                PresetRepository.saveToPreset(
-                    activity,
-                    tab.parsed,
-                    tab.structure,
-                    tab.bondConfiguration,
-                    tab.renderConfiguration.toCifDisplayMetadata(),
-                    finalName,
-                    tab.comments,
-                    targetGroup = saveNameGroup.ifBlank { PresetRepository.MY_PRESETS_GROUP },
-                )
-                showMessage("Saved to presets")
-            }.onFailure { showMessage(it.message ?: "Save failed") }
+            scope.launch {
+                runCatching {
+                    PresetRepository.saveToPreset(
+                        activity,
+                        tab.parsed,
+                        tab.structure,
+                        tab.bondConfiguration,
+                        tab.renderConfiguration.toCifDisplayMetadata(),
+                        finalName,
+                        tab.comments,
+                        targetGroup = saveNameGroup.ifBlank { PresetRepository.MY_PRESETS_GROUP },
+                    )
+                }.onSuccess { showMessage("Saved to presets") }
+                    .onFailure { showMessage(it.message ?: "Save failed") }
+            }
         } else {
             tab.name = finalName
             save(tab)
@@ -709,7 +711,7 @@ fun KrystalsRoot(
                             settingsValues = defaults
                             PreferencesStore.save(preferences, defaults)
                             if (language != defaults.language && defaults.language != "auto") applyLanguage(defaults.language)
-                            if (themeMode != defaults.theme) { themeMode = defaults.theme; preferences.edit { putString("theme", defaults.theme.name) } }
+                            if (themeMode != defaults.theme) { themeMode = defaults.theme; preferences.edit { putString(PreferencesStore.KEY_THEME, defaults.theme.name) } }
                         },
                         onSave = { tab ->
                             // Per v0.8.36: confirm the file name in a dialog first.
@@ -829,7 +831,7 @@ fun KrystalsRoot(
                     val info = fetchUpdateInfo()
                     updateChecking = false
                     if (info != null && info.versionCode > com.krystals.app.BuildConfig.VERSION_CODE) {
-                        val skipped = preferences.getInt("skipped_version_code", -1)
+                        val skipped = preferences.getInt(PreferencesStore.KEY_SKIPPED_VERSION_CODE, -1)
                         if (info.versionCode > skipped) {
                             updateInfo = info
                             updateDialogOpen = true
@@ -896,8 +898,10 @@ fun KrystalsRoot(
         val saveLabel = localized("保存", "Save")
         val cancelLabel = localized("取消", "Cancel")
         // Per v0.8.36: save-to-preset also picks the target user group (bundled groups excluded).
-        val presetGroups = remember(saveNameOpen) {
-            if (saveNameIsPreset) PresetRepository.listGroups(activity).filter { it.isUserGroup }.map { it.name } else emptyList()
+        // Per v0.8.39: group list loads off the UI thread.
+        var presetGroups by remember(saveNameOpen) { mutableStateOf(emptyList<String>()) }
+        LaunchedEffect(saveNameOpen, saveNameIsPreset) {
+            if (saveNameIsPreset) presetGroups = PresetRepository.listGroups(activity).filter { it.isUserGroup }.map { it.name }
         }
         var groupMenuOpen by remember { mutableStateOf(false) }
         @Composable fun groupLabel(name: String): String =
@@ -997,6 +1001,7 @@ private fun KrystalsRootDialogs(
     proceedToMp: () -> Unit,
     voronoiWarningMessage: String,
 ) {
+    val scope = rememberCoroutineScope()
     var computing by computingState
     var computationJob by computationJobState
     var voronoiWarningOpen by voronoiWarningOpenState
@@ -1064,14 +1069,19 @@ private fun KrystalsRootDialogs(
         )
     }
     pendingOpen?.let { pending ->
-        val document = remember(pending) { CifCodec.parse(pending.text) }
+        val document = pending.document
         AlertDialog(
             onDismissRequest = { pendingOpen = null },
             title = { Text(localized("选择结构", "Select structure")) },
             text = { Column { pending.candidates.forEach { index -> TextButton(onClick = {
-                runCatching { CifCodec.parseStructure(pending.text, index, autoConvertConventional = true) }
-                    .onSuccess { parsed -> pendingOpen = null; openParsed(parsed, pending.name, pending.uri) }
-                    .onFailure { if (it is com.krystals.crystal.core.CifParseException) { pendingOpen = null; cifWarningOpen = true } else showMessage(it.message ?: "Unable to open CIF") }
+                // Per v0.8.39: parseStructure is heavy — run off the UI thread (matches loadUri).
+                scope.launch {
+                    val parsed = withContext(Dispatchers.Default) {
+                        runCatching { CifCodec.parseStructure(pending.text, index, autoConvertConventional = true) }
+                    }
+                    parsed.onSuccess { pendingOpen = null; openParsed(it, pending.name, pending.uri) }
+                        .onFailure { if (it is com.krystals.crystal.core.CifParseException) { pendingOpen = null; cifWarningOpen = true } else showMessage(it.message ?: "Unable to open CIF") }
+                }
             }) { Text(document.blocks[index].name) } } } },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { pendingOpen = null }) { Text(stringResource(R.string.cancel)) } },
@@ -1117,13 +1127,15 @@ private fun KrystalsRootDialogs(
                     Row {
                         TextButton(onClick = { save(tab) { viewModel.close(index); closeRequest = null } }) { Text(stringResource(R.string.save)) }
                         TextButton(onClick = {
-                            runCatching {
-                                PresetRepository.saveToPreset(
-                                    activity, tab.parsed, tab.structure, tab.bondConfiguration,
-                                    tab.renderConfiguration.toCifDisplayMetadata(), tab.name, tab.comments,
-                                )
-                            }.onSuccess { showMessage("Saved to presets"); viewModel.close(index); closeRequest = null }
-                             .onFailure { showMessage(it.message ?: "Save failed") }
+                            scope.launch {
+                                runCatching {
+                                    PresetRepository.saveToPreset(
+                                        activity, tab.parsed, tab.structure, tab.bondConfiguration,
+                                        tab.renderConfiguration.toCifDisplayMetadata(), tab.name, tab.comments,
+                                    )
+                                }.onSuccess { showMessage("Saved to presets"); viewModel.close(index); closeRequest = null }
+                                    .onFailure { showMessage(it.message ?: "Save failed") }
+                            }
                         }) { Text(stringResource(R.string.save_to_presets)) }
                     }
                     Row {
@@ -1200,7 +1212,7 @@ private fun KrystalsRootDialogs(
                 if (updateDownloadProgress == null) {
                     Row {
                         TextButton(onClick = {
-                            preferences.edit { putInt("skipped_version_code", info.versionCode) }
+                            preferences.edit { putInt(PreferencesStore.KEY_SKIPPED_VERSION_CODE, info.versionCode) }
                             updateDialogOpen = false
                         }) { Text(localized("跳过该版本", "Skip This Version")) }
                         TextButton(onClick = { updateDialogOpen = false }) { Text(localized("暂不更新", "Update Later")) }
@@ -1240,7 +1252,7 @@ private fun KrystalsRootDialogs(
             // code, show the premium-content dialog instead of the API-key flow.
             when {
                 !ActivationManager.isActivated(activity) -> mpPremiumOpen = true
-                !preferences.getBoolean("mp_caution_dismissed", false) -> mpCautionOpen = true
+                !preferences.getBoolean(PreferencesStore.KEY_MP_CAUTION_DISMISSED, false) -> mpCautionOpen = true
                 MaterialsProject.hasKey(activity) -> mpSearchOpen = true
                 else -> mpKeyDialogOpen = true
             }

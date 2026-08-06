@@ -22,9 +22,7 @@ import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.measure.MeasurementSelection as LockedMeasurement
 import com.krystals.interaction.state.InspectionState
 import com.krystals.interaction.state.InteractionState
-import com.krystals.interaction.state.InteractionReducer
 import com.krystals.interaction.state.SelectionState
-import com.krystals.interaction.state.ViewerCommand
 import com.krystals.interaction.state.ViewerDocumentState
 import com.krystals.interaction.state.VisibilityState as ViewerVisibility
 import com.krystals.renderer.core.style.RenderConfiguration
@@ -109,7 +107,9 @@ class DocumentTab(
     var interactionState by mutableStateOf(InteractionState())
     var visibility: ViewerVisibility
         get() = interactionState.document.visibility
-        set(value) { interactionState = InteractionReducer.reduce(interactionState, ViewerCommand.SetVisibility(value)) }
+        // Per v0.8.39: F4 — plain state setter, same as the other interaction properties; the
+        // reducer stays reserved for user-gesture command flow (ViewerBackendHost).
+        set(value) { interactionState = interactionState.copy(document = interactionState.document.copy(visibility = value)) }
     var selectedAtomIds: List<Long>
         get() = interactionState.document.selection.selectedAtomIds
         set(value) { interactionState = interactionState.copy(document = interactionState.document.copy(selection = SelectionState(value))) }

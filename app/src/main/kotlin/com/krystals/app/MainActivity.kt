@@ -20,8 +20,8 @@ class MainActivity : ComponentActivity() {
 
     override fun attachBaseContext(newBase: Context) {
         val preferences = newBase.getSharedPreferences("krystals", Context.MODE_PRIVATE)
-        val fallback = if (Locale.getDefault().language == "zh") "zh" else "en"
-        val language = preferences.getString("language", fallback) ?: fallback
+        val fallback = defaultSystemLanguage()
+        val language = preferences.getString(PreferencesStore.KEY_LANGUAGE, fallback) ?: fallback
         val configuration = Configuration(newBase.resources.configuration).apply {
             setLocale(Locale.forLanguageTag(if (language == "zh") "zh-CN" else "en"))
         }

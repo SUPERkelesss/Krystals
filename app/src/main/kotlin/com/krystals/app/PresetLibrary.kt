@@ -76,7 +76,9 @@ internal fun PresetLibraryScreen(
     // 5-filter bar (formula/element count/crystal system/point group/space group), per-file
     // checkboxes with a batch toolbar (open / move to / delete), and user groups
     // ("我的预设" plus groups created via 新建组) that can be renamed.
-    var groups by remember { mutableStateOf(PresetRepository.listGroups(context)) }
+    // Per v0.8.39: groups load off the UI thread (listGroups is a suspend disk scan).
+    var groups by remember { mutableStateOf(emptyList<PresetGroup>()) }
+    LaunchedEffect(Unit) { groups = PresetRepository.listGroups(context) }
     var metas by remember { mutableStateOf<Map<PresetEntry, PresetMeta>>(emptyMap()) }
     var searchQuery by remember { mutableStateOf("") }
     var filterState by remember { mutableStateOf(SearchFilterState()) }
@@ -92,7 +94,7 @@ internal fun PresetLibraryScreen(
     @Composable fun groupLabel(name: String): String =
         if (name == PresetRepository.MY_PRESETS_GROUP) localized("我的预设", "My Presets") else name
     val scope = rememberCoroutineScope()
-    val EXPANDED_KEY = "preset_expanded_categories"
+    val EXPANDED_KEY = PreferencesStore.KEY_PRESET_EXPANDED_CATEGORIES
     var expanded by remember {
         mutableStateOf(
             preferences.getString(EXPANDED_KEY, PresetRepository.MY_PRESETS_GROUP)!!.split(",").filter { it.isNotBlank() }.toSet()
@@ -102,7 +104,7 @@ internal fun PresetLibraryScreen(
         expanded = if (cat in expanded) expanded - cat else expanded + cat
         preferences.edit { putString(EXPANDED_KEY, expanded.joinToString(",")) }
     }
-    fun refresh() { groups = PresetRepository.listGroups(context) }
+    fun refresh() { scope.launch { groups = PresetRepository.listGroups(context) } }
 
     // Per v0.8.34: parse filter metadata for every preset off the UI thread.
     // Per v0.8.35: cache-first — only files whose last-modified stamp is missing/stale get
@@ -175,14 +177,18 @@ internal fun PresetLibraryScreen(
         }
     }
     fun deleteSelected() {
-        selected.filter { it.source == PresetSource.USER }.forEach { PresetRepository.deletePreset(context, it) }
-        selected = emptySet()
-        refresh()
+        scope.launch {
+            selected.filter { it.source == PresetSource.USER }.forEach { PresetRepository.deletePreset(context, it) }
+            selected = emptySet()
+            refresh()
+        }
     }
     fun moveSelected(targetGroup: String) {
-        selected.filter { it.source == PresetSource.USER }.forEach { PresetRepository.movePreset(context, it, targetGroup) }
-        selected = emptySet()
-        refresh()
+        scope.launch {
+            selected.filter { it.source == PresetSource.USER }.forEach { PresetRepository.movePreset(context, it, targetGroup) }
+            selected = emptySet()
+            refresh()
+        }
     }
 
     // Per v0.8.34: full-screen page (like the COD search screen). Per v0.8.35: rendered as a
@@ -278,11 +284,13 @@ internal fun PresetLibraryScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (name.isNotBlank()) {
-                        if (PresetRepository.createGroup(context, name) != null) refresh()
-                        else onMessage(createError)
+                    scope.launch {
+                        if (name.isNotBlank()) {
+                            if (PresetRepository.createGroup(context, name) != null) refresh()
+                            else onMessage(createError)
+                        }
+                        newGroupOpen = false
                     }
-                    newGroupOpen = false
                 }) { Text(stringResource(R.string.confirm)) }
             },
             dismissButton = { TextButton(onClick = { newGroupOpen = false }) { Text(stringResource(R.string.cancel)) } },
@@ -300,9 +308,11 @@ internal fun PresetLibraryScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (!PresetRepository.renameGroup(context, group.name, name)) onMessage(renameError)
-                    renameTarget = null
-                    refresh()
+                    scope.launch {
+                        if (!PresetRepository.renameGroup(context, group.name, name)) onMessage(renameError)
+                        renameTarget = null
+                        refresh()
+                    }
                 }) { Text(stringResource(R.string.confirm)) }
             },
             dismissButton = { TextButton(onClick = { renameTarget = null }) { Text(stringResource(R.string.cancel)) } },
@@ -320,9 +330,11 @@ internal fun PresetLibraryScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (!PresetRepository.renamePreset(context, entry, name)) onMessage(renameError)
-                    renameFileTarget = null
-                    refresh()
+                    scope.launch {
+                        if (!PresetRepository.renamePreset(context, entry, name)) onMessage(renameError)
+                        renameFileTarget = null
+                        refresh()
+                    }
                 }) { Text(stringResource(R.string.confirm)) }
             },
             dismissButton = { TextButton(onClick = { renameFileTarget = null }) { Text(stringResource(R.string.cancel)) } },
@@ -370,9 +382,11 @@ internal fun PresetLibraryScreen(
             text = { Text(groupDeleteMessage) },
             confirmButton = {
                 TextButton(onClick = {
-                    if (!PresetRepository.deleteGroup(context, group.name)) onMessage(groupDeleteError)
-                    deleteGroupTarget = null
-                    refresh()
+                    scope.launch {
+                        if (!PresetRepository.deleteGroup(context, group.name)) onMessage(groupDeleteError)
+                        deleteGroupTarget = null
+                        refresh()
+                    }
                 }) { Text(stringResource(R.string.confirm)) }
             },
             dismissButton = { TextButton(onClick = { deleteGroupTarget = null }) { Text(stringResource(R.string.cancel)) } },

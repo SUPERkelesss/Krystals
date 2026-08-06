@@ -24,14 +24,10 @@ internal data class UpdateInfo(
 
 internal suspend fun fetchUpdateInfo(): UpdateInfo? = withContext(Dispatchers.IO) {
     runCatching {
-        val client = okhttp3.OkHttpClient.Builder()
-            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-            .build()
         val request = okhttp3.Request.Builder()
             .url("https://www.kelesss.art/lib/krystals-release/current_version.json")
             .build()
-        client.newCall(request).execute().use { response ->
+        HttpClients.quick.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return@withContext null
             val body = response.body?.string() ?: return@withContext null
             val json = org.json.JSONObject(body)
@@ -53,12 +49,8 @@ internal suspend fun downloadAndInstallApk(
 ): Boolean = withContext(Dispatchers.IO) {
     runCatching {
         val downloadUrl = "https://www.kelesss.art/lib/krystals-release/$packageName"
-        val client = okhttp3.OkHttpClient.Builder()
-            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-            .build()
         val request = okhttp3.Request.Builder().url(downloadUrl).build()
-        client.newCall(request).execute().use { response ->
+        HttpClients.download.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return@withContext false
             val body = response.body ?: return@withContext false
             val contentLength = body.contentLength()

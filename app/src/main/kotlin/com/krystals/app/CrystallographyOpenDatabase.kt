@@ -50,15 +50,9 @@ object CrystallographyOpenDatabase {
     @Volatile
     private var selectedMirror: CodMirror = MIRRORS.first()
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private val client: OkHttpClient = HttpClients.default
 
-    private val testClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .build()
+    private val testClient: OkHttpClient = HttpClients.quick
 
     enum class SearchMode { FORMULA, ELEMENT, TEXT }
 
@@ -83,7 +77,7 @@ object CrystallographyOpenDatabase {
                                 .build()
                             testClient.newCall(request).execute().use { response ->
                                 val elapsed = System.currentTimeMillis() - start
-                                Log.d("COD", "mirror ${mirror.testUrl} responded: HTTP ${response.code} in ${elapsed}ms")
+                                debugLog("COD") { "mirror ${mirror.testUrl} responded: HTTP ${response.code} in ${elapsed}ms" }
                                 mirror
                             }
                         }.getOrNull()
@@ -260,13 +254,13 @@ object CrystallographyOpenDatabase {
             client.newCall(request(url)).execute().use { response ->
                 val body = response.body?.string() ?: ""
                 if (!response.isSuccessful) {
-                    Log.w("COD", "search failed: HTTP ${response.code} url=$url body=${body.take(300)}")
+                    warnLog("COD") { "search failed: HTTP ${response.code} url=$url body=${body.take(300)}" }
                     error("HTTP ${response.code}: ${body.take(200)}")
                 }
                 var results = parseCsv(body)
                 // Per v0.6.5: sort so exact matches come first.
                 results = sortExactMatchesFirst(results, trimmed, mode)
-                Log.d("COD", "search ok: ${results.size} items for '$trimmed' ($mode)")
+                debugLog("COD") { "search ok: ${results.size} items for '$trimmed' ($mode)" }
                 results
             }
         }
@@ -389,14 +383,14 @@ object CrystallographyOpenDatabase {
             client.newCall(request(url)).execute().use { response ->
                 val cif = response.body?.string() ?: ""
                 if (!response.isSuccessful) {
-                    Log.w("COD", "downloadCif failed: HTTP ${response.code} id=$fileId body=${cif.take(300)}")
+                    warnLog("COD") { "downloadCif failed: HTTP ${response.code} id=$fileId body=${cif.take(300)}" }
                     error("HTTP ${response.code}: ${cif.take(200)}")
                 }
                 if (!cif.contains(Regex("(?im)^\\s*data_"))) error("COD did not return a CIF for $fileId")
                 target.parentFile?.mkdirs()
                 target.writeText(cif, Charsets.UTF_8)
                 val parsed = CifCodec.parseStructure(cif, autoConvertConventional = autoConvertConventional)
-                Log.d("COD", "downloadCif ok: $fileId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroup.symbol}")
+                debugLog("COD") { "downloadCif ok: $fileId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroup.symbol}" }
                 // Per v0.5.0: bond-rule synthesis is deferred to the caller's async path so the UI
                 // can show a "computing" overlay — return the parsed structure as-is here.
                 parsed

@@ -224,7 +224,7 @@ internal fun MpCautionDialog(preferences: SharedPreferences, onDismiss: () -> Un
         },
         confirmButton = {
             TextButton(onClick = {
-                if (dontShow) preferences.edit { putBoolean("mp_caution_dismissed", true) }
+                if (dontShow) preferences.edit { putBoolean(PreferencesStore.KEY_MP_CAUTION_DISMISSED, true) }
                 onContinue()
             }) { Text(localized("我知道了", "Comfirm")) }
         },

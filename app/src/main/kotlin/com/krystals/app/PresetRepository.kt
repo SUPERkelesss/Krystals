@@ -3,10 +3,13 @@ package com.krystals.app
 import android.content.Context
 import android.net.Uri
 import com.krystals.crystal.analysis.bonding.BondConfiguration
+import com.krystals.crystal.analysis.structure.StructureAnalyzer
 import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.CifDisplayMetadata
 import com.krystals.crystal.io.ParsedStructure
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 enum class PresetSource { BUNDLED, USER }
@@ -36,9 +39,9 @@ object PresetRepository {
      *  without re-parsing every CIF. Values are `lastModified|formula|elementCount|crystalSystem|pointGroup|spaceGroup`. */
     private const val META_CACHE_FILE = "preset_meta_cache.json"
 
-    fun loadMetaCache(context: Context): MutableMap<String, String> {
+    suspend fun loadMetaCache(context: Context): MutableMap<String, String> = withContext(Dispatchers.IO) {
         val f = File(context.filesDir, META_CACHE_FILE)
-        return runCatching {
+        return@withContext runCatching {
             val obj = org.json.JSONObject(f.readText())
             val map = mutableMapOf<String, String>()
             obj.keys().forEach { key -> map[key] = obj.getString(key) }
@@ -46,7 +49,7 @@ object PresetRepository {
         }.getOrDefault(mutableMapOf())
     }
 
-    fun saveMetaCache(context: Context, cache: Map<String, String>) {
+    suspend fun saveMetaCache(context: Context, cache: Map<String, String>) = withContext(Dispatchers.IO) {
         File(context.filesDir, META_CACHE_FILE).writeText(org.json.JSONObject(cache).toString())
     }
 
@@ -80,13 +83,13 @@ object PresetRepository {
     }
 
     /** Remove one key from the persisted cache (after move/rename/delete/save). */
-    fun invalidateMetaCache(context: Context, key: String) {
+    suspend fun invalidateMetaCache(context: Context, key: String) = withContext(Dispatchers.IO) {
         val cache = loadMetaCache(context)
         if (cache.remove(key) != null) saveMetaCache(context, cache)
     }
 
     /** Drop all cache keys under a user group folder (after renaming the folder). */
-    fun invalidateMetaCachePrefix(context: Context, prefix: String) {
+    suspend fun invalidateMetaCachePrefix(context: Context, prefix: String) = withContext(Dispatchers.IO) {
         val cache = loadMetaCache(context)
         val before = cache.size
         cache.keys.toList().filter { it.startsWith(prefix) }.forEach { cache.remove(it) }
@@ -94,15 +97,15 @@ object PresetRepository {
     }
 
     /** Per v0.8.35: rename a user preset file. */
-    fun renamePreset(context: Context, entry: PresetEntry, newName: String): Boolean {
-        if (entry.source != PresetSource.USER) return false
-        val file = entry.file ?: return false
-        val safe = newName.trim().ifBlank { return false }.let { if (it.endsWith(".cif", true)) it else "$it.cif" }
+    suspend fun renamePreset(context: Context, entry: PresetEntry, newName: String): Boolean = withContext(Dispatchers.IO) {
+        if (entry.source != PresetSource.USER) return@withContext false
+        val file = entry.file ?: return@withContext false
+        val safe = newName.trim().ifBlank { return@withContext false }.let { if (it.endsWith(".cif", true)) it else "$it.cif" }
         val target = File(file.parentFile, safe)
-        if (target.exists()) return false
+        if (target.exists()) return@withContext false
         val ok = file.renameTo(target)
         if (ok) invalidateMetaCache(context, metaKeyForPath(file.path, true))
-        return ok
+        return@withContext ok
     }
 
     /** Recursively collect bundled `.cif` files under [dir] (relative to assets root), tagging each with its [category]. */
@@ -126,15 +129,16 @@ object PresetRepository {
         File(context.filesDir, USER_DIR).apply { if (!exists()) mkdirs() }
 
     /** Per v0.8.34: the `presets/我的预设/` directory (default save target), created on demand. */
-    fun myPresetsDir(context: Context): File =
+    suspend fun myPresetsDir(context: Context): File = withContext(Dispatchers.IO) {
         File(userRoot(context), MY_PRESETS_GROUP).apply { if (!exists()) mkdirs() }
+    }
 
     /**
      * Per v0.8.34: list the library as first-level groups, each with its files.
      * User groups are the first-level directories under `presets/`; loose `.cif`
      * files (legacy flat saves) are folded into the "我的预设" group.
      */
-    fun listGroups(context: Context): List<PresetGroup> {
+    suspend fun listGroups(context: Context): List<PresetGroup> = withContext(Dispatchers.IO) {
         val bundledByCategory = collectBundled(context, ASSET_DIR, null).groupBy { it.category ?: "bundled" }
         val bundledGroups = bundledByCategory.entries
             .sortedBy { it.key }
@@ -157,44 +161,44 @@ object PresetRepository {
         } else {
             userGroups.add(0, PresetGroup(MY_PRESETS_GROUP, isUserGroup = true, entries = myPresetsFiles))
         }
-        return userGroups + bundledGroups
+        return@withContext userGroups + bundledGroups
     }
 
     /** Per v0.8.34: create a new first-level user group; returns the directory or null on conflict/failure. */
-    fun createGroup(context: Context, name: String): File? {
+    suspend fun createGroup(context: Context, name: String): File? = withContext(Dispatchers.IO) {
         val safe = name.trim()
-        if (safe.isEmpty()) return null
+        if (safe.isEmpty()) return@withContext null
         val dir = File(userRoot(context), safe)
-        return if (dir.exists() || dir.mkdirs()) dir else null
+        return@withContext if (dir.exists() || dir.mkdirs()) dir else null
     }
 
     /** Per v0.8.34: rename a first-level user group. */
-    fun renameGroup(context: Context, oldName: String, newName: String): Boolean {
+    suspend fun renameGroup(context: Context, oldName: String, newName: String): Boolean = withContext(Dispatchers.IO) {
         val safe = newName.trim()
-        if (safe.isEmpty() || safe == oldName) return false
+        if (safe.isEmpty() || safe == oldName) return@withContext false
         val old = File(userRoot(context), oldName)
         val target = File(userRoot(context), safe)
-        if (!old.isDirectory || target.exists()) return false
+        if (!old.isDirectory || target.exists()) return@withContext false
         val ok = old.renameTo(target)
         // Per v0.8.35: cached metas keyed by the old folder path are stale now.
         if (ok) invalidateMetaCachePrefix(context, "u:" + old.path + File.separator)
-        return ok
+        return@withContext ok
     }
 
     /** Per v0.8.34: move a user preset file into another first-level group. */
-    fun movePreset(context: Context, entry: PresetEntry, targetGroup: String): Boolean {
-        if (entry.source != PresetSource.USER) return false
-        val file = entry.file ?: return false
+    suspend fun movePreset(context: Context, entry: PresetEntry, targetGroup: String): Boolean = withContext(Dispatchers.IO) {
+        if (entry.source != PresetSource.USER) return@withContext false
+        val file = entry.file ?: return@withContext false
         val targetDir = File(userRoot(context), targetGroup)
-        if (!targetDir.isDirectory) return false
+        if (!targetDir.isDirectory) return@withContext false
         val target = File(targetDir, file.name)
-        if (target.exists()) return false
+        if (target.exists()) return@withContext false
         val ok = file.renameTo(target)
         if (ok) invalidateMetaCache(context, metaKeyForPath(file.path, true))
-        return ok
+        return@withContext ok
     }
 
-    fun openPreset(context: Context, entry: PresetEntry, autoConvertConventional: Boolean = true): ParsedStructure {
+    suspend fun openPreset(context: Context, entry: PresetEntry, autoConvertConventional: Boolean = true): ParsedStructure = withContext(Dispatchers.IO) {
         val text = when (entry.source) {
             PresetSource.BUNDLED -> context.assets.open(entry.assetPath!!).bufferedReader().use { it.readText() }
             PresetSource.USER -> entry.file!!.readText()
@@ -203,7 +207,7 @@ object PresetRepository {
         // Per v0.2: only synthesize bond rules when the CIF has none of its own.
         // Per v0.5.0: rule synthesis (smart-ionic) is deferred to the caller's async path so the UI
         // can show a "computing" overlay — return the parsed structure as-is here.
-        return parsed
+        return@withContext parsed
     }
 
     /** Per v0.8.34: parse a preset CIF's filter metadata (formula/element count/space group info). */
@@ -224,7 +228,7 @@ object PresetRepository {
         }.getOrNull()
     }
 
-    fun saveToPreset(
+    suspend fun saveToPreset(
         context: Context,
         parsed: ParsedStructure,
         structure: CrystalStructure,
@@ -233,7 +237,7 @@ object PresetRepository {
         name: String,
         comments: String = "",
         targetGroup: String = MY_PRESETS_GROUP,
-    ): File {
+    ): File = withContext(Dispatchers.IO) {
         // Per v0.8.34: user presets are saved into a user group directory.
         // Per v0.8.36: the group is selectable (default "我的预设").
         val userDir = if (targetGroup.isBlank() || targetGroup == MY_PRESETS_GROUP) myPresetsDir(context)
@@ -255,25 +259,25 @@ object PresetRepository {
                 saveMetaCache(context, cache)
             }
         }
-        return target
+        return@withContext target
     }
 
-    fun deletePreset(context: Context, entry: PresetEntry): Boolean {
-        if (entry.source != PresetSource.USER) return false
+    suspend fun deletePreset(context: Context, entry: PresetEntry): Boolean = withContext(Dispatchers.IO) {
+        if (entry.source != PresetSource.USER) return@withContext false
         val ok = entry.file?.delete() == true
         if (ok) invalidateMetaCache(context, metaKeyForPath(entry.file!!.path, true))
-        return ok
+        return@withContext ok
     }
 
     /** Per v0.8.36: delete a user group (whole directory). The default "我的预设" group is
      *  protected and cannot be deleted. Returns false when the group is protected/missing. */
-    fun deleteGroup(context: Context, name: String): Boolean {
-        if (name.isBlank() || name == MY_PRESETS_GROUP) return false
+    suspend fun deleteGroup(context: Context, name: String): Boolean = withContext(Dispatchers.IO) {
+        if (name.isBlank() || name == MY_PRESETS_GROUP) return@withContext false
         val dir = File(userRoot(context), name)
-        if (!dir.isDirectory) return false
+        if (!dir.isDirectory) return@withContext false
         // Drop cache entries under this folder first.
         invalidateMetaCachePrefix(context, "u:" + dir.path + File.separator)
         val children = dir.listFiles().orEmpty()
-        return children.all { it.delete() } && dir.delete()
+        return@withContext children.all { it.delete() } && dir.delete()
     }
 }

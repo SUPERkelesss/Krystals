@@ -47,6 +47,11 @@ object AppearanceStore {
     fun fromJson(json: String): ViewerAppearance? = runCatching {
         val o = JSONObject(json)
         val d = ViewerAppearance()
+        // Per v0.5.4: 景深标度改为「近=正/远=负」(near>=far)。旧存档按「近=负」(near<far)存,
+        // 读入时翻符号迁移到新约定;新存档(near>=far)原样保留。解析一次供两个字段共用。
+        val rawDofNear = o.optDouble("dofNear", d.dofNear.toDouble()).toFloat()
+        val rawDofFar = o.optDouble("dofFar", d.dofFar.toDouble()).toFloat()
+        val legacyDof = rawDofNear < rawDofFar
         ViewerAppearance(
             backgroundArgb = o.optString("backgroundArgb", d.backgroundArgb.toString()).toLong(),
             reflectionEnabled = o.optBoolean("reflectionEnabled", d.reflectionEnabled),
@@ -70,18 +75,8 @@ object AppearanceStore {
             axisOffsetX = o.optDouble("axisOffsetX", d.axisOffsetX.toDouble()).toFloat(),
             axisOffsetY = o.optDouble("axisOffsetY", d.axisOffsetY.toDouble()).toFloat(),
             depthOfFieldEnabled = o.optBoolean("depthOfFieldEnabled", d.depthOfFieldEnabled),
-            // Per v0.5.4: 景深标度改为「近=正/远=负」(near>=far)。旧存档按「近=负」(near<far)存,
-            // 读入时翻符号迁移到新约定;新存档(near>=far)原样保留。
-            dofNear = run {
-                val rawNear = o.optDouble("dofNear", d.dofNear.toDouble()).toFloat()
-                val rawFar = o.optDouble("dofFar", d.dofFar.toDouble()).toFloat()
-                if (rawNear < rawFar) -rawNear else rawNear
-            },
-            dofFar = run {
-                val rawNear = o.optDouble("dofNear", d.dofNear.toDouble()).toFloat()
-                val rawFar = o.optDouble("dofFar", d.dofFar.toDouble()).toFloat()
-                if (rawNear < rawFar) -rawFar else rawFar
-            },
+            dofNear = if (legacyDof) -rawDofNear else rawDofNear,
+            dofFar = if (legacyDof) -rawDofFar else rawDofFar,
         )
     }.getOrNull()
 }
