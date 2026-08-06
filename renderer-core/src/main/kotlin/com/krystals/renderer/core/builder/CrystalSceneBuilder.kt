@@ -7,6 +7,8 @@ import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
 import com.krystals.crystal.core.math.Vec3
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.model.Molecule
+import com.krystals.crystal.core.periodic.Int3
 import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
@@ -40,6 +42,11 @@ data class SceneBuildOptions(
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val environment: RenderEnvironment = RenderEnvironment(),
     val structuralExpansion: Boolean = false,
+    // Per molecule-extend: show whole molecules across the cell. When enabled, external-shell
+    // atoms and cross-cell bonds render when their molecule (by MoleculeAtom id == primary
+    // AtomImage id) has at least one visible in-cell atom, replacing the per-rule extend flags.
+    val moleculeExtend: Boolean = false,
+    val molecules: List<Molecule> = emptyList(),
 ) {
     init {
         require(defaultAtomRadius > 0.0) { "default atom radius must be positive" }
@@ -62,7 +69,9 @@ class CrystalSceneBuilder {
         // guard the outer-shell Ca images beyond the cell would all become visible as an extra
         // ring around the cell (the reached outer-shell C atoms of real Ca-C extensions still
         // appear, which is the intended "show extended bonds" behaviour).
-        val externallyVisible = analysis.bonds.asSequence()
+        // Per molecule-extend: skipped entirely in molecule-extend mode — atom visibility there
+        // follows molecule ownership instead of extend flags.
+        val externallyVisible = if (options.moleculeExtend) emptySet() else analysis.bonds.asSequence()
             .filter { it.rule.key !in options.hiddenBondKeys }
             .mapNotNull { bond ->
                 val start = atomById[bond.atomA] ?: return@mapNotNull null
@@ -75,10 +84,57 @@ class CrystalSceneBuilder {
             }
             .toSet()
 
+        // Per molecule-extend: ownership maps built once per scene build. MoleculeAtom ids equal
+        // the primary (cellOffset == (0,0,0)) AtomImage ids; an external-shell atom belongs to the
+        // molecule of its in-cell representative (same siteId + integer fractional translation —
+        // the same test as isSameAtomPeriodicImage).
+        val moleculeIndexByRepId: Map<Long, Int>
+        val moleculeSiteIds: List<Set<String>>
+        val repBySiteId: Map<String, List<AtomImage>>
+        if (options.moleculeExtend) {
+            val indexByAtomId = HashMap<Int, Int>()
+            options.molecules.forEachIndexed { index, m -> m.atoms.forEach { indexByAtomId[it.id] = index } }
+            val repAtoms = analysis.atoms.filter { !it.isShell && it.cellOffset == Int3(0, 0, 0) }
+            val perMolSiteIds = Array(options.molecules.size) { HashSet<String>() }
+            val repIndex = HashMap<Long, Int>()
+            for (a in repAtoms) {
+                val mol = indexByAtomId[a.id.toInt()] ?: continue
+                repIndex[a.id] = mol
+                perMolSiteIds[mol].add(a.siteId)
+            }
+            moleculeIndexByRepId = repIndex
+            moleculeSiteIds = perMolSiteIds.map { it.toSet() }
+            repBySiteId = repAtoms.groupBy { it.siteId }
+        } else {
+            moleculeIndexByRepId = emptyMap()
+            moleculeSiteIds = emptyList()
+            repBySiteId = emptyMap()
+        }
+
+        /** 场景原子 → 分子索引:原胞原子直查;shell/边界映像经原胞代表(re-same-site + 整数平移)查。 */
+        fun moleculeIndexOf(atom: AtomImage): Int? {
+            moleculeIndexByRepId[atom.id]?.let { return it }
+            if (!atom.isShell) return null
+            val rep = repBySiteId[atom.siteId]?.firstOrNull { isSameAtomPeriodicImage(it, atom) } ?: return null
+            return moleculeIndexByRepId[rep.id]
+        }
+
+        /** 分子内所有原胞原子都被 hiddenSiteIds 覆盖 → 整分子(含其映像与键)隐藏。 */
+        fun moleculeFullyHidden(mol: Int): Boolean {
+            val siteIds = moleculeSiteIds[mol]
+            return siteIds.isNotEmpty() && siteIds.all { it in options.hiddenSiteIds }
+        }
+
         fun atomVisible(atom: AtomImage): Boolean = when {
             atom.siteId in options.hiddenSiteIds -> false
+            !options.moleculeExtend -> !atom.isShell || atom.isBoundaryImage || atom.id in externallyVisible
+            // 分子展开:单胞内/边界映像按原逻辑(hiddenSites 已过滤)。
             !atom.isShell || atom.isBoundaryImage -> true
-            else -> atom.id in externallyVisible
+            // 分子展开:外部壳层原子属于"未整分子隐藏"的分子才显示。
+            else -> {
+                val mol = moleculeIndexOf(atom) ?: return false
+                !moleculeFullyHidden(mol)
+            }
         }
 
         fun atomMaterial(atom: AtomImage): Material =
@@ -225,6 +281,15 @@ class CrystalSceneBuilder {
             //    primary atom (the in-cell coordination of that atom) or when both ends are
             //    non-metals (e.g. C-C dumbbells — real bonds of the displayed images).
             val externalAllowed = when {
+                // Per molecule-extend: both ends normalise into the same, not-fully-hidden
+                // molecule → show, replacing the per-rule extend flags. Same-atom periodic
+                // self-images (e.g. the two halves of a Cl2 molecule across the cell face) are
+                // molecule-internal bonds here and therefore render.
+                options.moleculeExtend -> {
+                    val mi = moleculeIndexOf(start)
+                    val mj = moleculeIndexOf(end)
+                    mi != null && mi == mj && !moleculeFullyHidden(mi)
+                }
                 !start.isShell && !end.isShell -> true
                 // Same-atom periodic self-images (an atom bonded to its own periodic image)
                 // are never rendered — they are not chemical bonds, and the default METALS_ONLY
