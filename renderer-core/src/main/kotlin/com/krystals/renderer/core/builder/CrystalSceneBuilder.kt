@@ -46,10 +46,6 @@ data class SceneBuildOptions(
     // Per v0.8.30: hydrogen-bond appearance (radius Å / opacity 0..1).
     val hbondRadius: Double = 0.05,
     val hbondOpacity: Double = 0.2,
-    // Per v0.8.37: when bonds extend across the cell, also show bonds of the atoms the
-    // extension reaches ("secondary extend bonds"), e.g. the C-C dumbbells reached by
-    // extending Ca-C in CaC2. Default on.
-    val secondaryExtendBonds: Boolean = true,
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val environment: RenderEnvironment = RenderEnvironment(),
     val structuralExpansion: Boolean = false,
@@ -180,23 +176,6 @@ class CrystalSceneBuilder {
             bondEntries += Triple(index, bond, dedupeKey)
         }
 
-        // Pass 1.5 (v0.8.37): collect atoms reached by primary extension bonds — main atom to
-        // external shell, rule extends across the cell. These shell atoms become "displayed" by
-        // the extension, and the bonds they form with other displayed atoms are secondary
-        // extend bonds (e.g. the C-C dumbbells reached by extending Ca-C in CaC2).
-        val extendedEndAtoms = mutableSetOf<Long>()
-        for ((_, bond, _) in bondEntries) {
-            val start = atomById[bond.atomA] ?: continue
-            val end = atomById[bond.atomB] ?: continue
-            if (start.isExternalShell == end.isExternalShell) continue
-            val primary = if (start.isExternalShell) end else start
-            val shell = if (start.isExternalShell) start else end
-            if (primary.isShell) continue // both shell ends (shell-shell) are never primary-extend
-            if (bond.rule.shouldExtendAcrossCell(primary.siteId, true)) {
-                extendedEndAtoms += shell.id
-            }
-        }
-
         // Second pass: emit one BondInstance per dedupeKey, with surface anchoring + blended materials.
         val emittedKeys = mutableSetOf<Triple<Any, Any, Triple<Int, Int, Int>>>()
         // Per v0.8.36: heteronuclear pairs already emitted (wrapped in-cell image identity).
@@ -277,35 +256,18 @@ class CrystalSceneBuilder {
                 }
             }
             val visible = options.showBonds && bond.rule.key !in options.hiddenBondKeys && externalAllowed
-            // Per v0.8.37: secondary extend bonds — a bond touching an external-shell atom that
-            // was reached by a primary extension, but is not itself the primary extend bond
-            // (e.g. the C-C dumbbells of the C atoms reached by extending Ca-C in CaC2). They are
-            // gated by the secondaryExtendBonds switch (default on) and skip heteronuclear
-            // deduplication (they are supplementary bonds of already-displayed atoms).
-            val hasShellEnd = start.isExternalShell || end.isExternalShell
-            val isPrimaryExtend = hasShellEnd && !(start.isExternalShell == end.isExternalShell) &&
-                (if (start.isExternalShell) end else start).let { !it.isShell } &&
-                bond.rule.shouldExtendAcrossCell(
-                    (if (start.isExternalShell) end else start).siteId, true,
-                )
-            val isSecondaryExtend = hasShellEnd && !isPrimaryExtend &&
-                (start.id in extendedEndAtoms || end.id in extendedEndAtoms)
-            val finalVisible = if (isSecondaryExtend) {
-                options.showBonds && bond.rule.key !in options.hiddenBondKeys && options.secondaryExtendBonds
+            // Per v0.8.36: heteronuclear bonds are deduplicated to their in-cell image so each
+            // primary atom pair renders exactly once — CaC2's Ca-C coordination bonds (8) instead
+            // of their boundary-image copies (26). Homopolar bonds (C-C dumbbells) keep every
+            // displayed image (the face dumbbells are real bonds of the shown images). H-bonds
+            // are exempt too: every proton-acceptor contact is a distinct bond (ice-Ih's 21
+            // visible H-bonds include their periodic equivalents). The first instance wins;
+            // BondDetector orders bonds by (atomA, atomB, offset), so the in-cell (0,0,0)-offset
+            // image comes first and is the shortest of the pair.
+            val finalVisible = if (visible && start.species.symbol != end.species.symbol && !isHBond) {
+                emittedHeteroPairs.add(heteroPairKey(start, end))
             } else {
-                // Per v0.8.36: heteronuclear bonds are deduplicated to their in-cell image so each
-                // primary atom pair renders exactly once — CaC2's Ca-C coordination bonds (8) instead
-                // of their boundary-image copies (26). Homopolar bonds (C-C dumbbells) keep every
-                // displayed image (the face dumbbells are real bonds of the shown images). H-bonds
-                // are exempt too: every proton-acceptor contact is a distinct bond (ice-Ih's 21
-                // visible H-bonds include their periodic equivalents). The first instance wins;
-                // BondDetector orders bonds by (atomA, atomB, offset), so the in-cell (0,0,0)-offset
-                // image comes first and is the shortest of the pair.
-                if (visible && start.species.symbol != end.species.symbol && !isHBond) {
-                    emittedHeteroPairs.add(heteroPairKey(start, end))
-                } else {
-                    visible
-                }
+                visible
             }
             objects += BondInstance(
                 id = "bond:${bond.atomA}:${bond.atomB}:${bond.offsetB.x}:${bond.offsetB.y}:${bond.offsetB.z}:$index",

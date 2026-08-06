@@ -116,8 +116,6 @@ data class ViewerAppearance(
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val uniformBondArgb: Long = 0xFF9A90A0,
     val bondReflectionEnabled: Boolean = true,
-    // Per v0.8.37: show bonds of atoms reached by bond extension ("secondary extend bonds").
-    val secondaryExtendBonds: Boolean = true,
     val polyhedronEnabled: Boolean = true,
     val polyhedronOpacity: Float = 0.5f,
     val polyhedronReflectionEnabled: Boolean = true,

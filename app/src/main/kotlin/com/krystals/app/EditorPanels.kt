@@ -1213,8 +1213,6 @@ followTheme = true
                     Text(localized("自定义", "Custom"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
                 }
             }
-            // Per v0.8.37: secondary extend bonds switch (end of the Bonds section).
-            ToggleRow(localized("成键时显示二级成键", "Secondary bonds on extend"), appearance.secondaryExtendBonds) { appearance = appearance.copy(secondaryExtendBonds = it) }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
             Text(localized("多面体", "Polyhedra"), fontWeight = FontWeight.Bold)
             ToggleRow(localized("多面体反射", "Polyhedron reflection"), appearance.polyhedronReflectionEnabled) { appearance = appearance.copy(polyhedronReflectionEnabled = it) }
