@@ -96,6 +96,8 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
         Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
                     Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         val tabEntries = buildList {
+                            // Per molecule-extend: 分子子菜单插在原子之前,仅分子晶体显示。
+                            if (tab.isMolecularCrystal) add(DisplayTab.MOLECULES to localized("分子", "Molecules"))
                             add(DisplayTab.ATOMS to localized("原子", "Atoms"))
                             add(DisplayTab.BONDS to localized("化学键", "Bonds"))
                             add(DisplayTab.POLYHEDRA to localized("多面体", "Polyhedra"))
@@ -113,6 +115,61 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                     }
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
                         when (selected) {
+                            // Per molecule-extend: 分子开关 = 批量写 hiddenSites/hiddenBondPairs,
+                            // 与原子/键子菜单共享同一状态源 → 双向自动联动;checked 为派生值。
+                            DisplayTab.MOLECULES -> {
+                                val allMoleculeSiteIds = tab.moleculeSiteIds.flatten().toSet()
+                                val allMoleculeBondKeys = rules
+                                    .filter { it.siteA in allMoleculeSiteIds && it.siteB in allMoleculeSiteIds }
+                                    .map { it.key }.toSet()
+                                fun moleculeVisible(index: Int): Boolean {
+                                    val siteIds = tab.moleculeSiteIds.getOrElse(index) { emptySet() }
+                                    if (siteIds.isEmpty()) return false
+                                    val bondKeys = rules.filter { it.siteA in siteIds && it.siteB in siteIds }.map { it.key }.toSet()
+                                    return siteIds.all { it !in tab.visibility.hiddenSites } &&
+                                        bondKeys.all { it !in tab.visibility.hiddenBondPairs }
+                                }
+                                val allMoleculesVisible = tab.molecules.isNotEmpty() && tab.molecules.indices.all { moleculeVisible(it) }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(allMoleculesVisible, onCheckedChange = { checked ->
+                                        tab.recordHistory()
+                                        tab.visibility = tab.visibility.copy(
+                                            hiddenSites = if (checked) tab.visibility.hiddenSites - allMoleculeSiteIds else tab.visibility.hiddenSites + allMoleculeSiteIds,
+                                            hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - allMoleculeBondKeys else tab.visibility.hiddenBondPairs + allMoleculeBondKeys,
+                                        )
+                                    })
+                                    Text(stringResource(R.string.select_all))
+                                    Spacer(Modifier.width(8.dp))
+                                    TextButton(onClick = {
+                                        // 反选:分子当前有任何隐藏 → 全部显示;全部显示 → 全部隐藏。
+                                        tab.recordHistory()
+                                        tab.visibility = tab.visibility.copy(
+                                            hiddenSites = if (allMoleculeSiteIds.any { it in tab.visibility.hiddenSites }) tab.visibility.hiddenSites - allMoleculeSiteIds else tab.visibility.hiddenSites + allMoleculeSiteIds,
+                                            hiddenBondPairs = if (allMoleculeBondKeys.any { it in tab.visibility.hiddenBondPairs }) tab.visibility.hiddenBondPairs - allMoleculeBondKeys else tab.visibility.hiddenBondPairs + allMoleculeBondKeys,
+                                        )
+                                    }) { Text(localized("反选", "Invert")) }
+                                }
+                                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                                if (tab.molecules.isEmpty()) {
+                                    Text(localized("无分子", "No molecules"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                                } else {
+                                    tab.molecules.forEachIndexed { index, m ->
+                                        val siteIds = tab.moleculeSiteIds.getOrElse(index) { emptySet() }
+                                        val bondKeys = rules.filter { it.siteA in siteIds && it.siteB in siteIds }.map { it.key }.toSet()
+                                        val visible = moleculeVisible(index)
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp, bottom = 2.dp)) {
+                                            Checkbox(visible, onCheckedChange = { checked ->
+                                                tab.recordHistory()
+                                                tab.visibility = tab.visibility.copy(
+                                                    hiddenSites = if (checked) tab.visibility.hiddenSites - siteIds else tab.visibility.hiddenSites + siteIds,
+                                                    hiddenBondPairs = if (checked) tab.visibility.hiddenBondPairs - bondKeys else tab.visibility.hiddenBondPairs + bondKeys,
+                                                )
+                                            })
+                                            Text("${m.name} #${index + 1}", modifier = Modifier.weight(1f))
+                                        }
+                                    }
+                                }
+                            }
                             DisplayTab.ATOMS -> {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(allSitesVisible, onCheckedChange = { checked ->
@@ -206,8 +263,9 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                     }) { Text(localized("反选", "Invert")) }
                                     Spacer(Modifier.weight(1f))
                                     // Per v0.6.5: "Extend outside cell" checkbox — toggles all bond rules' extend flags.
+                                    // Per molecule-extend: 按分子展开启用时规则失效,复选框灰显。
                                     val allExtended = normalWithMatch.isNotEmpty() && normalWithMatch.all { it.extendAtoB && it.extendBtoA }
-                                    Checkbox(allExtended, onCheckedChange = { checked ->
+                                    Checkbox(allExtended, enabled = !tab.moleculeExtend, onCheckedChange = { checked ->
                                         var working = tab.bondConfiguration
                                         normalWithMatch.forEach { rule ->
                                             val updated = rule.copy(extendAtoB = checked, extendBtoA = checked)
@@ -216,6 +274,13 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                         viewModel.updateAnalysis(tab, EditResult(tab.structure, working))
                                     })
                                     Text(localized("扩展到晶胞外", "Extend Outside Cell"), style = MaterialTheme.typography.bodySmall)
+                                    if (tab.moleculeExtend) {
+                                        Text(
+                                            localized("按分子展开已启用", "Expand-by-molecule active"),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                                 if (normalWithMatch.isEmpty()) {
@@ -284,7 +349,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                             },
                                         ) {
                                             if (groupSameElement) {
-                                                Checkbox(allGroupExtend1, onCheckedChange = { checked ->
+                                                Checkbox(allGroupExtend1, enabled = !tab.moleculeExtend, onCheckedChange = { checked ->
                                                     var working = tab.bondConfiguration
                                                     groupRules.forEach { rule ->
                                                         val updated = rule.copy(extendAtoB = checked, extendBtoA = checked)
@@ -294,7 +359,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                                 })
                                                 Text("$gElem1", style = MaterialTheme.typography.bodySmall)
                                             } else {
-                                                Checkbox(allGroupExtend1, onCheckedChange = { checked ->
+                                                Checkbox(allGroupExtend1, enabled = !tab.moleculeExtend, onCheckedChange = { checked ->
                                                     var working = tab.bondConfiguration
                                                     groupRules.forEach { rule ->
                                                         val aElem = elementOf[rule.siteA] ?: "?"
@@ -305,7 +370,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                                 })
                                                 Text("$gElem1", style = MaterialTheme.typography.bodySmall)
                                                 Spacer(Modifier.width(4.dp))
-                                                Checkbox(allGroupExtend2, onCheckedChange = { checked ->
+                                                Checkbox(allGroupExtend2, enabled = !tab.moleculeExtend, onCheckedChange = { checked ->
                                                     var working = tab.bondConfiguration
                                                     groupRules.forEach { rule ->
                                                         val aElem = elementOf[rule.siteA] ?: "?"
@@ -336,7 +401,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                                     })
                                                     Text(label, modifier = Modifier.weight(1f))
                                                     if (sameRuleElement) {
-                                                        Checkbox(rule.extendAtoB || rule.extendBtoA, onCheckedChange = { checked ->
+                                                        Checkbox(rule.extendAtoB || rule.extendBtoA, enabled = !tab.moleculeExtend, onCheckedChange = { checked ->
                                                             val updated = rule.copy(extendAtoB = checked, extendBtoA = checked)
                                                             viewModel.updateAnalysis(
                                                                 tab,
@@ -345,7 +410,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                                         })
                                                         Text("$elemA", style = MaterialTheme.typography.bodySmall)
                                                     } else {
-                                                        Checkbox(rule.extendAtoB, onCheckedChange = { checked ->
+                                                        Checkbox(rule.extendAtoB, enabled = !tab.moleculeExtend, onCheckedChange = { checked ->
                                                             val updated = rule.copy(extendAtoB = checked)
                                                             viewModel.updateAnalysis(
                                                                 tab,
@@ -354,7 +419,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                                         })
                                                         Text("$labelA", style = MaterialTheme.typography.bodySmall)
                                                         Spacer(Modifier.width(4.dp))
-                                                        Checkbox(rule.extendBtoA, onCheckedChange = { checked ->
+                                                        Checkbox(rule.extendBtoA, enabled = !tab.moleculeExtend, onCheckedChange = { checked ->
                                                             val updated = rule.copy(extendBtoA = checked)
                                                             viewModel.updateAnalysis(
                                                                 tab,
@@ -534,7 +599,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
 }
 
 
-private enum class DisplayTab { ATOMS, BONDS, POLYHEDRA, HBONDS }
+private enum class DisplayTab { MOLECULES, ATOMS, BONDS, POLYHEDRA, HBONDS }
 
 /**
  * Per v0.3.44: a collapsible group header used by the ATOMS/POLYHEDRA/BONDS sub-menus. A row with an
