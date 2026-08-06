@@ -156,6 +156,11 @@ class DocumentTab(
     // 结构/键规则变更(编辑、undo/redo、自动键规则)后置回待计算,下次场景构建重算。
     var isMolecularCrystal by mutableStateOf(false)
     var molecules by mutableStateOf<List<Molecule>>(emptyList())
+    // 分子 → 原胞原子 siteId 集合(与 molecules 并列,分子分析完成时填充;
+    // 供 DisplayPanel 分子子菜单的原子/键联动开关直接读取)。
+    var moleculeSiteIds by mutableStateOf<List<Set<String>>>(emptyList())
+    // 按分子展开:仅分子晶体有效,分子晶体默认启用;启用时"扩展到晶胞外"规则失效(UI 灰显)。
+    var moleculeExtend by mutableStateOf(false)
     var moleculeAnalysisPending by mutableStateOf(true)
     // Per v0.7.1: when non-null, EditorPanel opens on this tab ("atoms", "bonds", etc.)
     var pendingEditorTab by mutableStateOf<String?>(null)

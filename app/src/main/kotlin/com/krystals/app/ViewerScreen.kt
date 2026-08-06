@@ -121,6 +121,7 @@ import com.krystals.crystal.analysis.bonding.BondValence
 import com.krystals.crystal.analysis.bonding.isMolecularCrystal
 import com.krystals.crystal.analysis.bonding.toMolecules
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
+import com.krystals.crystal.core.periodic.Int3
 import com.krystals.crystal.io.CifCodec
 import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.state.InteractionReducer
@@ -304,7 +305,7 @@ internal fun ViewerScreen(
     // Per v0.7.1: scene rebuild loading dialog — shows after 300ms delay to avoid flicker
     // on fast rebuilds. Back button undoes the last change.
     var sceneRebuilding by remember(tab.id) { mutableStateOf(false) }
-    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility) {
+    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility, tab.moleculeExtend) {
         // Per v0.6.3: removed currentOrientation key + delay — the Filament viewport already
         // handles size changes via onSizeChanged → SetViewport, so rebuilding the entire scene on
         // rotation was unnecessary and caused the freeze. The renderer's updateInteraction handles
@@ -330,6 +331,16 @@ internal fun ViewerScreen(
                     if (tab.moleculeAnalysisPending) {
                         tab.isMolecularCrystal = analysis.isMolecularCrystal()
                         tab.molecules = if (tab.isMolecularCrystal) analysis.toMolecules() else emptyList()
+                        // 分子 → 原胞原子 siteId 集合:先建 cellOffset==(0,0,0) 原子 id→siteId
+                        // 映射,再逐分子查询(避免对每个分子重复扫描全部原子)。
+                        tab.moleculeSiteIds = if (tab.isMolecularCrystal) {
+                            val cellAtomSiteByAtomId = analysis.atoms
+                                .filter { !it.isShell && it.cellOffset == Int3(0, 0, 0) }
+                                .associate { it.id.toInt() to it.siteId }
+                            tab.molecules.map { m -> m.atoms.mapNotNull { cellAtomSiteByAtomId[it.id] }.toSet() }
+                        } else emptyList()
+                        // 分子晶体默认启用"按分子展开"(仅在新打开/结构变更后分析时重置)。
+                        tab.moleculeExtend = tab.isMolecularCrystal
                         tab.moleculeAnalysisPending = false
                     }
                     CrystalRenderSceneFactory.build(
@@ -341,6 +352,8 @@ internal fun ViewerScreen(
                         showBonds = tab.visibility.showBonds,
                         polyhedronSiteIds = tab.visibility.polyhedronSites,
                         structuralExpansion = tab.structuralExpansion,
+                        moleculeExtend = tab.moleculeExtend,
+                        molecules = tab.molecules,
                     )
                 }
             }

@@ -1,6 +1,7 @@
 package com.krystals.renderer.core.builder
 
 import com.krystals.crystal.analysis.bonding.BondNetwork
+import com.krystals.crystal.core.model.Molecule
 import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.style.RenderConfiguration
@@ -17,6 +18,8 @@ object CrystalRenderSceneFactory {
         showBonds: Boolean = true,
         polyhedronSiteIds: Set<String> = emptySet(),
         structuralExpansion: Boolean = false,
+        moleculeExtend: Boolean = false,
+        molecules: List<Molecule> = emptyList(),
     ): RenderScene {
         val atoms = analysis.atoms
         // Material colour depends only on the site id, and radius only on the element symbol —
@@ -70,6 +73,8 @@ object CrystalRenderSceneFactory {
                 bondColorMode = appearance.bondColorMode,
                 environment = appearance.toEnvironment(),
                 structuralExpansion = structuralExpansion,
+                moleculeExtend = moleculeExtend,
+                molecules = molecules,
             ),
         )
     }
