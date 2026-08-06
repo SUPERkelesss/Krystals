@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -97,9 +98,10 @@ class HbondBondingFallbackTest {
     }
 
     @Test
-    fun bondingPathRecognizesCarbonBondedHAsProton() {
-        // Per v0.8.16: C joined the proton-partner set. H bonded ONLY to C (single covalent
-        // bond) qualifies as a proton and forms a C–H···O hydrogen bond with the O acceptor.
+    fun bondingPathDoesNotTreatCarbonBondedHAsProton() {
+        // Per v0.8.39: C is removed from the proton-partner set — an H bonded ONLY to C
+        // (single covalent bond) no longer qualifies as a proton, so no C–H···O hbond rule
+        // is produced even when an O acceptor is present. (v0.8.16 had enabled it.)
         val structure = simpleStructure(
             listOf(
                 Site("C", "C1", Species("C"), FractionalCoordinate(0.5, 0.5, 0.3)),
@@ -110,7 +112,7 @@ class HbondBondingFallbackTest {
         val result = CrystalEditor.fromSmartIonicAttempt(structure, BondConfiguration(), 0.45, smartIonic = null)
         val hbondRules = result.bondConfiguration.rules.filter { it.isHBond }
         val hoHbond = hbondRules.find { setOf(it.siteA, it.siteB) == setOf("H", "O") }
-        assertNotNull(hoHbond, "C–H donor must produce an H···O hbond rule")
+        assertNull(hoHbond, "C–H donor must NOT produce an H···O hbond rule")
     }
 
     @Test

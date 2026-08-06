@@ -264,9 +264,10 @@ object CrystalEditor {
     /** Per v0.8.6: append hbond rules to the bonding-radius rule set.
      *  Proton criterion for the bonding path: an expanded H atom whose Voronoi
      *  neighbours within the covalent (bonding-radius) window include exactly
-     *  ONE O/N/F/S/P/Cl/C partner. Site-level rules count every site pair
+     *  ONE O/N/F/S/P/Cl partner. Site-level rules count every site pair
      *  (even distant ones), so we use Voronoi distances instead. Per v0.8.16:
-     *  C was added to the proton-partner set (C–H donors qualify). */
+     *  C was added to the proton-partner set (C–H donors qualify); per v0.8.39
+     *  this is reverted — C–H bonds no longer produce hydrogen bonds. */
     private fun bondingRulesWithHbonds(
         structure: CrystalStructure,
         atoms: List<com.krystals.crystal.core.model.AtomImage>,
@@ -280,8 +281,10 @@ object CrystalEditor {
         // Per v0.8.36: the gate tests the ACCEPTOR set, not the proton-partner set — an H-bond
         // needs an acceptor, so a structure with C–H donors but no O/N/F/S/P/Cl can never form
         // one and must skip the Voronoi pass entirely.
+        // Per v0.8.39: C is removed from the proton-partner set — C–H bonds are not H-bond
+        // donors any more (the acceptor set is untouched, C remains a non-acceptor).
         val hbondAcceptorElements = setOf("O", "N", "F", "S", "P", "Cl")
-        val hbondPartnerElements = hbondAcceptorElements + "C"
+        val hbondPartnerElements = hbondAcceptorElements
         val hasH = atoms.any { it.species.symbol == "H" }
         val hasAcceptor = atoms.any { it.species.symbol in hbondAcceptorElements }
         if (!hasH || !hasAcceptor) return rules
@@ -309,7 +312,7 @@ object CrystalEditor {
         val covRadius = { sym: String -> PeriodicTable.radius(sym, RadiusSource.BONDING) }
         val atomById = atoms.associateBy { it.id }
 
-        // Find H atoms with exactly 1 Voronoi neighbour in {O,N,F,S,P,Cl,C} within covalent distance.
+        // Find H atoms with exactly 1 Voronoi neighbour in {O,N,F,S,P,Cl} within covalent distance.
         val protonAtomIds = mutableSetOf<Long>()
         for (atom in atoms) {
             if (atom.species.symbol != "H") continue
