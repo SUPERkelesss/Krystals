@@ -57,13 +57,18 @@ class CrystalSceneBuilder {
 
         val atomById = analysis.atoms.associateBy { it.id }
         // Per v0.6.5: only make an external-shell atom visible if the bond's directional extend
-        // flag allows it.
+        // flag allows it. Per v0.8.44: same-atom periodic self-images never surface their far
+        // end — with the default METALS_ONLY extension the Ca-Ca rule extends, and without this
+        // guard the outer-shell Ca images beyond the cell would all become visible as an extra
+        // ring around the cell (the reached outer-shell C atoms of real Ca-C extensions still
+        // appear, which is the intended "show extended bonds" behaviour).
         val externallyVisible = analysis.bonds.asSequence()
             .filter { it.rule.key !in options.hiddenBondKeys }
             .mapNotNull { bond ->
                 val start = atomById[bond.atomA] ?: return@mapNotNull null
                 val end = atomById[bond.atomB] ?: return@mapNotNull null
                 if (end.isExternalShell &&
+                    !isSameAtomPeriodicImage(start, end) &&
                     bond.rule.shouldExtendAcrossCell(start.siteId, true) &&
                     end.siteId !in options.hiddenSiteIds
                 ) end.id else null

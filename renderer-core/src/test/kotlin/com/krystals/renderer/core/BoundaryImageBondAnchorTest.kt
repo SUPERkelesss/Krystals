@@ -10,6 +10,7 @@ import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.renderer.core.builder.CrystalSceneBuilder
+import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -59,6 +60,40 @@ class BoundaryImageBondAnchorTest {
         assertTrue(boundaryDisplayed.isNotEmpty(), "P1 NaCl must produce boundary images")
         val bondedBoundary = boundaryDisplayed.filter { it.id in visibleBondEnds }
         assertTrue(bondedBoundary.isNotEmpty(), "boundary-image atoms must keep visible bonds")
+    }
+
+    @Test
+    fun extendingBonds_doNotSurfaceOuterShellSelfImageAtoms() {
+        // CaC2 with METALS_ONLY-style extension (Ca-Ca extendAtoB=true, like the app's default):
+        // the outer-shell Ca images beyond the cell must NOT be displayed — they are same-atom
+        // periodic self-images of the extended metal bond, not atoms the extension reaches
+        // (v0.8.44). Reached outer-shell C atoms are still allowed.
+        val structure = CrystalStructure(
+            blockName = "cac2",
+            lattice = Lattice(3.86859720, 3.86859720, 6.40422248, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("I4/mmm", 139),
+            symmetryOperations = SpaceGroupCatalog.operations("I4/mmm"),
+            sites = listOf(
+                Site("Ca", "Ca0", Species("Ca"), FractionalCoordinate(0.0, 0.0, 0.0)),
+                Site("C", "C1", Species("C"), FractionalCoordinate(0.0, 0.0, 0.40210729)),
+            ),
+        )
+        val si = BondValence.smartIonicRules(structure, BondConfiguration(), 0.45)
+        val rules = si.rules.map { if (it.siteA == "Ca" || it.siteB == "Ca") it.copy(extendAtoB = true) else it }
+        val net = BondDetector.buildNetwork(structure, BondConfiguration(rules))
+        val scene = CrystalSceneBuilder().build(structure, net)
+        val visibleIds = scene.objects.filterIsInstance<AtomInstance>()
+            .filter { it.visible }
+            .map { it.atom.id }
+            .toSet()
+        val visibleOuterCa = net.atoms.filter { it.isExternalShell && it.species.symbol == "Ca" }
+            .filter { it.id in visibleIds }
+        assertEquals(emptyList(), visibleOuterCa.map { it.id },
+            "outer-shell Ca self-image atoms must not be surfaced by the extend preference")
+        // Sanity: at least one outer-shell C atom IS surfaced by the extended Ca-C bonds.
+        val visibleOuterC = net.atoms.filter { it.isExternalShell && it.species.symbol == "C" }
+            .filter { it.id in visibleIds }
+        assertTrue(visibleOuterC.isNotEmpty(), "reached outer-shell C atoms stay visible")
     }
 
     @Test
