@@ -30,8 +30,8 @@ fragment {
         vec3 L = normalize(materialParams.lightDirection);
         float NdotL = max(dot(viewN, L), 0.0);
         // v0.8.29: light model = ambient 60% + sun 40%.
-        float ambientShade = 0.6;
-        float sunShade = 0.4 * materialParams.highlightIntensity * NdotL;
+        float ambientShade = 0.5;
+        float sunShade = 0.5 * materialParams.highlightIntensity * NdotL;
         float diffuseShade = ambientShade + sunShade;
         vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);
         // Real Blinn-Phong specular: half-vector NdotH makes the highlight follow the
@@ -41,7 +41,7 @@ fragment {
         float NdotH = max(dot(viewN, H), 0.0);
         // v0.8.29: sun angular radius drives the highlight width; specular scales with 40%.
         float shininess = max(2.0 / (materialParams.highlightRadius + 0.01), 1.5);
-        float specular = materialParams.reflectionEnabled * 0.4 * materialParams.highlightIntensity * pow(NdotH, shininess);
+        float specular = materialParams.reflectionEnabled * 0.5 * materialParams.highlightIntensity * pow(NdotH, shininess);
         color.rgb = mix(color.rgb, vec3(1.0), specular * 0.75);
         float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);

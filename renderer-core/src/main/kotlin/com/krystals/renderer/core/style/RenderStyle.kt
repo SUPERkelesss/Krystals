@@ -34,10 +34,10 @@ data class WorldLight(
     }
 
     companion object {
-        /** Ambient share of the total light: 60%. */
-        const val AMBIENT_RATIO = 0.6f
-        /** Sun (directional) share of the total light: 40%. */
-        const val SUN_RATIO = 0.4f
+        /** Ambient share of the total light: 50% (v0.8.42, was 60%). */
+        const val AMBIENT_RATIO = 0.5f
+        /** Sun (directional) share of the total light: 50% (v0.8.42, was 40%). */
+        const val SUN_RATIO = 0.5f
     }
 }
 

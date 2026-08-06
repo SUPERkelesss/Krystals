@@ -123,15 +123,15 @@ class FilamentCompatibilityTest {
     }
 
     @Test
-    fun `light model is sixty percent ambient and forty percent sun`() {
-        // v0.8.29: the total light splits into a constant 60% ambient term and a
-        // directional 40% sun term that carries the diffuse + specular.
-        assertEquals(0.6f, WorldLight.AMBIENT_RATIO, 0.001f)
-        assertEquals(0.4f, WorldLight.SUN_RATIO, 0.001f)
+    fun `light model is fifty percent ambient and fifty percent sun`() {
+        // v0.8.42: the total light splits into a constant 50% ambient term and a
+        // directional 50% sun term that carries the diffuse + specular.
+        assertEquals(0.5f, WorldLight.AMBIENT_RATIO, 0.001f)
+        assertEquals(0.5f, WorldLight.SUN_RATIO, 0.001f)
         assertEquals(1.0f, WorldLight.AMBIENT_RATIO + WorldLight.SUN_RATIO, 0.001f)
-        assertEquals(0.6f, diffuseAmbient(), 0.001f)  // ambient share is constant
-        assertEquals(0.2f, sunShade(0.5f), 0.001f)    // 40% * intensity
-        assertEquals(0.16f, sunShade(0.4f), 0.001f)   // default intensity -> 16% sun
+        assertEquals(0.5f, diffuseAmbient(), 0.001f)  // ambient share is constant
+        assertEquals(0.25f, sunShade(0.5f), 0.001f)   // 50% * intensity
+        assertEquals(0.2f, sunShade(0.4f), 0.001f)    // default intensity -> 20% sun
     }
 
     @Test
