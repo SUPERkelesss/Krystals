@@ -201,6 +201,21 @@ class CrystalSceneBuilder {
         val emittedKeys = mutableSetOf<Triple<Any, Any, Triple<Int, Int, Int>>>()
         // Per v0.8.36: heteronuclear pairs already emitted (wrapped in-cell image identity).
         val emittedHeteroPairs = mutableSetOf<Pair<Int, Int>>()
+        // Per v0.8.38: pairs already kept as an anchor for a bondless boundary-image atom.
+        // Visible bond count per atom: a boundary-image atom whose bonds are all duplicates of
+        // in-cell pairs is anchored with one bond instead of ending bondless.
+        val visibleBondCountByAtom = mutableMapOf<Long, Int>()
+        // Per v0.8.38: boundary-image atoms that own a homopolar bond (e.g. the C-C dumbbells of
+        // the face C images in CaC2) are never anchored — their bond is shown regardless of the
+        // heteronuclear dedup, so a late emission order must not mis-trigger an anchor.
+        val homopolarBoundaryAtoms = mutableSetOf<Long>()
+        for (bond in analysis.bonds) {
+            val a = atomById[bond.atomA] ?: continue
+            val b = atomById[bond.atomB] ?: continue
+            if (a.species.symbol != b.species.symbol) continue
+            if (a.isShell && a.isBoundaryImage) homopolarBoundaryAtoms += bond.atomA
+            if (b.isShell && b.isBoundaryImage) homopolarBoundaryAtoms += bond.atomB
+        }
         for ((index, bond, dedupeKey) in bondEntries) {
             if (!emittedKeys.add(dedupeKey)) continue // skip duplicates
 
@@ -262,6 +277,12 @@ class CrystalSceneBuilder {
                     if (start.isExternalShell || end.isExternalShell) {
                         // Genuine out-of-cell neighbours stay behind the rule's extend flag.
                         bond.rule.shouldExtendAcrossCell(start.siteId, end.isExternalShell)
+                    } else if (start.isShell && end.isShell) {
+                        // Per v0.8.38: both ends are boundary images — two displayed atoms on the
+                        // cell faces; their bond is shown (the non-metal-end-must-be-primary rule
+                        // below is only about in-cell coordination, and would wrongly strip every
+                        // bond of a metal image in e.g. NaCl's face atoms).
+                        true
                     } else {
                         // Boundary-image keys: keep the bond only when the NON-METAL end is a
                         // primary atom (in-cell coordination) or both ends are non-metals.
@@ -292,7 +313,7 @@ class CrystalSceneBuilder {
                 (start.id in extendedEndAtoms || end.id in extendedEndAtoms)
             val finalVisible = if (isSecondaryExtend) {
                 options.showBonds && bond.rule.key !in options.hiddenBondKeys && options.secondaryExtendBonds
-            } else {
+            } else if (visible && start.species.symbol != end.species.symbol && !isHBond) {
                 // Per v0.8.36: heteronuclear bonds are deduplicated to their in-cell image so each
                 // primary atom pair renders exactly once — CaC2's Ca-C coordination bonds (8) instead
                 // of their boundary-image copies (26). Homopolar bonds (C-C dumbbells) keep every
@@ -301,11 +322,31 @@ class CrystalSceneBuilder {
                 // visible H-bonds include their periodic equivalents). The first instance wins;
                 // BondDetector orders bonds by (atomA, atomB, offset), so the in-cell (0,0,0)-offset
                 // image comes first and is the shortest of the pair.
-                if (visible && start.species.symbol != end.species.symbol && !isHBond) {
-                    emittedHeteroPairs.add(heteroPairKey(start, end))
+                // Per v0.8.38: a duplicate is still kept when its boundary-image end would
+                // otherwise have NO visible bond at all — e.g. the (1,0,0) Na image in NaCl,
+                // whose bonds are all duplicates of in-cell pairs. This anchors displayed
+                // periodic atoms instead of leaving them bondless (once per atom; atoms owning
+                // a homopolar bond are excluded because their bond shows regardless).
+                val pairKey = heteroPairKey(start, end)
+                if (emittedHeteroPairs.add(pairKey)) {
+                    true
                 } else {
-                    visible
+                    // Anchor once per bondless boundary-image atom: either end qualifies.
+                    val anchorableEnd = when {
+                        start.isShell && start.isBoundaryImage &&
+                            visibleBondCountByAtom[bond.atomA] == null -> bond.atomA
+                        end.isShell && end.isBoundaryImage &&
+                            visibleBondCountByAtom[bond.atomB] == null -> bond.atomB
+                        else -> -1L
+                    }
+                    anchorableEnd != -1L && anchorableEnd !in homopolarBoundaryAtoms
                 }
+            } else {
+                visible
+            }
+            if (finalVisible) {
+                visibleBondCountByAtom[bond.atomA] = (visibleBondCountByAtom[bond.atomA] ?: 0) + 1
+                visibleBondCountByAtom[bond.atomB] = (visibleBondCountByAtom[bond.atomB] ?: 0) + 1
             }
             objects += BondInstance(
                 id = "bond:${bond.atomA}:${bond.atomB}:${bond.offsetB.x}:${bond.offsetB.y}:${bond.offsetB.z}:$index",
