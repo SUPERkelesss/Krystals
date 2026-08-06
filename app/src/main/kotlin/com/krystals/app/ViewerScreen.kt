@@ -118,6 +118,8 @@ import com.krystals.crystal.analysis.bonding.BondDetector
 import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.bonding.BondValence
+import com.krystals.crystal.analysis.bonding.isMolecularCrystal
+import com.krystals.crystal.analysis.bonding.toMolecules
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.io.CifCodec
 import com.krystals.interaction.measure.MeasurementMode
@@ -322,6 +324,14 @@ internal fun ViewerScreen(
             val scene = withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
                 withContext(Dispatchers.Default) {
                     val analysis = BondDetector.buildNetwork(tab.structure, tab.bondConfiguration, tab.expansion)
+                    // 分子晶体分析(打开晶体、原子与键加载完毕后):检查一次 isMolecularCrystal,
+                    // 为 false 走固定流程;为 true 则 parse 得到分子列表(与原子/键并列储存),
+                    // 供后续分子接口使用。惰性:仅首次(或结构变更后)计算一次,复用本次键网络。
+                    if (tab.moleculeAnalysisPending) {
+                        tab.isMolecularCrystal = analysis.isMolecularCrystal()
+                        tab.molecules = if (tab.isMolecularCrystal) analysis.toMolecules() else emptyList()
+                        tab.moleculeAnalysisPending = false
+                    }
                     CrystalRenderSceneFactory.build(
                         analysis = analysis,
                         appearance = renderedAppearance,
@@ -518,6 +528,7 @@ internal fun ViewerScreen(
                                         tab.structure = result.structure
                                         tab.bondConfiguration = result.bondConfiguration
                                         tab.dirty = true
+                                        tab.moleculeAnalysisPending = true
                                     } else {
                                         onMessage(noBondMessage)
                                     }

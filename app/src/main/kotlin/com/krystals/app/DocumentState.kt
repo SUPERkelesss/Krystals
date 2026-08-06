@@ -15,6 +15,7 @@ import com.krystals.crystal.analysis.model.Expansion
 import com.krystals.crystal.analysis.model.RadiusSource
 import com.krystals.crystal.core.math.Vec3
 import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.model.Molecule
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.CifDisplayMetadata
 import com.krystals.crystal.io.ParsedStructure
@@ -68,6 +69,7 @@ data class DocumentSnapshot(
         tab.savedPrimitiveStructure = savedPrimitiveStructure
         tab.savedPrimitiveBondConfig = savedPrimitiveBondConfig
         tab.structuralExpansion = structuralExpansion
+        tab.moleculeAnalysisPending = true
     }
     companion object {
         fun capture(tab: DocumentTab) = DocumentSnapshot(
@@ -149,6 +151,12 @@ class DocumentTab(
 // not a display-only supercell. Controls whether SINGLE_CELL frame mode shows the
 // entire supercell frame or just one cell.
     var structuralExpansion by mutableStateOf(false)
+    // 分子晶体分析(惰性):打开晶体、键网络就绪后检查一次 isMolecularCrystal;
+    // 为 true 则 parse 出分子列表(与原子/键并列),供后续分子相关接口使用。
+    // 结构/键规则变更(编辑、undo/redo、自动键规则)后置回待计算,下次场景构建重算。
+    var isMolecularCrystal by mutableStateOf(false)
+    var molecules by mutableStateOf<List<Molecule>>(emptyList())
+    var moleculeAnalysisPending by mutableStateOf(true)
     // Per v0.7.1: when non-null, EditorPanel opens on this tab ("atoms", "bonds", etc.)
     var pendingEditorTab by mutableStateOf<String?>(null)
     // Per v0.7.1: bond draw state — when DRAWING, atom taps are intercepted to pick two atoms
@@ -241,6 +249,7 @@ class KrystalsViewModel : ViewModel() {
         tab.structure = result.structure
         tab.bondConfiguration = result.bondConfiguration
         tab.dirty = true
+        tab.moleculeAnalysisPending = true
     }
 
     fun createNew() {
@@ -274,6 +283,7 @@ class KrystalsViewModel : ViewModel() {
         tab.bondConfiguration = result.bondConfiguration
         tab.dirty = true
         tab.selectedAtomIds = emptyList()
+        tab.moleculeAnalysisPending = true
     }
 }
 
