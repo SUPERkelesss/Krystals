@@ -22,19 +22,6 @@ import com.krystals.crystal.data.BravaisLatticeData
 import com.krystals.crystal.data.PeriodicTableData
 import kotlin.math.abs
 
-/** Per v0.6.5: elements classified as non-metals. Hoisted to a single shared set so [isMetal] does
- *  not rebuild the set on every call (kept in sync with the identical set in bonding/BondValence.kt). */
-private val NON_METALS: Set<String> = setOf(
-    "H", "He", "B", "C", "N", "O", "F", "Ne",
-    "Si", "P", "S", "Cl", "Ar",
-    "Ge", "As", "Se", "Br", "Kr",
-    "Sb", "Te", "I", "Xe",
-    "At", "Rn", "Po",
-)
-
-/** Per v0.6.5: classify an element as metal (true) or non-metal (false). */
-private fun isMetal(symbol: String): Boolean = symbol !in NON_METALS
-
 /** Atomic-number index lookup for [PeriodicTableData.symbols], built once instead of an O(118)
  *  `indexOf` scan per comparison. */
 private val symbolIndex: Map<String, Int> =
@@ -42,16 +29,16 @@ private val symbolIndex: Map<String, Int> =
 
 /** Shared rule-sort comparator: metal sites first, then larger atomic number first within a type. */
 private fun bondRuleComparator(siteSpecies: Map<String, String>): Comparator<BondRule> = compareBy(
-    { !isMetal(siteSpecies[it.siteA] ?: "") },
-    { !isMetal(siteSpecies[it.siteB] ?: "") },
+    { !PeriodicTableData.isMetal(siteSpecies[it.siteA] ?: "") },
+    { !PeriodicTableData.isMetal(siteSpecies[it.siteB] ?: "") },
     { -(symbolIndex[siteSpecies[it.siteA] ?: ""] ?: -1) },
     { -(symbolIndex[siteSpecies[it.siteB] ?: ""] ?: -1) },
 )
 
 /** Per v0.6.5: order a site pair so that metal comes first; if both same type, larger atomic number first. */
 private fun orderedSites(siteA: Site, siteB: Site): Pair<Site, Site> {
-    val aMetal = isMetal(siteA.species.symbol)
-    val bMetal = isMetal(siteB.species.symbol)
+    val aMetal = PeriodicTableData.isMetal(siteA.species.symbol)
+    val bMetal = PeriodicTableData.isMetal(siteB.species.symbol)
     return when {
         aMetal && !bMetal -> siteA to siteB
         !aMetal && bMetal -> siteB to siteA
@@ -182,8 +169,8 @@ object CrystalEditor {
             ExtendBondDefaultMode.ALL -> rule.copy(extendAtoB = true, extendBtoA = true)
             ExtendBondDefaultMode.NEVER -> rule.copy(extendAtoB = false, extendBtoA = false)
             ExtendBondDefaultMode.METALS_ONLY -> rule.copy(
-                extendAtoB = isMetal(siteSymbolOf(structure, rule.siteA)),
-                extendBtoA = isMetal(siteSymbolOf(structure, rule.siteB)),
+                extendAtoB = PeriodicTableData.isMetal(siteSymbolOf(structure, rule.siteA)),
+                extendBtoA = PeriodicTableData.isMetal(siteSymbolOf(structure, rule.siteB)),
             )
         }
     }
@@ -219,7 +206,7 @@ object CrystalEditor {
      *  regardless of cell size (ignoring SMART_IONIC_ATOM_LIMIT). Metals keep the existing
      *  size-gated smart-ionic / bonding fallback logic. */
     fun isAllNonMetals(structure: CrystalStructure): Boolean =
-        structure.sites.all { !isMetal(it.species.symbol) }
+        structure.sites.all { !PeriodicTableData.isMetal(it.species.symbol) }
 
     fun fromSmartIonicAttempt(
         structure: CrystalStructure,

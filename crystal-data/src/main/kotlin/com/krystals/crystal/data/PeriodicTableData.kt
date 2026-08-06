@@ -1818,4 +1818,17 @@ object PeriodicTableData {
 
     /** Pauling electronegativity of [element] (0.0 if not tabulated). */
     fun electronegativityPublic(element: String): Double = electronegativity[element] ?: 0.0
+
+    /** Per v0.6.5: elements classified as non-metals. Single shared set so [isMetal] does not
+     *  rebuild the set on every call. Kept in the data layer so all modules use one definition. */
+    private val NON_METALS: Set<String> = setOf(
+        "H", "He", "B", "C", "N", "O", "F", "Ne",
+        "Si", "P", "S", "Cl", "Ar",
+        "Ge", "As", "Se", "Br", "Kr",
+        "Sb", "Te", "I", "Xe",
+        "At", "Rn", "Po",
+    )
+
+    /** True when [symbol] is a metal (false for non-metals and unknown symbols). */
+    fun isMetal(symbol: String): Boolean = symbol !in NON_METALS
 }

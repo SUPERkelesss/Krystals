@@ -10,19 +10,6 @@ import com.krystals.crystal.data.PeriodicTableData
 import kotlin.math.abs
 import kotlin.math.exp
 
-/** Per v0.6.5: elements classified as non-metals. Hoisted to a single shared set so [isMetal] does
- *  not rebuild the set on every call (kept in sync with the identical set in editing/CrystalEditor.kt). */
-private val NON_METALS: Set<String> = setOf(
-    "H", "He", "B", "C", "N", "O", "F", "Ne",
-    "Si", "P", "S", "Cl", "Ar",
-    "Ge", "As", "Se", "Br", "Kr",
-    "Sb", "Te", "I", "Xe",
-    "At", "Rn", "Po",
-)
-
-/** Per v0.6.5: classify an element as metal (true) or non-metal (false). */
-private fun isMetal(symbol: String): Boolean = symbol !in NON_METALS
-
 /** Atomic-number index lookup for [PeriodicTableData.symbols], built once instead of an O(118)
  *  `indexOf` scan per comparison. */
 private val symbolIndex: Map<String, Int> =
@@ -30,8 +17,8 @@ private val symbolIndex: Map<String, Int> =
 
 /** Per v0.6.5: order a site pair so that metal comes first; if both same type, larger atomic number first. */
 private fun orderedSites(siteA: Site, siteB: Site): Pair<Site, Site> {
-    val aMetal = isMetal(siteA.species.symbol)
-    val bMetal = isMetal(siteB.species.symbol)
+    val aMetal = PeriodicTableData.isMetal(siteA.species.symbol)
+    val bMetal = PeriodicTableData.isMetal(siteB.species.symbol)
     return when {
         aMetal && !bMetal -> siteA to siteB
         !aMetal && bMetal -> siteB to siteA
