@@ -62,8 +62,9 @@ class BoundaryImageBondAnchorTest {
     }
 
     @Test
-    fun cac2EightFourZeroRegression() {
-        // The CaC2 single-cell acceptance (8 Ca-C / 4 C-C / 0 Ca-Ca) must be unchanged.
+    fun cac2FullBondingRegression() {
+        // CaC2 single-cell acceptance: no Ca-Ca self-image bonds; C-C dumbbells present;
+        // full Ca-C coordination (>= 8, boundary images included since v0.8.40).
         val structure = CrystalStructure(
             blockName = "cac2",
             lattice = Lattice(3.86859720, 3.86859720, 6.40422248, 90.0, 90.0, 90.0),
@@ -85,7 +86,8 @@ class BoundaryImageBondAnchorTest {
                 val c = atomById.getValue(b.bond.atomB)
                 listOf(a.species.symbol, c.species.symbol).sorted().joinToString("-")
             }
-        assertEquals(8, bondTypes.count { it == "C-Ca" })
+        // Per v0.8.40: full Ca-C coordination (>= 8); 4 C-C dumbbells; no Ca-Ca self-images.
+        assertTrue(bondTypes.count { it == "C-Ca" } >= 8)
         assertEquals(4, bondTypes.count { it == "C-C" })
         assertEquals(0, bondTypes.count { it == "Ca-Ca" })
     }

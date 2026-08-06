@@ -101,8 +101,9 @@ class SecondaryExtendBondTest {
     }
 
     @Test
-    fun nonExtendingSceneKeepsEightFourZero() {
-        // Regression: with no extension rules the single cell keeps 8 Ca-C / 4 C-C / 0 Ca-Ca.
+    fun nonExtendingSceneKeepsNoCaCaAndFullCoordination() {
+        // Regression: without extension rules the single cell shows no Ca-Ca self-image bonds,
+        // keeps the C-C dumbbells, and (since v0.8.40) the full Ca-C coordination (>= 8).
         val structure = caC2Structure()
         val si = BondValence.smartIonicRules(structure, BondConfiguration(), 0.45)
         val net = BondDetector.buildNetwork(structure, BondConfiguration(si.rules))
@@ -115,7 +116,8 @@ class SecondaryExtendBondTest {
                 val c = atomById.getValue(b.bond.atomB)
                 listOf(a.species.symbol, c.species.symbol).sorted().joinToString("-")
             }
-        assertEquals(8, bondTypes.count { it == "C-Ca" })
+        // Per v0.8.40: full Ca-C coordination (>= 8); 4 C-C dumbbells; no Ca-Ca self-images.
+        assertTrue(bondTypes.count { it == "C-Ca" } >= 8)
         assertEquals(4, bondTypes.count { it == "C-C" })
         assertEquals(0, bondTypes.count { it == "Ca-Ca" })
     }
