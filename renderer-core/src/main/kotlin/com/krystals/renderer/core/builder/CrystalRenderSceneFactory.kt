@@ -20,6 +20,8 @@ object CrystalRenderSceneFactory {
         structuralExpansion: Boolean = false,
         moleculeExtend: Boolean = false,
         molecules: List<Molecule> = emptyList(),
+        // Per v0.8.x: hbond D–H···A angle threshold (degrees) — hbonds at or below it are hidden.
+        hbondAngleThreshold: Double = 110.0,
     ): RenderScene {
         val atoms = analysis.atoms
         // Material colour depends only on the site id, and radius only on the element symbol —
@@ -70,6 +72,7 @@ object CrystalRenderSceneFactory {
                 bondRadius = appearance.bondRadius.toDouble(),
                 hbondRadius = appearance.hbondRadius.toDouble(),
                 hbondOpacity = appearance.hbondOpacity.toDouble(),
+                hbondAngleThreshold = hbondAngleThreshold,
                 bondColorMode = appearance.bondColorMode,
                 environment = appearance.toEnvironment(),
                 structuralExpansion = structuralExpansion,

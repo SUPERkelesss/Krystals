@@ -8,7 +8,9 @@ import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
 import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
 import com.krystals.crystal.core.coordinate.CartesianCoordinate
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
+import com.krystals.crystal.core.math.Mat3
 import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.math.angleDegrees
 import com.krystals.crystal.core.math.distance
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
@@ -48,6 +50,9 @@ data class SceneBuildOptions(
     // Per v0.8.30: hydrogen-bond appearance (radius Å / opacity 0..1).
     val hbondRadius: Double = 0.05,
     val hbondOpacity: Double = 0.2,
+    // Per v0.8.x: 氢键角度阈值(D–H···A 夹角,度)。角度 ≤ 阈值的氢键不显示。
+    // 默认 110° 与检测层一致;阈值 ≤ 0 时不过滤。
+    val hbondAngleThreshold: Double = 110.0,
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val environment: RenderEnvironment = RenderEnvironment(),
     val structuralExpansion: Boolean = false,
@@ -423,6 +428,16 @@ class CrystalSceneBuilder {
         //    external-shell hbonds stay hidden as before);
         //  - dedupe by (endKey pair, offsetB). Overlap with the normal-bond dedupe keys cannot
         //    occur: the hbond window starts at the covalent max and the keys embed atom ids.
+        // Per v0.8.x: covalent-partner map for the D–H···A angle filter — H atom id → its
+        // covalently bonded atoms (same cut as HbondChecking's covalentPartners: bonds from
+        // analysis.bonds). Built once per scene build.
+        val covalentPartnersByAtom = HashMap<Long, MutableList<AtomImage>>()
+        for (bond in analysis.bonds) {
+            val a = atomById[bond.atomA] ?: continue
+            val b = atomById[bond.atomB] ?: continue
+            if (a.species.symbol == "H") covalentPartnersByAtom.getOrPut(a.id) { mutableListOf() } += b
+            if (b.species.symbol == "H") covalentPartnersByAtom.getOrPut(b.id) { mutableListOf() } += a
+        }
         val seenHbondKeys = mutableSetOf<Triple<Any, Any, Triple<Int, Int, Int>>>()
         analysis.hbonds.forEachIndexed { index, hbond ->
             val start = atomById[hbond.donorId]
@@ -472,7 +487,16 @@ class CrystalSceneBuilder {
                     }
                 }
             }
-            val visible = options.showBonds && hbond.ruleKey !in options.hiddenBondKeys && externalAllowed
+            // Per v0.8.x: D–H···A angle filter (display-only; the detection layer already cut at
+            // 110° during rule generation). Only hbonds whose angle EXCEEDS the threshold are
+            // shown; threshold <= 0 disables the filter; hbonds whose donor H has no covalent
+            // partner are never angle-filtered (mirrors the detection layer's "no partner →
+            // no angle check" behaviour).
+            val partners = covalentPartnersByAtom[start.id].orEmpty()
+            val angleOk = options.hbondAngleThreshold <= 0.0 ||
+                hbondAngleDegrees(start, end, partners, structure.lattice.matrix)
+                    ?.let { it > options.hbondAngleThreshold } ?: true
+            val visible = options.showBonds && hbond.ruleKey !in options.hiddenBondKeys && externalAllowed && angleOk
             objects += HbondInstance(
                 id = "hbond:${hbond.donorId}:${hbond.acceptorId}:${hbond.offsetB.x}:${hbond.offsetB.y}:${hbond.offsetB.z}:$index",
                 hbond = hbond,
@@ -709,6 +733,33 @@ class CrystalSceneBuilder {
         val ib = (b * iw).toInt().coerceIn(0, 255)
         val ia = (a * iw).toInt().coerceIn(0, 255)
         return Material(argb = (ia.toLong() shl 24) or (ir.toLong() shl 16) or (ig.toLong() shl 8) or ib.toLong(), reflective = false)
+    }
+
+    /** Per v0.8.x: shortest periodic displacement from [from] to [to], in cartesian space —
+     *  same semantics as HbondChecking.periodicDisplacement (the fractional difference wraps
+     *  into (-0.5, 0.5] before mapping back), so a donor H near the cell boundary measures
+     *  its acceptor and covalent partner across the boundary correctly. */
+    private fun periodicDisplacement(from: Vec3, to: Vec3, lattice: Mat3): Vec3 {
+        val frac = lattice.inverse() * (to - from)
+        val wrapped = Vec3(
+            frac.x - kotlin.math.round(frac.x),
+            frac.y - kotlin.math.round(frac.y),
+            frac.z - kotlin.math.round(frac.z),
+        )
+        return lattice * wrapped
+    }
+
+    /** Per v0.8.x: D–H···A angle in degrees for an hbond whose donor is [h] and acceptor is [a]
+     *  (vertex at H, evaluated at the origin — translation-invariant). Measured over the
+     *  periodic shortest displacements; the best (largest) angle across all covalent partners
+     *  [partners] is used. Returns null when [h] has no covalent partner — no angle to filter. */
+    private fun hbondAngleDegrees(h: AtomImage, a: AtomImage, partners: List<AtomImage>, lattice: Mat3): Double? {
+        val hPos = h.cartesianCoordinate.toVec3()
+        val toA = periodicDisplacement(hPos, a.cartesianCoordinate.toVec3(), lattice)
+        return partners.map { p ->
+            val toP = periodicDisplacement(hPos, p.cartesianCoordinate.toVec3(), lattice)
+            angleDegrees(toP, Vec3(0.0, 0.0, 0.0), toA)
+        }.maxOrNull()
     }
 
     /** Per v0.8.36: true when [b] is a periodic image of the same atom as [a] — the fractional
