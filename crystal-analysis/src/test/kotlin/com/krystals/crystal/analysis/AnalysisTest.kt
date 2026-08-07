@@ -475,7 +475,9 @@ class AnalysisTest {
         )
         val hbond = BondRule("H", "F", 1.4, 2.5, isHBond = true)
         val network = BondDetector.buildNetwork(structure, BondConfiguration(listOf(hbond)))
-        assertTrue(network.bonds.isNotEmpty(), "hbond rule should produce bonds")
-        assertTrue(network.bonds.all { it.rule.isHBond })
+        // Per hbond-model: hbond bonds live in the separate hbonds channel.
+        assertTrue(network.hbonds.isNotEmpty(), "hbond rule should produce hbonds")
+        assertTrue(network.bonds.isEmpty(), "hbonds must be separated from normal bonds")
     }
+
 }

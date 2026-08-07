@@ -61,8 +61,8 @@ class HbondIceIhSceneTest {
         val scene = CrystalSceneBuilder().build(structure, network, SceneBuildOptions())
 
         val visibleBonds = scene.bonds.filter { it.visible }
-        val visibleHbonds = visibleBonds.filter { it.bond.rule.isHBond }
-        val visibleNormal = visibleBonds.filter { !it.bond.rule.isHBond }
+        val visibleHbonds = scene.hbonds.filter { it.visible }
+        val visibleNormal = visibleBonds
 
         // Ice-Ih per-unit-cell geometry: 12 H₂O → 24 H donors → 24 H-bonds (undirected).
         assertEquals(21, visibleHbonds.size, "visible hbond BondInstances in ice-Ih 1x1x1")
@@ -70,13 +70,13 @@ class HbondIceIhSceneTest {
         // (1×1×1) with scene-builder filtering. Non-zero sanity only — hbond count is the
         // primary regression guard.
         assertTrue(visibleNormal.size > 20, "visible normal bonds in ice-Ih, got ${visibleNormal.size}")
-        assertTrue(visibleBonds.size > 40, "total visible bonds in ice-Ih, got ${visibleBonds.size}")
+        assertTrue(visibleBonds.size + visibleHbonds.size > 40, "total visible bonds in ice-Ih, got ${visibleBonds.size + visibleHbonds.size}")
 
         // Sanity: every hbond is between H and O.
-        visibleHbonds.forEach { bond ->
+        visibleHbonds.forEach { hb ->
             val symbols = setOf(
-                network.atoms.first { it.id == bond.bond.atomA }.species.symbol,
-                network.atoms.first { it.id == bond.bond.atomB }.species.symbol,
+                network.atoms.first { it.id == hb.hbond.donorId }.species.symbol,
+                network.atoms.first { it.id == hb.hbond.acceptorId }.species.symbol,
             )
             assertEquals(setOf("H", "O"), symbols, "hbond must be H–O")
         }

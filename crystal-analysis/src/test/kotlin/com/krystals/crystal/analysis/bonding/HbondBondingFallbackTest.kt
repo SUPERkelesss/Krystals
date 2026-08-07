@@ -182,10 +182,10 @@ class HbondBondingFallbackTest {
         val result = BondValence.smartIonicRules(structure, BondConfiguration(), 0.45, atoms)
         assertTrue(result.success, "smartIonic must succeed")
         val net = BondDetector.buildNetwork(structure, BondConfiguration(result.rules))
-        val hbondBonds = net.bonds.filter { it.rule.isHBond }
+        val hbondBonds = net.hbonds
         assertEquals(2, hbondBonds.size, "two protons, one H-bond each — acceptor O3 receives both")
         hbondBonds.forEach { b ->
-            val end = net.atoms.first { it.id == b.atomB }
+            val end = net.atoms.first { it.id == b.acceptorId }
             assertTrue(end.species.symbol == "O", "hbond must terminate at an O acceptor, got ${end.species.symbol}")
         }
     }
@@ -212,7 +212,7 @@ class HbondBondingFallbackTest {
         assertTrue(bp.bondConfiguration.rules.any { it.isHBond }, "bonding path must detect the boundary H-bond")
         // And the bond must materialise in the network at the periodic distance.
         val net = BondDetector.buildNetwork(structure, bp.bondConfiguration)
-        val hbondBonds = net.bonds.filter { it.rule.isHBond }
+        val hbondBonds = net.hbonds
         assertEquals(1, hbondBonds.size)
         assertTrue(hbondBonds.single().distance in 2.0..2.6, "H-bond distance must be the periodic ~2.39 Å")
     }

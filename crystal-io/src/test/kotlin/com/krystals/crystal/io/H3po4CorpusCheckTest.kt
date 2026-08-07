@@ -24,10 +24,15 @@ class H3po4CorpusCheckTest {
         val result = BondValence.smartIonicRules(structure, BondConfiguration(), 0.45)
         val network = BondDetector.buildNetwork(structure, BondConfiguration(rules = result.rules))
         val atomById = network.atoms.associate { it.id to it }
-        val hbonds = network.bonds.filter { it.rule.isHBond }
-        // Scene-builder visibility: hbond rules never extend across the cell, so an hbond whose
-        // acceptor (atomB, oriented shell-last) is an external shell is hidden.
-        val visible = hbonds.filter { !(atomById[it.atomB]?.isExternalShell == true) }
+        val hbonds = network.hbonds
+        // Scene-builder visibility: hbond rules never extend across the cell, so an hbond with
+        // EITHER endpoint an external shell is hidden (both ends are checked, mirroring the
+        // scene builder's externalAllowed gate).
+        val visible = hbonds.filter {
+            val donor = atomById[it.donorId]
+            val acceptor = atomById[it.acceptorId]
+            !(donor?.isExternalShell == true) && !(acceptor?.isExternalShell == true)
+        }
         println("corpus H3PO4: hbondRules=${result.rules.count { it.isHBond }} hbondBonds=${hbonds.size} visible=${visible.size}")
         visible.forEach { println("  d=${"%.2f".format(it.distance)}") }
         assertEquals(10, visible.size, "visible hbonds from corpus CIF")

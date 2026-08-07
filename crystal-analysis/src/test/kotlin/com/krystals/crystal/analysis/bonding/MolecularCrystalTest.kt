@@ -7,6 +7,7 @@ import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.model.HydrogenBond
 import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.periodic.Int3
@@ -36,8 +37,8 @@ class MolecularCrystalTest {
     private fun b(aId: Long, bId: Long) =
         Bond(aId, bId, 1.0, BondRule("A", "B", 0.1, 3.0, BondRuleSource.AUTO))
 
-    private fun network(atoms: List<AtomImage>, bonds: List<Bond>): BondNetwork =
-        BondNetwork(atoms, bonds, dummyStructure, Expansion())
+    private fun network(atoms: List<AtomImage>, bonds: List<Bond>, hbonds: List<HydrogenBond> = emptyList()): BondNetwork =
+        BondNetwork(atoms = atoms, bonds = bonds, hbonds = hbonds, structure = dummyStructure, expansion = Expansion())
 
     // ── 算法逻辑:手造原子/键 ──────────────────────────────────────────────
 
@@ -110,13 +111,16 @@ class MolecularCrystalTest {
         val h1p = a(6, "H", "H", FractionalCoordinate(0.1, 0.1, 1.2), cell = Int3(0, 0, 1), shell = true)
         val covalent = BondRule("O", "H", 0.5, 1.5, BondRuleSource.AUTO)
         val hbond = BondRule("O", "H", 1.5, 2.6, BondRuleSource.AUTO, isHBond = true)
+        val atoms = listOf(o1, h1, o2, h2, h2p, h1p)
         val net = network(
-            listOf(o1, h1, o2, h2, h2p, h1p),
+            atoms,
             listOf(
                 Bond(1, 2, 1.0, covalent),
                 Bond(3, 4, 1.0, covalent),
-                Bond(1, 5, 2.4, hbond),
-                Bond(3, 6, 2.4, hbond),
+            ),
+            hbonds = listOf(
+                Bond(1, 5, 2.4, hbond).toHydrogenBond(atoms.associateBy { it.id }),
+                Bond(3, 6, 2.4, hbond).toHydrogenBond(atoms.associateBy { it.id }),
             ),
         )
         assertTrue(net.isMolecularCrystal())

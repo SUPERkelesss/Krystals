@@ -112,12 +112,11 @@ class CrystalSceneBuilderTest {
         val analysis = BondDetector.buildNetwork(structure, BondConfiguration(listOf(hbondRule)))
         val scene = CrystalSceneBuilder().build(structure, analysis, SceneBuildOptions())
 
-        val hbonds = scene.bonds.filter { it.bond.rule.isHBond }
+        val hbonds = scene.hbonds
         assertTrue(hbonds.isNotEmpty(), "scene must contain hbond instances")
-        hbonds.forEach { bond ->
-            assertEquals(HbondPattern.RADIUS, bond.radius, "hbond radius override")
-            assertEquals(HbondPattern.material(), bond.startMaterial, "hbond start material override")
-            assertEquals(HbondPattern.material(), bond.endMaterial, "hbond end material override")
+        hbonds.forEach { hb ->
+            assertEquals(HbondPattern.RADIUS, hb.radius, "hbond radius override")
+            assertEquals(HbondPattern.material(), hb.material, "hbond material override")
         }
     }
 
@@ -177,7 +176,7 @@ class CrystalSceneBuilderTest {
             fractionalCoordinate = FractionalCoordinate(0.0, 0.0, 1.0),
             cellOffset = Int3(0, 0, -1), isShell = true, isBoundaryImage = true,
         )
-        val analysis = BondNetwork(listOf(primary, shellDup), emptyList(), structure, Expansion())
+        val analysis = BondNetwork(listOf(primary, shellDup), emptyList(), structure = structure, expansion = Expansion())
         val scene = CrystalSceneBuilder().build(structure, analysis, SceneBuildOptions())
         val atOrigin = scene.objects.filterIsInstance<AtomInstance>().count {
             it.atom.cartesianCoordinate == CartesianCoordinate(0.0, 0.0, 0.0)
@@ -204,7 +203,7 @@ class CrystalSceneBuilderTest {
             atom(3, "A1", 4.0, shell = true),
             atom(4, "A2", 4.0, shell = true),
         )
-        val analysis = BondNetwork(atoms, emptyList(), structure, Expansion())
+        val analysis = BondNetwork(atoms, emptyList(), structure = structure, expansion = Expansion())
         val scene = CrystalSceneBuilder().build(structure, analysis, SceneBuildOptions())
         val groups = scene.objects.filterIsInstance<GatheredAtomInstance>()
         assertEquals(2, groups.size)

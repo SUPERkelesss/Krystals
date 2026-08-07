@@ -57,9 +57,8 @@ class HbondH3po4SceneTest {
         val network = BondDetector.buildNetworkGridded(structure, config, Expansion())
         val scene = CrystalSceneBuilder().build(structure, network, SceneBuildOptions())
 
-        val visibleBonds = scene.bonds.filter { it.visible }
-        val visibleHbonds = visibleBonds.filter { it.bond.rule.isHBond }
+        val visibleHbonds = scene.hbonds.filter { it.visible }
 
-        assertEquals(10, visibleHbonds.size, "visible hbond BondInstances in H3PO4 1x1x1")
+        assertEquals(10, visibleHbonds.size, "visible hbond HbondInstances in H3PO4 1x1x1")
     }
 }

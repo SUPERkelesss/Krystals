@@ -43,8 +43,8 @@ internal fun BondNetwork.toCellBondGraph(): CellBondGraph {
 
     val edges = HashMap<Long, MutableList<Pair<Long, Int3>>>()
     for (bond in bonds) {
+        // 氢键已由 BondNetwork 分离到独立通道(hbonds),本图只含共价键 ——
         // 氢键是分子间弱作用,不参与分子晶体判据(冰/尿素等氢键晶体仍为分子晶体)。
-        if (bond.rule.isHBond) continue
         val u = byId[bond.atomA] ?: continue
         val v = byId[bond.atomB] ?: continue
         val ru = rep(u) ?: continue

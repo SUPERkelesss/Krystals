@@ -4,11 +4,12 @@ import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
 import com.krystals.renderer.core.primitive.GatheredAtomInstance
+import com.krystals.renderer.core.primitive.HbondInstance
 import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.crystal.core.math.Vec3
 
-enum class GeometryKind { SPHERE_HIGH, SPHERE_MEDIUM, SPHERE_LOW, CYLINDER, POLYHEDRON, HIGHLIGHT, FRAME, AXIS, MEASUREMENT, PIE_SECTOR }
+enum class GeometryKind { SPHERE_HIGH, SPHERE_MEDIUM, SPHERE_LOW, CYLINDER, HBOND, POLYHEDRON, FRAME, AXIS, MEASUREMENT, PIE_SECTOR }
 
 data class MaterialKey(
     val argb: Long,
@@ -16,13 +17,18 @@ data class MaterialKey(
     val reflective: Boolean,
     val doubleSided: Boolean,
     val occupancyBits: Long,
+    /** Gathered-atom pie sectors, each encoded as (argb shl 16) or (fraction*65535).
+     *  Empty for regular atoms. Content-equality keeps material instances deduped by
+     *  actual sector layout. */
+    val slices: List<Long> = emptyList(),
 ) {
-    constructor(material: Material, occupancy: Double = 1.0) : this(
+    constructor(material: Material, occupancy: Double = 1.0, slices: List<Long> = emptyList()) : this(
         material.argb,
         material.opacity.toBits(),
         material.reflective,
         material.doubleSided,
         occupancy.coerceIn(0.0, 1.0).toBits(),
+        slices,
     )
     val transparent: Boolean get() = Double.fromBits(opacityBits) < 0.999 || Double.fromBits(occupancyBits) < 0.999
 }
@@ -90,26 +96,33 @@ class InstanceManager {
             val (clippedStart, clippedEnd) = clipBondEndpoints(
                 bond.start, bond.end, startRadius, endRadius,
             )
-            // Per v0.8.1: H-bonds are a single translucent cylinder (no two-half split).
-            if (bond.bond.rule.isHBond) {
-                next[bond.id] = InstanceRecord(
-                    bond.id, pickId(bond.id),
-                    BatchKey(GeometryKind.CYLINDER, MaterialKey(bond.startMaterial)),
-                    cylinderTransform(clippedStart, clippedEnd, bond.radius),
+            val middle = (clippedStart + clippedEnd) * 0.5
+            val halves: List<Pair<String, Triple<Vec3, Vec3, Material>>> = listOf(
+                "${bond.id}:a" to Triple(clippedStart, middle, bond.startMaterial),
+                "${bond.id}:b" to Triple(middle, clippedEnd, bond.endMaterial),
+            )
+            halves.forEach { (id, half) ->
+                next[id] = InstanceRecord(
+                    id, pickId(bond.id), BatchKey(GeometryKind.CYLINDER, MaterialKey(half.third)),
+                    cylinderTransform(half.first, half.second, bond.radius),
                 )
-            } else {
-                val middle = (clippedStart + clippedEnd) * 0.5
-                val halves: List<Pair<String, Triple<Vec3, Vec3, Material>>> = listOf(
-                    "${bond.id}:a" to Triple(clippedStart, middle, bond.startMaterial),
-                    "${bond.id}:b" to Triple(middle, clippedEnd, bond.endMaterial),
-                )
-                halves.forEach { (id, half) ->
-                    next[id] = InstanceRecord(
-                        id, pickId(bond.id), BatchKey(GeometryKind.CYLINDER, MaterialKey(half.third)),
-                        cylinderTransform(half.first, half.second, bond.radius),
-                    )
-                }
             }
+        }
+        // Hydrogen bonds: a single translucent cylinder (no two-half split), same endpoint
+        // clipping as normal bonds (the scene builder already anchored at sphere surfaces).
+        scene.hbonds.asSequence().filter(HbondInstance::visible).forEach { hb ->
+            val startAtom = atomsByImageId[hb.hbond.donorId]
+            val endAtom = atomsByImageId[hb.hbond.acceptorId]
+            val startRadius = if (startAtom?.atom?.id in gatheredByMemberId) 0.0
+                else startAtom?.takeIf { it.visible }?.radius
+            val endRadius = if (endAtom?.atom?.id in gatheredByMemberId) 0.0
+                else endAtom?.takeIf { it.visible }?.radius
+            val (clippedStart, clippedEnd) = clipBondEndpoints(hb.start, hb.end, startRadius, endRadius)
+            next[hb.id] = InstanceRecord(
+                hb.id, pickId(hb.id),
+                BatchKey(GeometryKind.HBOND, MaterialKey(hb.material)),
+                cylinderTransform(clippedStart, clippedEnd, hb.radius),
+            )
         }
         scene.meshes.asSequence().filter(MeshInstance::visible).forEach { mesh ->
             next[mesh.id] = InstanceRecord(mesh.id, pickId(mesh.id), BatchKey(GeometryKind.POLYHEDRON, MaterialKey(mesh.material)), identity())

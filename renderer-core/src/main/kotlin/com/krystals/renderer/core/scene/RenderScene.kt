@@ -6,6 +6,7 @@ import com.krystals.renderer.core.camera.Camera
 import com.krystals.renderer.core.camera.Projection
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
+import com.krystals.renderer.core.primitive.HbondInstance
 import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.style.RenderEnvironment
 
@@ -23,6 +24,8 @@ data class RenderScene(
 ) {
     val atoms: List<AtomInstance> = objects.filterIsInstance<AtomInstance>()
     val bonds: List<BondInstance> = objects.filterIsInstance<BondInstance>()
+    /** 氢键实例(独立通道,与 [bonds] 分离)。 */
+    val hbonds: List<HbondInstance> = objects.filterIsInstance<HbondInstance>()
     val meshes: List<MeshInstance> = objects.filterIsInstance<MeshInstance>()
 
     init {

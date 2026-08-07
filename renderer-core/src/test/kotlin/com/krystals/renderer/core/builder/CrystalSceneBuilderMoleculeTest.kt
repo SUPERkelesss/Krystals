@@ -4,6 +4,7 @@ import com.krystals.crystal.analysis.bonding.Bond
 import com.krystals.crystal.analysis.bonding.BondNetwork
 import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondRuleSource
+import com.krystals.crystal.analysis.bonding.toHydrogenBond
 import com.krystals.crystal.analysis.model.Expansion
 import com.krystals.crystal.core.coordinate.CartesianCoordinate
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
@@ -11,6 +12,7 @@ import com.krystals.crystal.core.lattice.Lattice
 import com.krystals.crystal.core.math.distance
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.model.HydrogenBond
 import com.krystals.crystal.core.model.Molecule
 import com.krystals.crystal.core.model.MoleculeAtom
 import com.krystals.crystal.core.model.MoleculeBond
@@ -146,8 +148,13 @@ class CrystalSceneBuilderMoleculeTest {
         options: SceneBuildOptions = SceneBuildOptions(),
         bondList: List<Bond> = bonds,
         atomList: List<AtomImage> = atoms,
+        hbondList: List<HydrogenBond> = emptyList(),
     ): RenderScene =
-        CrystalSceneBuilder().build(structure, BondNetwork(atomList, bondList, structure, Expansion()), options)
+        CrystalSceneBuilder().build(
+            structure,
+            BondNetwork(atomList, bondList, hbondList, structure = structure, expansion = Expansion()),
+            options,
+        )
 
     private fun RenderScene.atomInstance(id: Long) = atoms.single { it.atom.id == id }
     private fun RenderScene.bondBetween(a: Long, b: Long) = bonds.single {
@@ -357,15 +364,17 @@ class CrystalSceneBuilderMoleculeTest {
     fun moleculeExtendHbondFollowsEndpointVisibility() {
         // 分子间氢键 O1-H3:隐藏 H3 所在分子(水分子 2 全部原子)→ 氢键跟随端点隐藏。
         val hbond = Bond(1, 5, 2.4, BondRule("O1", "H3", 1.5, 3.0, BondRuleSource.AUTO, isHBond = true))
+            .toHydrogenBond(atoms.associateBy { it.id })
         val scene = build(
             SceneBuildOptions(
                 moleculeExtend = true,
                 molecules = molecules,
                 hiddenSiteIds = setOf("O2", "H3", "H4"),
             ),
-            bonds + hbond,
+            bonds,
+            hbondList = listOf(hbond),
         )
-        val h = scene.bonds.single { it.bond.rule.isHBond }
+        val h = scene.hbonds.single()
         assertFalse(h.visible, "hbond to a fully-hidden molecule should hide with its endpoint")
     }
 
@@ -373,8 +382,13 @@ class CrystalSceneBuilderMoleculeTest {
     fun moleculeExtendShowsInterMolecularHbondsButNotCrossMoleculeCovalent() {
         // 分子间氢键(O1 与另一分子的 H3):分子展开下仍显示(氢键不属于分子,不沿其展开)。
         val hbond = Bond(1, 5, 2.4, BondRule("O1", "H3", 1.5, 3.0, BondRuleSource.AUTO, isHBond = true))
-        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = molecules), bonds + hbond)
-        val h = scene.bonds.single { it.bond.rule.isHBond }
+            .toHydrogenBond(atoms.associateBy { it.id })
+        val scene = build(
+            SceneBuildOptions(moleculeExtend = true, molecules = molecules),
+            bonds,
+            hbondList = listOf(hbond),
+        )
+        val h = scene.hbonds.single()
         assertTrue(h.visible, "inter-molecular hbond should be visible under molecule-extend")
         // 水分子内部键照常显示。
         assertTrue(scene.bondBetween(1, 2).visible)

@@ -386,13 +386,27 @@ object BondDetector {
             result.removeAll { it.rule.isHBond && it !in hbondKeep }
         }
 
+        // Per hbond-model: separate hbonds from normal bonds at the network boundary.
+        // The post-filter above (angle re-check + per-H shortest) still runs on the
+        // mixed list — detection behaviour is unchanged; only the output channels split.
+        val hbondBonds = ArrayList<Bond>()
+        val normalBonds = ArrayList<Bond>()
+        for (b in result) {
+            if (b.rule.isHBond) hbondBonds += b else normalBonds += b
+        }
+
         // Keep shell atoms referenced by a bond; discard the rest (same filtering as the legacy path).
         // Per v0.6.5: boundary images must always be kept — they complete the visible cell structure
         // (e.g. WC's corner W atoms at (1,0,0), (0,1,0), (1,1,0)) even when not referenced by any bond.
+        // Per hbond-model: hbond endpoints must count too, or their shell acceptors would be dropped.
         val referencedShellIds = HashSet<Long>()
-        for (bond in result) {
+        for (bond in normalBonds) {
             referencedShellIds += bond.atomA
             referencedShellIds += bond.atomB
+        }
+        for (hbond in hbondBonds) {
+            referencedShellIds += hbond.atomA
+            referencedShellIds += hbond.atomB
         }
         val keptShell = (boundaryImages + shellAtoms).filter { it.isShell && (it.isBoundaryImage || it.id in referencedShellIds) }
 
@@ -410,10 +424,15 @@ object BondDetector {
         require(finalAtoms.size <= MAX_RENDERED_ATOMS) {
             "Expansion exceeds limit $MAX_RENDERED_ATOMS"
         }
-        val finalBonds = result.map { bond ->
+        val finalBonds = normalBonds.map { bond ->
             bond.copy(atomA = idMap.getValue(bond.atomA), atomB = idMap.getValue(bond.atomB))
         }
-        return BondNetwork(finalAtoms, finalBonds, structure, expansion)
+        val finalAtomsById = finalAtoms.associateBy { it.id }
+        val finalHbonds = hbondBonds.map { bond ->
+            bond.copy(atomA = idMap.getValue(bond.atomA), atomB = idMap.getValue(bond.atomB))
+                .toHydrogenBond(finalAtomsById)
+        }
+        return BondNetwork(finalAtoms, finalBonds, finalHbonds, structure, expansion)
     }
 
     /**

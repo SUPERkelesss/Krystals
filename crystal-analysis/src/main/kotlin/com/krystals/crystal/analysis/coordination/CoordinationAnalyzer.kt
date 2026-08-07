@@ -19,6 +19,15 @@ object CoordinationAnalyzer {
             neighbors.getOrPut(atomA.id) { mutableListOf() } += atomB
             neighbors.getOrPut(atomB.id) { mutableListOf() } += atomA
         }
+        // Per hbond-model: hbonds are a separate channel but still contribute to coordination
+        // neighbours exactly as before the separation (behaviour preserved, see plan R2).
+        network.hbonds.forEach { hbond ->
+            if (hbond.ruleKey in hiddenBondPairs) return@forEach
+            val atomA = atomById[hbond.donorId] ?: return@forEach
+            val atomB = atomById[hbond.acceptorId] ?: return@forEach
+            neighbors.getOrPut(atomA.id) { mutableListOf() } += atomB
+            neighbors.getOrPut(atomB.id) { mutableListOf() } += atomA
+        }
         return neighbors.mapValues { (_, atoms) -> atoms.toList() }
     }
 

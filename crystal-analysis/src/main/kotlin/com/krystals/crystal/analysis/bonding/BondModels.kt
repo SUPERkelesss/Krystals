@@ -1,5 +1,7 @@
 package com.krystals.crystal.analysis.bonding
 
+import com.krystals.crystal.core.model.AtomImage
+import com.krystals.crystal.core.model.HydrogenBond
 import com.krystals.crystal.core.periodic.Int3
 
 enum class BondRuleSource { CUSTOM, EXPLICIT, AUTO }
@@ -45,6 +47,30 @@ data class Bond(
     val rule: BondRule,
     val offsetB: Int3 = Int3(0, 0, 0),
 )
+
+/**
+ * 把一根氢键 [Bond](rule.isHBond == true)转成独立模型 [HydrogenBond]。
+ *
+ * [atomById] 用于判定供体 H 端(壳层原子作 atomB 的约定使 H 可能在任意一端);
+ * 方向对消费端无关,但 [HydrogenBond.donorId] 语义必须正确。
+ * 调用方保证该 [Bond] 的 rule 是氢键规则;普通键误转会产生错误的氢键数据。
+ */
+fun Bond.toHydrogenBond(atomById: Map<Long, AtomImage>): HydrogenBond {
+    val donorFirst = atomById[atomA]?.species?.symbol == "H"
+    val donor = if (donorFirst) atomA else atomB
+    val acceptor = if (donorFirst) atomB else atomA
+    return HydrogenBond(
+        donorId = donor,
+        acceptorId = acceptor,
+        distance = distance,
+        siteA = rule.siteA,
+        siteB = rule.siteB,
+        ruleKey = rule.key,
+        extendAtoB = rule.extendAtoB,
+        extendBtoA = rule.extendBtoA,
+        offsetB = offsetB,
+    )
+}
 
 data class BondConfiguration(
     val rules: List<BondRule> = emptyList(),

@@ -64,28 +64,27 @@ class MoleculeCrystalCorpusTest {
         val parsed = parse("08_molecular/urea_CH4N2O.cif")
         val bp = CrystalEditor.fromSmartIonicAttempt(parsed.structure, BondConfiguration(), 0.45, smartIonic = null)
         val net = BondDetector.buildNetwork(parsed.structure, BondConfiguration(bp.bondConfiguration.rules))
-        val hbonds = net.bonds.filter { it.rule.isHBond }
+        val hbonds = net.hbonds
         assertTrue(hbonds.isNotEmpty(), "尿素应生成氢键")
         val atomById = net.atoms.associateBy { it.id }
+        val rulesByKey = bp.bondConfiguration.rules.associateBy { it.key }
         // 1) 距离在规则窗口内。
         for (b in hbonds) {
+            val rule = rulesByKey[b.ruleKey] ?: error("hbond rule missing for ${b.ruleKey}")
             assertTrue(
-                b.distance >= b.rule.minAngstrom - 1e-9 && b.distance <= b.rule.maxAngstrom + 1e-9,
-                "氢键距离 ${b.distance} 超出窗口 ${b.rule.minAngstrom}-${b.rule.maxAngstrom}",
+                b.distance >= rule.minAngstrom - 1e-9 && b.distance <= rule.maxAngstrom + 1e-9,
+                "氢键距离 ${b.distance} 超出窗口 ${rule.minAngstrom}-${rule.maxAngstrom}",
             )
         }
         // 2) per-H 最短:每个 H 原子恰一条氢键。
         val perH = HashMap<Long, Int>()
         for (b in hbonds) {
-            val a = atomById[b.atomA] ?: continue
-            val hId = if (a.species.symbol == "H") b.atomA else b.atomB
-            perH[hId] = (perH[hId] ?: 0) + 1
+            perH[b.donorId] = (perH[b.donorId] ?: 0) + 1
         }
         assertTrue(perH.values.all { it == 1 }, "每个 H 应恰一条氢键,got $perH")
         // 3) 角度 X-H-Y > 110°(X = H 的共价伙伴)。
         val covalentPartners = HashMap<Long, MutableList<AtomImage>>()
         for (b in net.bonds) {
-            if (b.rule.isHBond) continue
             val a = atomById[b.atomA] ?: continue
             val c = atomById[b.atomB] ?: continue
             if (a.species.symbol == "H") covalentPartners.getOrPut(b.atomA) { mutableListOf() } += c
@@ -93,9 +92,8 @@ class MoleculeCrystalCorpusTest {
         }
         val lattice = parsed.structure.lattice.matrix
         for (b in hbonds) {
-            val a = atomById[b.atomA] ?: continue
-            val c = atomById[b.atomB] ?: continue
-            val (h, y) = if (a.species.symbol == "H") a to c else c to a
+            val h = atomById[b.donorId] ?: continue
+            val y = atomById[b.acceptorId] ?: continue
             val hPos = h.cartesianCoordinate.toVec3()
             val toY = shortestDisplacement(lattice, hPos, y.cartesianCoordinate.toVec3())
             val partners = covalentPartners[h.id].orEmpty()

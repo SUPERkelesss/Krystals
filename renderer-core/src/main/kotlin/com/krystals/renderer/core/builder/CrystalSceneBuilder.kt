@@ -12,6 +12,7 @@ import com.krystals.crystal.core.math.Vec3
 import com.krystals.crystal.core.math.distance
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.model.HydrogenBond
 import com.krystals.crystal.core.model.Molecule
 import com.krystals.crystal.core.model.MoleculeAtom
 import com.krystals.crystal.core.periodic.Int3
@@ -19,6 +20,7 @@ import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
 import com.krystals.renderer.core.primitive.GatheredAtomInstance
+import com.krystals.renderer.core.primitive.HbondInstance
 import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.primitive.MeshKind
 import com.krystals.renderer.core.scene.GatheredAtomGrouper
@@ -285,10 +287,7 @@ class CrystalSceneBuilder {
             val startKey: Any = startGroup?.let { "gathered:${it.memberAtomIds.sorted().joinToString(",")}" } ?: bond.atomA
             val endKey: Any = endGroup?.let { "gathered:${it.memberAtomIds.sorted().joinToString(",")}" } ?: bond.atomB
             val dedupeKey = Triple(startKey, endKey, Triple(bond.offsetB.x, bond.offsetB.y, bond.offsetB.z))
-            val isHBond = bond.rule.isHBond
-            if (!isHBond) {
-                bondMembersByKey.getOrPut(dedupeKey) { mutableListOf() } += Triple(bond.atomA, bondMaterial(start), bondMaterial(end))
-            }
+            bondMembersByKey.getOrPut(dedupeKey) { mutableListOf() } += Triple(bond.atomA, bondMaterial(start), bondMaterial(end))
             bondEntries += Triple(index, bond, dedupeKey)
         }
 
@@ -303,7 +302,6 @@ class CrystalSceneBuilder {
             val endGroup = groupByMemberId[bond.atomB]
             val startKey = dedupeKey.first
             val endKey = dedupeKey.second
-            val isHBond = bond.rule.isHBond
 
             // Per v0.8.5: anchor bonds at sphere SURFACE, not center.
             val rawStart = startGroup?.center ?: start.cartesianCoordinate.toVec3()
@@ -316,7 +314,7 @@ class CrystalSceneBuilder {
 
             // Per v0.8.5 item 3: blended material for duplicate member→same-target bonds.
             val members = bondMembersByKey[dedupeKey].orEmpty()
-            val (startMat, endMat) = if (!isHBond && members.size >= 2 && endGroup != null) {
+            val (startMat, endMat) = if (members.size >= 2 && endGroup != null) {
                 // Group end: occ-weighted mixedColor of bonding members ↔ target color.
                 val groupMembers = members.map { (memberId, sm, _) -> memberId to sm }.distinct()
                 val totalOcc = groupMembers.sumOf { (mid, _) -> atomById[mid]?.occupancy ?: 1.0 }
@@ -325,7 +323,7 @@ class CrystalSceneBuilder {
                 } else bondMaterial(start)
                 val targetEnd = bondMaterial(end)
                 mixedStart to targetEnd
-            } else if (!isHBond && members.size >= 2 && startGroup != null) {
+            } else if (members.size >= 2 && startGroup != null) {
                 val groupMembers = members.map { (memberId, _, em) -> memberId to em }.distinct()
                 val totalOcc = groupMembers.sumOf { (mid, _) -> atomById[mid]?.occupancy ?: 1.0 }
                 val targetStart = bondMaterial(start)
@@ -347,26 +345,20 @@ class CrystalSceneBuilder {
             val externalAllowed = when {
                 // Per molecule-extend: 两端归一化到同一未整分子隐藏的分子 → 显示(替代 extend 规则)。
                 // 同原子周期自像(如跨晶胞面的 Cl2 分子两半)是分子内键,因此渲染。
+                // (分子间氢键不在此通道 —— 见下方氢键 pass 的 moleculeExtend 分支。)
                 options.moleculeExtend -> {
-                    if (isHBond) {
-                        // 分子间氢键:不属于任何分子,不沿氢键展开分子;氢键显示跟随两端
-                        // 原子可见性(各自分子开关 / hiddenSites),保证只显示可见原子之间的
-                        // 合法氢键(键本身由 BondDetector 按距离/角度/per-H 规则生成)。
-                        atomVisible(start) && atomVisible(end)
+                    // 分子展开:两端必须属于同一分子、拓扑相邻、且端点原子均显示
+                    // (拓扑相邻排除同原子自像键等非分子内键)。
+                    val mi = moleculeIndexOf(start)
+                    val mj = moleculeIndexOf(end)
+                    if (mi == null || mi != mj || moleculeFullyHidden(mi)) {
+                        false
                     } else {
-                        // 分子展开:两端必须属于同一分子、拓扑相邻、且端点原子均显示
-                        // (拓扑相邻排除同原子自像键等非分子内键)。
-                        val mi = moleculeIndexOf(start)
-                        val mj = moleculeIndexOf(end)
-                        if (mi == null || mi != mj || moleculeFullyHidden(mi)) {
-                            false
-                        } else {
-                            val sRep = repIdOf(start)
-                            val eRep = repIdOf(end)
-                            sRep != null && eRep != null && sRep != eRep &&
-                                eRep in moleculeNeighbors[mi][sRep].orEmpty() &&
-                                atomVisible(start) && atomVisible(end)
-                        }
+                        val sRep = repIdOf(start)
+                        val eRep = repIdOf(end)
+                        sRep != null && eRep != null && sRep != eRep &&
+                            eRep in moleculeNeighbors[mi][sRep].orEmpty() &&
+                            atomVisible(start) && atomVisible(end)
                     }
                 }
                 !start.isShell && !end.isShell -> true
@@ -396,10 +388,80 @@ class CrystalSceneBuilder {
                 bond = bond,
                 start = startPos,
                 end = endPos,
-                radius = if (isHBond) options.hbondRadius else options.bondRadius,
-                startMaterial = if (isHBond) HbondPattern.material(options.hbondOpacity.toFloat()) else startMat,
-                endMaterial = if (isHBond) HbondPattern.material(options.hbondOpacity.toFloat()) else endMat,
+                radius = options.bondRadius,
+                startMaterial = startMat,
+                endMaterial = endMat,
                 visible = finalVisible,
+            )
+        }
+
+        // Hydrogen-bond pass (per hbond-model): hbonds are a separate channel and are no longer
+        // part of analysis.bonds. Visibility and anchoring mirror the pre-separation behaviour:
+        //  - moleculeExtend: show iff both endpoint atoms are visible (hbonds are intermolecular,
+        //    never molecule-internal; the bond itself is validated by BondDetector);
+        //  - otherwise the same externalAllowed rules as normal bonds, consulting the rule's
+        //    extend flags for external shells (production hbond rules never extend, so
+        //    external-shell hbonds stay hidden as before);
+        //  - dedupe by (endKey pair, offsetB). Overlap with the normal-bond dedupe keys cannot
+        //    occur: the hbond window starts at the covalent max and the keys embed atom ids.
+        val seenHbondKeys = mutableSetOf<Triple<Any, Any, Triple<Int, Int, Int>>>()
+        analysis.hbonds.forEachIndexed { index, hbond ->
+            val start = atomById[hbond.donorId]
+                ?: error("hbond ${hbond.donorId}-${hbond.acceptorId} references missing atom ${hbond.donorId}")
+            val end = atomById[hbond.acceptorId]
+                ?: error("hbond ${hbond.donorId}-${hbond.acceptorId} references missing atom ${hbond.acceptorId}")
+
+            val startGroup = groupByMemberId[hbond.donorId]
+            val endGroup = groupByMemberId[hbond.acceptorId]
+
+            // Drop intra-group hbonds (both ends inside the same gathered group).
+            if (startGroup != null && endGroup != null && startGroup == endGroup) return@forEachIndexed
+
+            val startKey: Any = startGroup?.let { "gathered:${it.memberAtomIds.sorted().joinToString(",")}" } ?: hbond.donorId
+            val endKey: Any = endGroup?.let { "gathered:${it.memberAtomIds.sorted().joinToString(",")}" } ?: hbond.acceptorId
+            val dedupeKey = Triple(startKey, endKey, Triple(hbond.offsetB.x, hbond.offsetB.y, hbond.offsetB.z))
+            if (!seenHbondKeys.add(dedupeKey)) return@forEachIndexed
+
+            // Per v0.8.5: anchor bonds at sphere SURFACE, not center (same as normal bonds).
+            val rawStart = startGroup?.center ?: start.cartesianCoordinate.toVec3()
+            val rawEnd = endGroup?.center ?: end.cartesianCoordinate.toVec3()
+            val dir = (rawEnd - rawStart).normalized()
+            val startRadius = if (startGroup != null) (groupRadiusById[startKey] ?: 0.0) else 0.0
+            val endRadius = if (endGroup != null) (groupRadiusById[endKey] ?: 0.0) else 0.0
+            val startPos = rawStart + dir * startRadius
+            val endPos = rawEnd - dir * endRadius
+
+            val externalAllowed = when {
+                // 分子间氢键:不属于任何分子,不沿氢键展开分子;氢键显示跟随两端
+                // 原子可见性(各自分子开关 / hiddenSites),保证只显示可见原子之间的
+                // 合法氢键(键本身由 BondDetector 按距离/角度/per-H 规则生成)。
+                options.moleculeExtend -> atomVisible(start) && atomVisible(end)
+                !start.isShell && !end.isShell -> true
+                // Same-atom periodic self-images are never rendered (see normal-bond pass).
+                isSameAtomPeriodicImage(start, end) -> false
+                else -> {
+                    // Pre-separation the bond sweep's centre (start) was never an external
+                    // shell, so `start.isExternalShell || end.isExternalShell` implied the
+                    // external end was `end`; with donor→acceptor orientation the external
+                    // end can be either side. Resolve it explicitly and consult the rule's
+                    // extend flag from the INSIDE end's site (identical semantics).
+                    when {
+                        start.isExternalShell && end.isExternalShell -> false
+                        start.isExternalShell -> hbond.shouldExtendAcrossCell(end.siteId, true)
+                        end.isExternalShell -> hbond.shouldExtendAcrossCell(start.siteId, true)
+                        else -> true
+                    }
+                }
+            }
+            val visible = options.showBonds && hbond.ruleKey !in options.hiddenBondKeys && externalAllowed
+            objects += HbondInstance(
+                id = "hbond:${hbond.donorId}:${hbond.acceptorId}:${hbond.offsetB.x}:${hbond.offsetB.y}:${hbond.offsetB.z}:$index",
+                hbond = hbond,
+                start = startPos,
+                end = endPos,
+                radius = options.hbondRadius,
+                material = HbondPattern.material(options.hbondOpacity.toFloat()),
+                visible = visible,
             )
         }
 

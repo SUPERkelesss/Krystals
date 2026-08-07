@@ -5,10 +5,10 @@ import com.krystals.renderer.core.material.Material
 /**
  * Per v0.8.1: fixed appearance for hydrogen-bond cylinders/lines.
  *
- * Scene builders override the normal bond radius and material when
- * [com.krystals.crystal.analysis.bonding.BondRule.isHBond] is true. Both ends
- * share the same material so backends render H-bonds as a single segment
- * (no split-cylinder).
+ * The scene builder emits hydrogen bonds as separate [com.krystals.renderer.core.primitive.HbondInstance]
+ * objects (the hbond channel of [com.krystals.crystal.analysis.bonding.BondNetwork]); it overrides the
+ * normal bond radius and material whenever a hydrogen bond is rendered. Both ends share the same
+ * material so backends render H-bonds as a single segment (no split-cylinder).
  */
 object HbondPattern {
     /** Cylinder radius in Å. */
