@@ -175,33 +175,20 @@ class CrystalSceneBuilderMoleculeTest {
     fun moleculeExtendShowsWholeMoleculesAcrossCell() {
         val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = molecules))
         // 单胞内分子原子(原胞 + 边界)可见;氯分子跨胞部分(10,Cl2 在 (1,0,0) 层)可见。
-        listOf(1L, 2L, 3L, 4L, 5L, 6L, 7L, 10L, 11L, 13L).forEach {
+        // 原胞 primary 无条件显示 —— 8(Cl2 的包裹原胞代表 frac 0.95)属于氯分子在
+        // 晶胞内的原子,保持可见;分子以原胞位置完整呈现。
+        listOf(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 11L, 13L).forEach {
             assertTrue(scene.atomInstance(it).visible, "molecule atom $it should be visible")
         }
-        // 8 = Cl2 的包裹原胞代表(frac 0.95):其分子位置 (7.8,2,2) 由外部壳层 10 承载,
-        // 同一原子只显示一次 —— 包裹副本隐藏。
-        assertFalse(scene.atomInstance(8).visible, "wrapped primary duplicate of Cl2 must be hidden")
-        // 相邻分子的外部映像不显示(精确归属:位置必须落在分子原子物理坐标上)。
-        // 9 = O1 的 +y 映像(水分子不跨胞);12 = 游离 X1 的 +y 映像。
-        listOf(9L, 12L).forEach {
-            assertFalse(scene.atomInstance(it).visible, "foreign image $it should stay hidden")
+        // 相邻分子的外部映像不显示;外部壳层原子不渲染球体(同一原子已由包裹 primary
+        // 承载,其坐标仅作跨胞键端点)。9 = O1 的 +y 映像;10 = Cl2 的 (1,0,0) 映像;
+        // 12 = 游离 X1 的 +y 映像。
+        listOf(9L, 10L, 12L).forEach {
+            assertFalse(scene.atomInstance(it).visible, "external shell atom $it should not render a sphere")
         }
-        // 跨胞氯分子键 7-10 可见;同原子自像键 8-10 非分子内键 → 不可见。
+        // 跨胞氯分子键 7-10 可见(以壳层坐标穿过 x=1 边界);同原子自像键 8-10 隐藏。
         assertTrue(scene.bondBetween(7, 10).visible, "cross-cell Cl2 molecule bond should be visible")
         assertFalse(scene.bondBetween(8, 10).visible, "same-atom self-image bond is not a molecule bond")
-    }
-
-    @Test
-    fun moleculeExtendHidesWrappedPrimaryDuplicates() {
-        // 氯分子跨 x=1:Cl2 的包裹原胞代表 8(frac 0.95)与其 +x 外部壳层 10(frac 1.95)
-        // 是同一原子的两种表示,分子位置 (7.8,2,2) 只由 10 承载 → 8 隐藏、10 显示,
-        // 跨胞键 7-10 可见,无动态原子(显示位置全被场景覆盖)。
-        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = molecules))
-        assertFalse(scene.atomInstance(8).visible, "wrapped primary duplicate of Cl2 must be hidden")
-        assertTrue(scene.atomInstance(7).visible)
-        assertTrue(scene.atomInstance(10).visible)
-        assertTrue(scene.bondBetween(7, 10).visible)
-        assertTrue(scene.atoms.none { it.id.startsWith("molatom:") })
     }
 
     @Test
@@ -227,10 +214,10 @@ class CrystalSceneBuilderMoleculeTest {
         listOf(1L, 2L, 3L, 9L).forEach {
             assertFalse(scene.atomInstance(it).visible, "hidden water-1 atom $it")
         }
-        // 水分子 2 与氯分子不受影响(氯分子的包裹 primary 8 恒为隐藏,非本测试场景)。
+        // 水分子 2 与氯分子不受影响(氯分子包裹 primary 8 恒显;外部壳层 10 不渲染球)。
         listOf(4L, 5L, 6L).forEach { assertTrue(scene.atomInstance(it).visible, "water-2 atom $it") }
-        listOf(7L, 10L).forEach { assertTrue(scene.atomInstance(it).visible, "Cl2 atom $it") }
-        assertFalse(scene.atomInstance(8).visible, "wrapped Cl2 primary duplicate stays hidden")
+        listOf(7L, 8L).forEach { assertTrue(scene.atomInstance(it).visible, "Cl2 atom $it") }
+        assertFalse(scene.atomInstance(10).visible, "external shell 10 renders no sphere")
     }
 
     @Test
@@ -412,11 +399,11 @@ class CrystalSceneBuilderMoleculeTest {
             listOf(MoleculeBond(31, 32), MoleculeBond(32, 33), MoleculeBond(33, 34)),
         )
         val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(chain)), pBonds, atoms)
-        // B'(35) 是分子 t=0 映像的 B(位置 (4.4,2,2))→ 显示。
-        assertTrue(scene.atomInstance(35).visible, "B' at (4.4,2,2) is the molecule's B image")
-        // 32(B@0.4)是相邻分子(t=(-1,0,0) 链)的包裹 primary:B 的分子位置 (4.4,2,2)
-        // 由 35 承载 → 隐藏。
-        assertFalse(scene.atomInstance(32).visible, "neighbouring chain's B primary is not part of the t=0 molecule")
+        // B'(35) 是分子 t=0 映像的 B(位置 (4.4,2,2)):球体不渲染(外部壳层由包裹
+        // primary 32 承载),其坐标作为跨胞键端点。32(B@0.4)是原胞 primary → 恒显,
+        // 分子链以原胞位置完整呈现。
+        assertFalse(scene.atomInstance(35).visible, "external shell B' renders no sphere")
+        assertTrue(scene.atomInstance(32).visible, "in-cell primary 32 stays visible")
         // 动态原子仅 t=0 映像的 C(5.2)、D(6.0)(场景无);t=(-1,0,0) 映像不显示。
         val dynX = scene.atoms.filter { it.id.startsWith("molatom:") }.map { it.atom.cartesianCoordinate.x }.sorted()
         dynX.zip(listOf(5.2, 6.0)).forEach { (actual, expected) ->
@@ -450,9 +437,10 @@ class CrystalSceneBuilderMoleculeTest {
             listOf(MoleculeBond(31, 34)),
         )
         val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(mol)), pBonds, atoms)
-        // 31(X@frac 0.0)是 X 的包裹原胞代表:分子位置 frac z=1.0 由边界原子 32 承载 → 隐藏。
-        assertFalse(scene.atomInstance(31).visible, "wrapped X primary duplicate is carried by the z=1 boundary atom")
-        // 32(frac 1.0 边界)是分子 X 的显示位置 → 可见(闭区间 [0,1] 含 z=1)。
+        // 31(X@frac 0.0)是原胞 primary → 无条件显示;32(frac 1.0 边界)是分子 X 的
+        // 物理位置(frac z=1.0)→ 可见(闭区间 [0,1] 含 z=1)。两者是同一原子的两个
+        // 映像(0.0 与 1.0),分子以原胞 + 边界映像完整呈现。
+        assertTrue(scene.atomInstance(31).visible)
         assertTrue(scene.atomInstance(32).visible, "atom on z=1 face (frac 1.0) must be shown (closed [0,1])")
         assertTrue(scene.atomInstance(34).visible)
         assertTrue(scene.bondBetween(32, 34).visible, "in-molecule bond crossing the z=1 face")
@@ -550,23 +538,15 @@ class CrystalSceneBuilderMoleculeTest {
             listOf(MoleculeBond(51, 52)),
         )
         val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(molA, molB)), pBonds, atoms)
-        // t=0 映像显示:A 的 Z1(41)与跨胞 Z2'(43);B 的 Y1(51)。包裹原胞代表
-        // 42(Z2@z=0.03)与 52(Y2@z=0.75)是同一原子的另一表示(分子位置分别由 43 与
-        // 动态原子承载)→ 隐藏,每原子恰好显示一次。
-        listOf(41L, 43L, 51L).forEach {
+        // t=0 映像:全部显示(含 A 的跨胞 43 与 B 的跨胞 Y2@(2,2,-1) 动态原子)。
+        // 原胞 primary(42、52)无条件显示;外部壳层 43 不渲染球体,坐标作键端点。
+        listOf(41L, 42L, 51L, 52L).forEach {
             assertTrue(scene.atomInstance(it).visible, "molecule atom $it should be visible")
         }
-        assertFalse(scene.atomInstance(42).visible, "wrapped Z2 primary duplicate is carried by the z=1.03 shell (43)")
-        assertFalse(scene.atomInstance(52).visible, "wrapped Y2 primary duplicate is carried by the dynamic atom")
-        // 跨胞键 41-43 可见;周期键 41-42 与 51-52 因端点(42/52)隐藏而不可见 ——
-        // 对应分子键由补齐通道以 molbond 显示(41-43 为网键、51-Y2 为补齐键)。
+        assertFalse(scene.atomInstance(43).visible, "external shell 43 renders no sphere (coords carry the cross-cell bond)")
+        assertTrue(scene.bondBetween(41, 42).visible, "periodic Z1-Z2 bond")
         assertTrue(scene.bondBetween(41, 43).visible, "in-image Z1-Z2 bond")
-        assertFalse(scene.bondBetween(41, 42).visible, "periodic Z1-Z2 bond endpoint 42 is hidden")
-        assertFalse(scene.bondBetween(51, 52).visible, "Y1-Y2 bond endpoint 52 is hidden")
-        val yMolBond = scene.bonds.firstOrNull { it.id.startsWith("molbond:") }
-        assertNotNull(yMolBond, "51-Y2 molecule bond should be completed via the dynamic atom")
-        assertTrue(yMolBond.visible)
-        assertEquals(2.0, distance(yMolBond.start, yMolBond.end), 1e-9)
+        assertTrue(scene.bondBetween(51, 52).visible)
         // 动态原子仅 B 的 Y2@(2,2,-1)(t=0 映像);t=(0,0,1) 映像(Y1@(2,2,5))不显示。
         val dynY = scene.atoms.filter { it.id.startsWith("molatom:") }.map { it.atom.cartesianCoordinate.z }.sorted()
         assertEquals(listOf(-1.0), dynY, "仅 t=0 映像的跨胞部分产生动态原子")
@@ -591,16 +571,18 @@ class CrystalSceneBuilderMoleculeTest {
             listOf(MoleculeBond(31, 32)),
         )
         val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(molecule)), emptyList(), atoms)
-        // 动态原子被创建:Y 在 (20.8,2,2)(超出 ±1 层)无场景原子。
+        // 动态原子被创建:Y 在 (20.8,2,2)(超出 ±1 层)无场景原子 —— 其坐标作跨胞键端点。
         val dyn = scene.atoms.firstOrNull { it.id.startsWith("molatom:") }
         assertNotNull(dyn, "molecule atom beyond the materialized shell should be created dynamically")
-        assertTrue(dyn.visible)
+        // 球体不渲染:Y 的包裹 primary(32@0.8,同 rep 差整数晶胞)已承载该原子在晶胞内的球,
+        // 动态坐标仅作键端点(消除重复球)。
+        assertFalse(dyn.visible, "dynamic duplicate sphere hidden when the wrapped primary carries the atom")
         assertEquals(20.8, dyn.atom.cartesianCoordinate.x, 1e-9)
         assertEquals("Y", dyn.atom.siteId)
-        // X(31)是分子显示位置 → 可见;32(原胞 Y@(0.8,2,2))属于相邻分子 —— 分子 XY
-        // 的 Y 位置 (20.8,2,2) 由动态原子承载 → 包裹 primary 隐藏。
+        // 原胞原子照常显示(32 是原胞 primary,属于相邻分子 —— 分子 XY 之外的
+        // 独立原子,其 primary 保持可见;分子模式只约束分子归属的壳层与分子间键)。
         assertTrue(scene.atomInstance(31).visible)
-        assertFalse(scene.atomInstance(32).visible, "neighbouring molecule's Y primary is not this molecule's position")
+        assertTrue(scene.atomInstance(32).visible)
         // 动态原子与 X 的分子键补齐(键长 = |(0.4,2,2)-(20.8,2,2)| = 20.4)。
         val molBond = scene.bonds.firstOrNull { it.id.startsWith("molbond:") }
         assertNotNull(molBond, "dynamic atom's molecule bond should be completed")
@@ -645,5 +627,42 @@ class CrystalSceneBuilderMoleculeTest {
         assertTrue(completed.visible)
         // 无动态原子:显示位置全被场景原子覆盖。
         assertTrue(scene.atoms.none { it.id.startsWith("molatom:") })
+    }
+
+    @Test
+    fun moleculeExtendShowsBondsOfNonMoleculeAtoms() {
+        // 超胞/游离原子场景:两个分子之外还有不属于任何分子的原子(如超胞里原胞之外
+        // 的晶胞原子,或游离原子)。它们的 primary 恒显,分子模式也必须显示它们之间
+        // 的真实键 —— 否则超胞画面里出现大量孤立原子("零星几个")。
+        val atoms = listOf(
+            atom(61, "M1", "C", 0.2, 0.2, 0.2),   // 分子 1 原胞原子
+            atom(62, "M2", "C", 0.3, 0.2, 0.2),
+            atom(71, "X", "X", 0.6, 0.6, 0.6),    // 游离(非分子)原子
+            atom(72, "X", "X", 0.7, 0.6, 0.6),    // 游离原子成键伙伴
+            atom(73, "X", "X", 1.6, 0.6, 0.6, offset = Int3(1, 0, 0)),  // 超胞第二胞 primary(非分子)
+            atom(74, "X", "X", 1.7, 0.6, 0.6, offset = Int3(1, 0, 0)),
+        )
+        val pBonds = listOf(
+            bond(61, 62, "M1", "M2"),
+            bond(71, 72, "X", "X"),
+            bond(73, 74, "X", "X"),
+            bond(61, 73, "M1", "X", offsetB = Int3(1, 0, 0)),
+        )
+        val mol = Molecule(
+            "M2",
+            listOf(
+                MoleculeAtom(61, "M1", Species("C"), CartesianCoordinate(0.8, 0.8, 0.8), siteId = "M1"),
+                MoleculeAtom(62, "M2", Species("C"), CartesianCoordinate(1.2, 0.8, 0.8), siteId = "M2"),
+            ),
+            listOf(MoleculeBond(61, 62)),
+        )
+        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(mol)), pBonds, atoms)
+        // 分子内键可见。
+        assertTrue(scene.bondBetween(61, 62).visible)
+        // 非分子原子间的键(游离 71-72;超胞第二胞 73-74)在分子模式下仍显示。
+        assertTrue(scene.bondBetween(71, 72).visible, "bond between non-molecule atoms stays visible")
+        assertTrue(scene.bondBetween(73, 74).visible, "supercell independent atoms keep their bonds")
+        // 分子原子与非分子原子的跨键:一端属分子、另一端非分子 → 非分子内键 → 隐藏。
+        assertFalse(scene.bondBetween(61, 73).visible, "cross molecule/non-molecule bond stays hidden")
     }
 }

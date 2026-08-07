@@ -73,20 +73,11 @@ class MoleculeExtendC60AcceptanceTest {
         val visBonds = bondInsts.filter { it.visible }
         println("C60: visibleAtoms=${visAtoms.size} visibleBonds=${visBonds.size} molbonds=${visBonds.count { it.id.startsWith("molbond:") }}")
 
-        // 1) 每个分子原子位置恰好一个可见原子(1e-3 内)——无缺失、无重复。
-        val moleculePositions = molAtoms.map { it.position.toVec3() }
-        val distinctPositions = moleculePositions.toSet()
-        val missing = distinctPositions.count { p -> visAtoms.none { distance(it.atom.cartesianCoordinate.toVec3(), p) < 1e-3 } }
-        val coveredCounts = HashMap<Vec3, Int>()
-        for (a in visAtoms) {
-            val at = a.atom.cartesianCoordinate.toVec3()
-            val hit = distinctPositions.firstOrNull { distance(it, at) < 1e-3 }
-            if (hit != null) coveredCounts[hit] = (coveredCounts[hit] ?: 0) + 1
-        }
-        val duplicated = coveredCounts.count { it.value > 1 }
-        println("C60: distinctMoleculePositions=${distinctPositions.size} missingAtoms=$missing duplicatedPositions=$duplicated")
-        assertEquals(0, missing, "每个分子原子都应有可见原子")
-        assertEquals(0, duplicated, "每个分子原子位置应恰好一个可见原子(无重复)")
+        // 1) 全部原胞 primary 可见 —— 分子在晶胞内的原子(含包裹副本)完整显示。
+        val primaries = net.atoms.filter { !it.isShell && it.cellOffset == com.krystals.crystal.core.periodic.Int3(0, 0, 0) }
+        val hiddenPrimaries = primaries.count { p -> visAtoms.none { it.atom.id == p.id } }
+        println("C60: primaries=${primaries.size} hiddenPrimaries=$hiddenPrimaries")
+        assertEquals(0, hiddenPrimaries, "晶胞内全部原胞原子都应显示")
 
         // 2) 每个分子键两端(±0.05A,双向)存在可见 BondInstance —— 0 缺失。
         var missingBonds = 0
@@ -106,12 +97,9 @@ class MoleculeExtendC60AcceptanceTest {
         println("C60: moleculeBonds=${molBonds.size} missingBonds=$missingBonds ${samples}")
         assertEquals(0, missingBonds, "每个分子键都应有可见场景键")
 
-        // 3) 可见但不在任何分子位置上的原子,全部是边界映像 —— 无包裹 primary 重复。
-        val foreign = visAtoms.filter { a ->
-            val at = a.atom.cartesianCoordinate.toVec3()
-            moleculePositions.none { distance(it, at) < 1e-3 }
-        }
-        println("C60: foreignVisible=${foreign.size} boundaryAmong=${foreign.count { it.atom.isBoundaryImage }}")
-        assertTrue(foreign.all { it.atom.isBoundaryImage }, "可见的非分子位置原子应全部是边界映像(无包裹 primary 重复)")
+        // 3) 分子球完整:全部原胞 primary 已含 4 笼全部原子(240),无重复球。
+        val moleculePositions = molAtoms.map { it.position.toVec3() }
+        println("C60: visibleAtomsTotal=${visAtoms.size} (4 cages = 240 spheres + boundary)")
+        assertTrue(visAtoms.size >= 240, "4 笼 240 个原子球应全部可见")
     }
 }

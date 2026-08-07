@@ -6,7 +6,6 @@ import com.krystals.crystal.core.model.Molecule
 import com.krystals.crystal.core.model.MoleculeAtom
 import com.krystals.crystal.core.model.MoleculeBond
 import com.krystals.crystal.core.periodic.Int3
-import kotlin.math.ceil
 
 private operator fun Int3.plus(o: Int3) = Int3(x + o.x, y + o.y, z + o.z)
 
@@ -17,10 +16,6 @@ private operator fun Int3.plus(o: Int3) = Int3(x + o.x, y + o.y, z + o.z)
  * 代表),对每个未访问原胞原子开新分子,BFS 沿键展开并累积物理晶胞偏移
  * (根 = (0,0,0),子 = 父 + 键偏移)。跨晶胞键两端坐标因此自动落在相邻晶胞,
  * 分子空间自洽、键长正确 —— 无需给 [MoleculeBond] 增加偏移字段,不动 crystal-core。
- *
- * 每个连通分量(物理分子)的展开位置在输出前按轴整体平移 T = ceil(-minFrac),
- * 使全部分子原子 frac >= 0:分子从胞内原子延伸跨过远侧边界(x=1/y=1/z=1)显示
- * (键延伸式锚定),角上分子(如 C60)由此在 (1,1,1) 邻近区完整呈现而非折叠到近侧。
  *
  * 输出与 [com.krystals.crystal.analysis.model.Expansion] 无关;孤立原子(无键)
  * 同样产单原子 [Molecule]。键级:当前 [Bond] 无键级概念,一律 1.0。结果适用于
@@ -57,21 +52,6 @@ fun BondNetwork.toMolecules(): List<Molecule> {
                 }
             }
         }
-        // 锚定:分量内全部原子的物理 frac = 原子 frac + 累积偏移。取每轴最小值,
-        // 平移 T = ceil(-min) 使全部分子原子 frac >= 0 —— 分子从胞内原子延伸跨过
-        // 远侧边界(x=1/y=1/z=1)显示(键延伸式锚定)。按连通分量独立平移,
-        // 避免合并条目内其余物理分子被整体推出显示区。
-        var minFx = Double.MAX_VALUE
-        var minFy = Double.MAX_VALUE
-        var minFz = Double.MAX_VALUE
-        for (a in componentAtoms) {
-            val p = pos.getValue(a.id)
-            minFx = minOf(minFx, a.fractionalCoordinate.x + p.x)
-            minFy = minOf(minFy, a.fractionalCoordinate.y + p.y)
-            minFz = minOf(minFz, a.fractionalCoordinate.z + p.z)
-        }
-        val t = Int3(ceil(-minFx).toInt(), ceil(-minFy).toInt(), ceil(-minFz).toInt())
-        for (a in componentAtoms) pos[a.id] = pos.getValue(a.id) + t
         components += Component(componentAtoms, pos, bondPairs.toList())
     }
     // 按"原子位点组合"(site 集合)分组:一个分子项对应一个位点组合,合并所有可通过
