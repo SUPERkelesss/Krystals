@@ -248,7 +248,8 @@ class GpuInstanceManager(
             GeometryKind.SPHERE_HIGH, GeometryKind.HIGHLIGHT -> meshes.sharedSphere(SphereLod.HIGH)
             GeometryKind.SPHERE_MEDIUM -> meshes.sharedSphere(SphereLod.MEDIUM)
             GeometryKind.SPHERE_LOW -> meshes.sharedSphere(SphereLod.LOW)
-            GeometryKind.CYLINDER -> meshes.sharedCylinder()
+            // Per v0.8.1: hbonds are thin cylinders, same shared mesh as normal bonds.
+            GeometryKind.CYLINDER, GeometryKind.HBOND -> meshes.sharedCylinder()
             GeometryKind.POLYHEDRON, GeometryKind.PIE_SECTOR -> {
                 val mesh = auxiliaryMeshes[record.objectId]
                     ?: snapshot.meshes.firstOrNull { it.id == record.objectId }?.toMeshData()
