@@ -16,6 +16,7 @@ import com.krystals.crystal.core.model.HydrogenBond
 import com.krystals.crystal.core.model.Molecule
 import com.krystals.crystal.core.model.MoleculeAtom
 import com.krystals.crystal.core.periodic.Int3
+import com.krystals.crystal.core.periodic.PeriodicBoundary
 import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
@@ -184,23 +185,27 @@ class CrystalSceneBuilder {
             return when {
                 atom.siteId in options.hiddenSiteIds -> false
                 !options.moleculeExtend -> !atom.isShell || atom.isBoundaryImage || atom.id in externallyVisible
-                // 分子展开:边界映像按原逻辑恒显(补全晶胞面)。
-                atom.isBoundaryImage -> true
-                else -> {
-                    val mol = moleculeIndexOf(atom) ?: return !atom.isShell || atom.fractionalCoordinate.let { f ->
-                        // 非分子原子:primary 恒显;[0,ex] 闭区间内壳层显(顶面 frac=1 规则)。
-                        f.x in -1e-6..(displayEx.x + 1e-6) &&
-                            f.y in -1e-6..(displayEx.y + 1e-6) &&
-                            f.z in -1e-6..(displayEx.z + 1e-6)
-                    }
-                    if (moleculeFullyHidden(mol)) return false
-                    // 分子内原子(primary 或壳层):显示 ⟺ 位置精确落在该分子锚定后的原子
-                    // 物理坐标上。primary 不再无条件显示 —— 包裹复制原子(如跨胞分子的
-                    // frac 0.752..1.0 副本)被隐藏,每原子恰好显示一次。
-                    val pos = atom.cartesianCoordinate.toVec3()
-                    moleculePositions[mol].any { distance(it, pos) < 1e-3 }
-                }
+                // 分子展开:原胞 primary 与边界映像恒显 —— 分子在晶胞内的原子(含包裹
+                // 副本)始终可见,分子以原胞位置完整呈现。外部壳层原子不渲染球体:
+                // 同一原子已由包裹 primary 承载(双显消除);其坐标仍作为分子内键的
+                // 端点(跨胞键穿过边界绘制)。
+                !atom.isShell || atom.isBoundaryImage -> true
+                // 非分子壳层:[0,ex] 闭区间内显示(顶面 frac=1 规则,5722d2e)。
+                moleculeIndexOf(atom) == null && atom.fractionalCoordinate.let { f ->
+                    f.x in -1e-6..(displayEx.x + 1e-6) &&
+                        f.y in -1e-6..(displayEx.y + 1e-6) &&
+                        f.z in -1e-6..(displayEx.z + 1e-6)
+                } -> true
+                else -> false
             }
+        }
+
+        /** 原子是否落在其所属分子的原子物理坐标上(跨胞键按此判定,端点球可能隐藏)。 */
+        fun atMoleculePosition(atom: AtomImage): Boolean {
+            val mol = moleculeIndexOf(atom) ?: return false
+            if (moleculeFullyHidden(mol)) return false
+            val pos = atom.cartesianCoordinate.toVec3()
+            return moleculePositions[mol].any { distance(it, pos) < 1e-3 }
         }
 
         fun atomMaterial(atom: AtomImage): Material =
@@ -351,14 +356,28 @@ class CrystalSceneBuilder {
                     // (拓扑相邻排除同原子自像键等非分子内键)。
                     val mi = moleculeIndexOf(start)
                     val mj = moleculeIndexOf(end)
-                    if (mi == null || mi != mj || moleculeFullyHidden(mi)) {
+                    if (mi == null && mj == null) {
+                        // 两端都不属于任何分子(如超胞里原胞之外的独立原子):它们是
+                        // 显示范围内的真实原子,键按端点可见性显示 —— 不是"相邻分子
+                        // 的映像",也不属于任何分子的共价键。同原子周期自像仍隐藏。
+                        if (isSameAtomPeriodicImage(start, end)) {
+                            false
+                        } else {
+                            atomVisible(start) && atomVisible(end)
+                        }
+                    } else if (mi == null || mi != mj || moleculeFullyHidden(mi)) {
                         false
                     } else {
                         val sRep = repIdOf(start)
                         val eRep = repIdOf(end)
+                        // 分子内键:拓扑相邻 + 两端"原子球可见或位置落在分子物理坐标上"
+                        // (primary 恒显、外部壳层由位置匹配承载 —— 跨胞键以壳层坐标
+                        // 穿过边界绘制,如 Cl1@0.05 ↔ Cl2 的 (1,0,0) 映像 1.95)。
+                        val sOk = atomVisible(start) || atMoleculePosition(start)
+                        val eOk = atomVisible(end) || atMoleculePosition(end)
                         sRep != null && eRep != null && sRep != eRep &&
                             eRep in moleculeNeighbors[mi][sRep].orEmpty() &&
-                            atomVisible(start) && atomVisible(end)
+                            sOk && eOk
                     }
                 }
                 !start.isShell && !end.isShell -> true
@@ -505,6 +524,14 @@ class CrystalSceneBuilder {
                 for ((maId, pos) in images) {
                     if (sceneAtomAt(maId, pos) != null) continue
                     val ma = moleculeAtomById[maId] ?: continue
+                    // 动态原子的包裹 primary(同 rep、差整数晶胞的原胞原子)已渲染其球
+                    // —— 该原子在晶胞内由包裹 primary 呈现,动态坐标仅作跨胞键端点,
+                    // 不再渲染重复球;无包裹 primary 的真跨胞原子(超出 ±1 层)仍需球。
+                    val posFrac = structure.lattice.toFractional(CartesianCoordinate(pos.x, pos.y, pos.z))
+                    val hasWrappedPrimary = sceneByRepId[maId]?.any { a ->
+                        !a.isShell && a.cellOffset == Int3(0, 0, 0) &&
+                            PeriodicBoundary.isIntegerTranslation(a.fractionalCoordinate - posFrac)
+                    } ?: false
                     val dyn = AtomImage(
                         id = nextDynId--,
                         siteId = ma.siteId,
@@ -524,7 +551,7 @@ class CrystalSceneBuilder {
                         atom = dyn,
                         radius = options.atomRadiusByElement[ma.species.symbol] ?: options.defaultAtomRadius,
                         material = atomMaterial(dyn),
-                        visible = ma.siteId !in options.hiddenSiteIds,
+                        visible = ma.siteId !in options.hiddenSiteIds && !hasWrappedPrimary,
                     )
                 }
             }
@@ -566,13 +593,14 @@ class CrystalSceneBuilder {
                     visible = options.showBonds && key !in options.hiddenBondKeys,
                 )
             }
-            // 显示原子(含 primary)补其分子拓扑邻居键。BondDetector 从包裹中心扫描时
-            // 距离膨胀,漏掉两端都包裹的分子内键(如角笼包裹八分体内部边)——此处按
-            // 分子拓扑 + 键长验证补齐,键延伸式显示;emittedPairs 复用 analysis.bonds
-            // 种子去重,已存在的网键不重复发射。
+            // 显示原子(含 primary)或位置匹配的原子(外部壳层不渲染球体,但其坐标是
+            // 分子内键的端点,仍需补其拓扑邻居键):BondDetector 从包裹中心扫描时距离
+            // 膨胀,漏掉两端都包裹的分子内键(如角笼包裹八分体内部边)与壳-壳键 ——
+            // 此处按分子拓扑 + 键长验证补齐,键延伸式显示;emittedPairs 复用
+            // analysis.bonds 种子去重,已存在的网键不重复发射。
             for (a in analysis.atoms) {
                 if (a.isBoundaryImage) continue
-                if (!atomVisible(a)) continue
+                if (!atomVisible(a) && !atMoleculePosition(a)) continue
                 val mol = moleculeIndexOf(a) ?: continue
                 if (moleculeFullyHidden(mol)) continue
                 val repId = repIdOf(a) ?: continue

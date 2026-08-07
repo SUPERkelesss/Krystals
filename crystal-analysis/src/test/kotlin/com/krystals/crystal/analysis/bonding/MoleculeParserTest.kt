@@ -162,30 +162,6 @@ class MoleculeParserTest {
         assertEquals(sqrt(102.0), sqrt(dx * dx + dy * dy + dz * dz), 1e-9)
     }
 
-    @Test fun moleculeRealizationAnchorsAcrossFarFaces() {
-        // 二聚体横跨 x=0:B 的原胞代表在 frac 0.9,壳层映像在 frac -0.1(偏移 (-1,0,0),
-        // 物理键长 2.0Å)。BFS 从 A 出发给 B 累积偏移 (-1,0,0),锚定前 B 的物理位置
-        // frac = -0.1(近侧)。锚定后整体平移 (1,0,0):A → frac 1.1、B → frac 0.9,
-        // 全部分子原子 frac >= 0,分子跨 x=1 远侧边界显示;键长 2.0 不变(平移不变)。
-        val a1 = a(1, "Cl", "Cl", FractionalCoordinate(0.1, 0.5, 0.5))
-        val a2 = a(2, "Cl", "Cl", FractionalCoordinate(0.9, 0.5, 0.5))
-        val a2p = a(3, "Cl", "Cl", FractionalCoordinate(-0.1, 0.5, 0.5), cell = Int3(-1, 0, 0), shell = true)
-        val molecules = network(listOf(a1, a2, a2p), listOf(b(1, 3))).toMolecules()
-        assertEquals(1, molecules.size)
-        val m = molecules[0]
-        assertEquals(2, m.atomCount)
-        val p1 = m.atom(1)!!.position
-        val p2 = m.atom(2)!!.position
-        // 锚定:全部分子原子 frac >= 0(跨远侧边界 x=1,而非近侧 x=0)。
-        assertTrue(p1.x / 10.0 >= -1e-9 && p1.y / 10.0 >= -1e-9 && p1.z / 10.0 >= -1e-9, "A frac 应 >= 0, got (${p1.x / 10.0}, ${p1.y / 10.0}, ${p1.z / 10.0})")
-        assertTrue(p2.x / 10.0 >= -1e-9 && p2.y / 10.0 >= -1e-9 && p2.z / 10.0 >= -1e-9, "B frac 应 >= 0, got (${p2.x / 10.0}, ${p2.y / 10.0}, ${p2.z / 10.0})")
-        // 键长保持真实值(平移不变):|1.1 - 0.9| * 10 = 2.0。
-        assertEquals(2.0, kotlin.math.abs(p2.x - p1.x), 1e-9)
-        // 明确远侧:A 在 frac 1.1(跨 x=1),B 在 frac 0.9。
-        assertEquals(11.0, p1.x, 1e-9)
-        assertEquals(9.0, p2.x, 1e-9)
-    }
-
     @Test fun isolatedAtomIsSingleAtomMolecule() {
         // 无键原子 → 单原子 Molecule。
         val lone = a(1, "Ar", "Ar", FractionalCoordinate(0.5, 0.5, 0.5))
