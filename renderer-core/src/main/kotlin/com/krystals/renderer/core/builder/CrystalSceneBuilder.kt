@@ -2,9 +2,12 @@ package com.krystals.renderer.core.builder
 
 import com.krystals.crystal.analysis.bonding.Bond
 import com.krystals.crystal.analysis.bonding.BondNetwork
+import com.krystals.crystal.analysis.bonding.BondRule
+import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
 import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
 import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.math.distance
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.core.model.Molecule
@@ -281,14 +284,18 @@ class CrystalSceneBuilder {
             //    primary atom (the in-cell coordination of that atom) or when both ends are
             //    non-metals (e.g. C-C dumbbells — real bonds of the displayed images).
             val externalAllowed = when {
-                // Per molecule-extend: both ends normalise into the same, not-fully-hidden
-                // molecule → show, replacing the per-rule extend flags. Same-atom periodic
-                // self-images (e.g. the two halves of a Cl2 molecule across the cell face) are
-                // molecule-internal bonds here and therefore render.
+                // Per molecule-extend: 两端归一化到同一未整分子隐藏的分子 → 显示(替代 extend 规则)。
+                // 同原子周期自像(如跨晶胞面的 Cl2 分子两半)是分子内键,因此渲染。
                 options.moleculeExtend -> {
-                    val mi = moleculeIndexOf(start)
-                    val mj = moleculeIndexOf(end)
-                    mi != null && mi == mj && !moleculeFullyHidden(mi)
+                    if (isHBond) {
+                        // 分子间氢键:不属于任何分子,不沿氢键展开分子,但氢键本身始终显示
+                        // (两端原子可见性由各自分子/hiddenSites 决定)。
+                        true
+                    } else {
+                        val mi = moleculeIndexOf(start)
+                        val mj = moleculeIndexOf(end)
+                        mi != null && mi == mj && !moleculeFullyHidden(mi)
+                    }
                 }
                 !start.isShell && !end.isShell -> true
                 // Same-atom periodic self-images (an atom bonded to its own periodic image)
@@ -322,6 +329,57 @@ class CrystalSceneBuilder {
                 endMaterial = if (isHBond) HbondPattern.material(options.hbondOpacity.toFloat()) else endMat,
                 visible = finalVisible,
             )
+        }
+
+        // Per molecule-extend: BondDetector 只从 primary/boundary 中心生成键 —— 分子内两端
+        // 都是外部壳层的键(如横跨晶胞的 P4 中两个胞外顶点 P2'-P3')不会生成,导致分子展开
+        // 时胞外原子配位缺失(白磷每个 P 应连三根键)。从分子的 MoleculeBond 补齐:分子原子
+        // position 是物理坐标,与场景原子(含晶胞偏移的绝对坐标)按位置匹配(容差 1e-3)。
+        if (options.moleculeExtend && options.molecules.isNotEmpty()) {
+            val emittedPairs = HashSet<Pair<Long, Long>>()
+            for (b in analysis.bonds) emittedPairs += minOf(b.atomA, b.atomB) to maxOf(b.atomA, b.atomB)
+            val sceneByRepId = HashMap<Int, MutableList<AtomImage>>()
+            for (a in analysis.atoms) {
+                val repId = if (!a.isShell && a.cellOffset == Int3(0, 0, 0)) {
+                    a.id.toInt()
+                } else {
+                    repBySiteId[a.siteId]?.firstOrNull { isSameAtomPeriodicImage(it, a) }?.id?.toInt() ?: continue
+                }
+                sceneByRepId.getOrPut(repId) { mutableListOf() } += a
+            }
+            fun sceneAtomAt(repId: Int, position: Vec3): AtomImage? =
+                sceneByRepId[repId]?.firstOrNull { distance(it.cartesianCoordinate.toVec3(), position) < 1e-3 }
+            val moleculeRule = BondRule("A", "B", 0.1, 10.0, BondRuleSource.CUSTOM)
+            options.molecules.forEachIndexed { molIndex, molecule ->
+                if (moleculeFullyHidden(molIndex)) return@forEachIndexed
+                val atomById = molecule.atoms.associateBy { it.id }
+                for (mb in molecule.bonds) {
+                    val fromPos = atomById[mb.from]?.position ?: continue
+                    val toPos = atomById[mb.to]?.position ?: continue
+                    val a1 = sceneAtomAt(mb.from, fromPos.toVec3()) ?: continue
+                    val a2 = sceneAtomAt(mb.to, toPos.toVec3()) ?: continue
+                    if (a1.id == a2.id) continue
+                    val pair = minOf(a1.id, a2.id) to maxOf(a1.id, a2.id)
+                    if (pair in emittedPairs) continue
+                    emittedPairs += pair
+                    val key = listOf(a1.siteId, a2.siteId).sorted().joinToString("\u0000")
+                    objects += BondInstance(
+                        id = "molbond:${a1.id}:${a2.id}",
+                        bond = Bond(
+                            a1.id, a2.id,
+                            distance(a1.cartesianCoordinate.toVec3(), a2.cartesianCoordinate.toVec3()),
+                            moleculeRule,
+                            Int3(0, 0, 0),
+                        ),
+                        start = a1.cartesianCoordinate.toVec3(),
+                        end = a2.cartesianCoordinate.toVec3(),
+                        radius = options.bondRadius,
+                        startMaterial = bondMaterial(a1),
+                        endMaterial = bondMaterial(a2),
+                        visible = options.showBonds && key !in options.hiddenBondKeys,
+                    )
+                }
+            }
         }
 
         // Polyhedra pass (unchanged).

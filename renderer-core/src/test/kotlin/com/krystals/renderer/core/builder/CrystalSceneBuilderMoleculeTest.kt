@@ -3,6 +3,7 @@ package com.krystals.renderer.core.builder
 import com.krystals.crystal.analysis.bonding.Bond
 import com.krystals.crystal.analysis.bonding.BondNetwork
 import com.krystals.crystal.analysis.bonding.BondRule
+import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.model.Expansion
 import com.krystals.crystal.core.coordinate.CartesianCoordinate
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
@@ -20,7 +21,9 @@ import com.krystals.crystal.core.symmetry.SymmetryOperation
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.scene.RenderScene
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -136,8 +139,12 @@ class CrystalSceneBuilderMoleculeTest {
         ),
     )
 
-    private fun build(options: SceneBuildOptions = SceneBuildOptions()): RenderScene =
-        CrystalSceneBuilder().build(structure, BondNetwork(atoms, bonds, structure, Expansion()), options)
+    private fun build(
+        options: SceneBuildOptions = SceneBuildOptions(),
+        bondList: List<Bond> = bonds,
+        atomList: List<AtomImage> = atoms,
+    ): RenderScene =
+        CrystalSceneBuilder().build(structure, BondNetwork(atomList, bondList, structure, Expansion()), options)
 
     private fun RenderScene.atomInstance(id: Long) = atoms.single { it.atom.id == id }
     private fun RenderScene.bondBetween(a: Long, b: Long) = bonds.single {
@@ -221,5 +228,76 @@ class CrystalSceneBuilderMoleculeTest {
         }
         assertFalse(scene.bondBetween(8, 10).visible, "cross-cell bond of a fully-hidden molecule")
         assertFalse(scene.bondBetween(7, 8).visible)
+    }
+
+    @Test
+    fun moleculeExtendCompletesShellShellBonds() {
+        // 模拟白磷 P4 横跨晶胞:P1/P4 在原胞,P2'/P3' 在 (0,0,1)(外部壳层)。
+        // BondDetector 只从 primary/boundary 中心生成键,两端都是 shell 的 P2'-P3' 键
+        // 不会生成 —— 分子展开时须由 MoleculeBond 补齐,每个显示的 P 保持完整配位。
+        val pAtoms = listOf(
+            atom(21, "P1", "P", 0.3, 0.5, 0.5),
+            atom(22, "P2", "P", 0.3, 0.6, 0.5),
+            atom(23, "P3", "P", 0.4, 0.6, 0.5),
+            atom(24, "P4", "P", 0.4, 0.5, 0.5),
+            atom(25, "P2", "P", 0.3, 0.6, 1.5, offset = Int3(0, 0, 1), shell = true),
+            atom(26, "P3", "P", 0.4, 0.6, 1.5, offset = Int3(0, 0, 1), shell = true),
+        )
+        val pBonds = listOf(
+            bond(21, 25, "P1", "P2"),
+            bond(21, 26, "P1", "P3"),
+            bond(24, 25, "P4", "P2"),
+            bond(24, 26, "P4", "P3"),
+            bond(21, 24, "P1", "P4"),
+            bond(22, 23, "P2", "P3"),
+        )
+        // 缺口:P2'-P3'(25-26),两端都是外部壳层。
+        val p4 = Molecule(
+            "P4",
+            listOf(
+                MoleculeAtom(21, "P1", Species("P"), CartesianCoordinate(1.2, 2.0, 2.0)),
+                MoleculeAtom(22, "P2", Species("P"), CartesianCoordinate(1.2, 2.4, 6.0)),
+                MoleculeAtom(23, "P3", Species("P"), CartesianCoordinate(1.6, 2.4, 6.0)),
+                MoleculeAtom(24, "P4", Species("P"), CartesianCoordinate(1.6, 2.0, 2.0)),
+            ),
+            listOf(
+                MoleculeBond(21, 22), MoleculeBond(21, 23), MoleculeBond(21, 24),
+                MoleculeBond(22, 23), MoleculeBond(22, 24), MoleculeBond(23, 24),
+            ),
+        )
+        // 非分子展开:shell-shell 键不存在。
+        val plain = build(bondList = pBonds, atomList = pAtoms)
+        assertTrue(plain.bonds.none { it.bond.atomA == 25L && it.bond.atomB == 26L })
+        // 分子展开:补齐的 shell-shell 键存在且可见。
+        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(p4)), pBonds, pAtoms)
+        val completed = scene.bonds.firstOrNull {
+            (it.bond.atomA == 25L && it.bond.atomB == 26L) || (it.bond.atomA == 26L && it.bond.atomB == 25L)
+        }
+        assertNotNull(completed, "shell-shell bond 25-26 should be completed by molecule-extend")
+        assertTrue(completed.visible)
+        // 25-26 只补齐一次(不重复);P2' 总配位 = 3 根键(21-25、24-25、25-26)。
+        assertEquals(1, scene.bonds.count {
+            (it.bond.atomA == 25L && it.bond.atomB == 26L) || (it.bond.atomA == 26L && it.bond.atomB == 25L)
+        })
+        assertEquals(3, scene.bonds.count { it.bond.atomA == 25L || it.bond.atomB == 25L })
+    }
+
+    @Test
+    fun moleculeExtendShowsInterMolecularHbondsButNotCrossMoleculeCovalent() {
+        // 分子间氢键(O1 与另一分子的 H3):分子展开下仍显示(氢键不属于分子,不沿其展开)。
+        val hbond = Bond(1, 5, 2.4, BondRule("O1", "H3", 1.5, 3.0, BondRuleSource.AUTO, isHBond = true))
+        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = molecules), bonds + hbond)
+        val h = scene.bonds.single { it.bond.rule.isHBond }
+        assertTrue(h.visible, "inter-molecular hbond should be visible under molecule-extend")
+        // 水分子内部键照常显示。
+        assertTrue(scene.bondBetween(1, 2).visible)
+    }
+
+    @Test
+    fun moleculeExtendKeepsCrossMoleculeCovalentBondsHidden() {
+        // 普通(非氢键)跨分子键:两端属不同分子 → 分子展开下不显示。
+        val crossBond = bond(1, 5, "O1", "H3")
+        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = molecules), bonds + crossBond)
+        assertFalse(scene.bondBetween(1, 5).visible, "cross-molecule covalent bond should stay hidden")
     }
 }
