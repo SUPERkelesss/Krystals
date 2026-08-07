@@ -125,15 +125,23 @@ class CrystalSceneBuilder {
             fun cellShift(t: Int3): Vec3 =
                 lattice.toCartesian(FractionalCoordinate(t.x.toDouble(), t.y.toDouble(), t.z.toDouble())).toVec3()
             val images = ArrayList<List<Pair<Int, Vec3>>>(options.molecules.size)
+            // 映像与单胞"实质重叠"的阈值(分数坐标):原子中心须距所有晶胞边界 ≥ 该值,
+            // 否则视为贴边/无重叠的相邻分子(如尿素沿 c 只伸入 0.03 的映像),不显示。
+            // t=0(单胞内分子本身)恒显示,含其跨胞延伸。
+            val imageEps = 0.05
             for (m in options.molecules) {
                 val fracs = m.atoms.map { lattice.toFractional(it.position) }
                 val entries = ArrayList<Pair<Int, Vec3>>()
                 for (tx in -1..1) for (ty in -1..1) for (tz in -1..1) {
                     val t = Int3(tx, ty, tz)
-                    val intersects = fracs.any { f ->
-                        f.x + tx in -1e-6..(1.0 + 1e-6) &&
-                            f.y + ty in -1e-6..(1.0 + 1e-6) &&
-                            f.z + tz in -1e-6..(1.0 + 1e-6)
+                    val intersects = if (tx == 0 && ty == 0 && tz == 0) {
+                        true
+                    } else {
+                        fracs.any { f ->
+                            (f.x + tx) in imageEps..(1.0 - imageEps) &&
+                                (f.y + ty) in imageEps..(1.0 - imageEps) &&
+                                (f.z + tz) in imageEps..(1.0 - imageEps)
+                        }
                     }
                     if (!intersects) continue
                     val shift = cellShift(t)

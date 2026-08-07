@@ -414,6 +414,57 @@ class CrystalSceneBuilderMoleculeTest {
     }
 
     @Test
+    fun moleculeExtendSkipsImagesWithNoSubstantialOverlap() {
+        // 分子 A:Z1(0.97)↔Z2(1.03 物理,原胞代表 0.03)。其 t=(0,0,-1) 映像的 Z2 落在
+        // z=0.03(贴 z=0 边界,深度 0.03 < 0.05)→ 与单胞无实质重叠,不显示(用户:无重叠
+        // 分子太多);但 Z2 的原胞代表 42(z=0.03)是单胞内原子,经周期键 41-42 配位完整。
+        // 分子 B:Y1(0.25)↔Y2(-0.25 物理,原胞代表 0.75)。t=(0,0,1) 映像有原子深入 z=0.75
+        // → 与单胞实质重叠,显示完整。
+        val atoms = listOf(
+            atom(41, "Z1", "Z", 0.5, 0.5, 0.97),                  // (2,2,3.88)
+            atom(42, "Z2", "Z", 0.5, 0.5, 0.03),                  // (2,2,0.12) 原胞代表
+            atom(43, "Z2", "Z", 0.5, 0.5, 1.03, offset = Int3(0, 0, 1), shell = true),  // (2,2,4.12)
+            atom(51, "Y1", "Y", 0.5, 0.5, 0.25),                  // (2,2,1)
+            atom(52, "Y2", "Y", 0.5, 0.5, 0.75),                  // (2,2,3)
+        )
+        val pBonds = listOf(
+            bond(41, 42, "Z1", "Z2"),       // 周期键(Z2 原胞代表,距离 0.24)
+            bond(41, 43, "Z1", "Z2", offsetB = Int3(0, 0, 1)),   // 分子 t=0 映像键(Z2@1.03)
+            bond(51, 52, "Y1", "Y2"),
+        )
+        val molA = Molecule(
+            "Z2",
+            listOf(
+                MoleculeAtom(41, "Z1", Species("Z"), CartesianCoordinate(2.0, 2.0, 3.88), siteId = "Z1"),
+                MoleculeAtom(42, "Z2", Species("Z"), CartesianCoordinate(2.0, 2.0, 4.12), siteId = "Z2"),
+            ),
+            listOf(MoleculeBond(41, 42)),
+        )
+        // Y2 物理位置在 z=-0.25(跨胞负向);其原胞代表 52 在 z=0.75。
+        val molB = Molecule(
+            "Y2",
+            listOf(
+                MoleculeAtom(51, "Y1", Species("Y"), CartesianCoordinate(2.0, 2.0, 1.0), siteId = "Y1"),
+                MoleculeAtom(52, "Y2", Species("Y"), CartesianCoordinate(2.0, 2.0, -1.0), siteId = "Y2"),
+            ),
+            listOf(MoleculeBond(51, 52)),
+        )
+        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(molA, molB)), pBonds, atoms)
+        // t=0 映像:全部显示(含 A 的跨胞 43 与 B 的跨胞 Y2@(2,2,-1) 动态原子)。
+        listOf(41L, 42L, 43L, 51L, 52L).forEach {
+            assertTrue(scene.atomInstance(it).visible, "molecule atom $it should be visible")
+        }
+        assertTrue(scene.bondBetween(41, 42).visible, "periodic Z1-Z2 bond")
+        assertTrue(scene.bondBetween(41, 43).visible, "in-image Z1-Z2 bond")
+        assertTrue(scene.bondBetween(51, 52).visible)
+        // 动态原子:仅 B 的 Y2@(2,2,-1)(t=0 映像)与 Y1@(2,2,5)(t=(0,0,1) 映像,深入 0.75)。
+        val dynY = scene.atoms.filter { it.id.startsWith("molatom:") }.map { it.atom.cartesianCoordinate.z }.sorted()
+        assertEquals(listOf(-1.0, 5.0), dynY, "A 的贴边映像 (z=0.03) 不产生动态原子")
+        // A 的 t=(0,0,-1) 映像位置 (2,2,0.12) 不存在(ε 排除贴边映像)。
+        assertTrue(scene.atoms.none { it.id.startsWith("molatom:") && kotlin.math.abs(it.atom.cartesianCoordinate.z - 0.12) < 1e-9 })
+    }
+
+    @Test
     fun moleculeExtendCreatesDynamicAtomsBeyondMaterializedShell() {
         // 分子原子物理位置超出 BondDetector 的 ±1 层壳层(如尿素分子跨两个晶胞,末端
         // 在 (2,0,0) 层)→ 场景无该原子 → 动态创建,并补齐其分子内键。
