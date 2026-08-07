@@ -136,6 +136,8 @@ class DocumentTab(
     // reapply when adjusted (default smart-ionic).
     var bondEpsilon by mutableDoubleStateOf(0.45)
     var lastRadiusSource by mutableStateOf(RadiusSource.SMART_IONIC)
+    // Per v0.8.x: 氢键角度阈值(D–H···A 夹角,度)。UI 设置,不持久化;默认 110 与检测一致。
+    var hbondAngleThreshold by mutableDoubleStateOf(110.0)
     // Per v0.7.0: user crystal comments stored in CIF as "# Krystals Comments" block.
     var comments by mutableStateOf("")
     var commentsOpen by mutableStateOf(false)
@@ -176,6 +178,9 @@ class DocumentTab(
     var bondDrawMode by mutableStateOf(BondDrawMode.NONE)
     var bondDrawFirstSiteId by mutableStateOf<String?>(null)
     var bondDrawFirstCartesian by mutableStateOf<Vec3?>(null)
+    // Per v0.8.x: bond draw/delete target type — true when the user is drawing/deleting an
+    // H-BOND (normal-bond keys lack the "\u0000hbond" suffix and would match the wrong rule).
+    var bondDrawTargetIsHbond by mutableStateOf(false)
     var pendingBondDrawRule by mutableStateOf<BondRule?>(null)
     val history = HistoryController<DocumentSnapshot>(10)
     var historyVersion by mutableIntStateOf(0)
