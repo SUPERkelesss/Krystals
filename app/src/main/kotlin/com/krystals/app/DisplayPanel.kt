@@ -105,12 +105,6 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                         }
                         tabEntries.forEach { (kind, label) -> FilterChip(selected == kind, onClick = { selected = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
                         Spacer(Modifier.weight(1f))
-                        // Per molecule-extend: 按分子展开总开关(仅分子晶体),所有子菜单共享;
-                        // 启用时"扩展到晶胞外"规则失效(BONDS tab 灰显)。
-                        if (tab.isMolecularCrystal) {
-                            Checkbox(tab.moleculeExtend, onCheckedChange = { tab.moleculeExtend = it })
-                            Text(localized("按分子展开", "Expand by Molecule"), style = MaterialTheme.typography.bodySmall)
-                        }
                         IconButton(onClick = { closePanel() }) { Icon(Icons.Default.Close, null) }
                     }
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
@@ -148,6 +142,13 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                             hiddenBondPairs = if (allMoleculeBondKeys.any { it in tab.visibility.hiddenBondPairs }) tab.visibility.hiddenBondPairs - allMoleculeBondKeys else tab.visibility.hiddenBondPairs + allMoleculeBondKeys,
                                         )
                                     }) { Text(localized("反选", "Invert")) }
+                                    Spacer(Modifier.weight(1f))
+                                    // Per molecule-extend: "按分子展开"开关与全选同栏(仅分子晶体);
+                                    // 启用时"扩展到晶胞外"规则失效(BONDS tab 灰显)。
+                                    if (tab.isMolecularCrystal) {
+                                        Checkbox(tab.moleculeExtend, onCheckedChange = { tab.moleculeExtend = it })
+                                        Text(localized("按分子展开", "Expand by Molecule"), style = MaterialTheme.typography.bodySmall)
+                                    }
                                 }
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                                 if (tab.molecules.isEmpty()) {
