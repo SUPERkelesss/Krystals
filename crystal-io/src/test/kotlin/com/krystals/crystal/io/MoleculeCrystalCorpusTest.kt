@@ -10,6 +10,7 @@ import com.krystals.crystal.core.math.angleDegrees
 import com.krystals.crystal.core.model.AtomImage
 import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -43,15 +44,18 @@ class MoleculeCrystalCorpusTest {
         assertTrue(net.isMolecularCrystal(), "P4 应为分子晶体")
         val molecules = net.toMolecules()
         assertTrue(molecules.isNotEmpty(), "P4 应解析出分子")
+        // 按位点组合去重:白磷 3 种位点组合,每种 2 个对称等价 P4 → 3 个分子项
+        // (而非 6 个物理分子)。
+        assertEquals(3, molecules.size, "白磷应为 3 个位点组合分子项, got ${molecules.map { "${it.name}:${it.atomCount}" }}")
         for (m in molecules) {
-            assertTrue(m.atomCount == 4, "P4 分子应 4 原子,got ${m.atomCount}")
-            assertTrue(m.bondCount == 6, "P4 分子应 6 键,got ${m.bondCount}")
+            assertEquals("P4", m.name)
+            assertTrue(m.atomCount % 4 == 0, "原子数应为 P4 的整数倍, got ${m.atomCount}")
             val counts = HashMap<Int, Int>()
             for (mb in m.bonds) {
                 counts[mb.from] = (counts[mb.from] ?: 0) + 1
                 counts[mb.to] = (counts[mb.to] ?: 0) + 1
             }
-            assertTrue(counts.values.all { it == 3 }, "每个 P 应配位 3,got $counts")
+            assertTrue(counts.values.all { it == 3 }, "每个 P 应配位 3, got ${counts.values}")
         }
     }
 

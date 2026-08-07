@@ -25,7 +25,9 @@ private operator fun Int3.plus(o: Int3) = Int3(x + o.x, y + o.y, z + o.z)
 fun BondNetwork.toMolecules(): List<Molecule> {
     val g = toCellBondGraph()
     val byId = g.cellAtoms.associateBy { it.id }
-    val molecules = mutableListOf<Molecule>()
+    // 连通分量:每个物理分子一个分量(原子 + 物理位置 + 键)。
+    class Component(val atoms: List<AtomImage>, val pos: Map<Long, Int3>, val bonds: List<Pair<Int, Int>>)
+    val components = mutableListOf<Component>()
     val visited = HashSet<Long>()
     for (root in g.cellAtoms) {
         if (root.id in visited) continue
@@ -50,18 +52,44 @@ fun BondNetwork.toMolecules(): List<Molecule> {
                 }
             }
         }
-        val moleculeAtoms = componentAtoms.map { a ->
+        components += Component(componentAtoms, pos, bondPairs.toList())
+    }
+    // 按"原子位点组合"(site 集合)分组:一个分子项对应一个位点组合,合并所有可通过
+    // 对称操作重合的物理分子 —— 如 A、B 两 site 组成的二聚体,晶胞内无论有多少个
+    // A-B 分子,只生成一个分子项;其开关控制该位点组合的全部原子与键。
+    val grouped = LinkedHashMap<List<String>, MutableList<Component>>()
+    for (comp in components) {
+        val key = comp.atoms.map { it.siteId }.distinct().sorted()
+        grouped.getOrPut(key) { mutableListOf() } += comp
+    }
+    val molecules = mutableListOf<Molecule>()
+    for ((_, comps) in grouped) {
+        val firstAtoms = comps.first().atoms.map { a ->
             MoleculeAtom(
                 id = a.id.toInt(),
                 label = a.siteLabel,
                 species = a.species,
-                position = structure.lattice.toCartesian(a.fractionalCoordinate + pos.getValue(a.id)),
+                position = structure.lattice.toCartesian(a.fractionalCoordinate + comps.first().pos.getValue(a.id)),
+                siteId = a.siteId,
             )
         }
+        val allAtoms = comps.flatMap { comp ->
+            comp.atoms.map { a ->
+                MoleculeAtom(
+                    id = a.id.toInt(),
+                    label = a.siteLabel,
+                    species = a.species,
+                    position = structure.lattice.toCartesian(a.fractionalCoordinate + comp.pos.getValue(a.id)),
+                    siteId = a.siteId,
+                )
+            }
+        }
+        val allBonds = comps.flatMap { it.bonds }.distinct()
         molecules += Molecule(
-            name = formulaFor(moleculeAtoms).ifEmpty { "Molecule ${molecules.size + 1}" },
-            atoms = moleculeAtoms,
-            bonds = bondPairs.map { (from, to) -> MoleculeBond(from, to, order = 1.0) },
+            // 名称用单个分子的组成式(对称等价分子拓扑相同),而非合并后的原子总数。
+            name = formulaFor(firstAtoms).ifEmpty { "Molecule ${molecules.size + 1}" },
+            atoms = allAtoms,
+            bonds = allBonds.map { (from, to) -> MoleculeBond(from, to, order = 1.0) },
         )
     }
     return molecules

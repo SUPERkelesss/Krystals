@@ -13,6 +13,8 @@ data class MoleculeAtom(
     val label: String,
     val species: Species,
     val position: CartesianCoordinate,
+    /** 来源原子位点 id([AtomImage.siteId]),用于材质/隐藏联动与位点组合分组。 */
+    val siteId: String = "",
 )
 
 /**

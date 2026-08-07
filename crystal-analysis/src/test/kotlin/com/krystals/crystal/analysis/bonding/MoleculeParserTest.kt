@@ -50,15 +50,16 @@ class MoleculeParserTest {
     }
 
     @Test fun waterCrystalParsesToTwoMolecules() {
-        // 单胞 2 个独立水分子(a=10,4 条 O-H 键)→ 2 个 Molecule,名称 "H2O"。
+        // 单胞 2 个独立水分子(不同 site 组合 O1/H1/H2 与 O2/H3/H4,a=10,4 条 O-H 键)
+        // → 2 个 Molecule 项,名称 "H2O"。
         val net = buildNet(
             listOf(
-                Site("O", "O1", Species("O"), FractionalCoordinate(0.3, 0.3, 0.3)),
-                Site("H", "H1", Species("H"), FractionalCoordinate(0.3, 0.3, 0.396)),
-                Site("H", "H2", Species("H"), FractionalCoordinate(0.3, 0.396, 0.3)),
-                Site("O", "O2", Species("O"), FractionalCoordinate(0.7, 0.7, 0.7)),
-                Site("H", "H3", Species("H"), FractionalCoordinate(0.7, 0.7, 0.796)),
-                Site("H", "H4", Species("H"), FractionalCoordinate(0.7, 0.796, 0.7)),
+                Site("O1", "O1", Species("O"), FractionalCoordinate(0.3, 0.3, 0.3)),
+                Site("H1", "H1", Species("H"), FractionalCoordinate(0.3, 0.3, 0.396)),
+                Site("H2", "H2", Species("H"), FractionalCoordinate(0.3, 0.396, 0.3)),
+                Site("O2", "O2", Species("O"), FractionalCoordinate(0.7, 0.7, 0.7)),
+                Site("H3", "H3", Species("H"), FractionalCoordinate(0.7, 0.7, 0.796)),
+                Site("H4", "H4", Species("H"), FractionalCoordinate(0.7, 0.796, 0.7)),
             ),
             10.0,
         )
@@ -89,8 +90,9 @@ class MoleculeParserTest {
 
     // ── 算法逻辑:手造原子/键 ──────────────────────────────────────────────
 
-    @Test fun twoWaterMoleculesProduceTwoMolecules() {
-        // 两个独立水分子,全部键在单胞内 → 2 个 Molecule,各 3 原子 2 键。
+    @Test fun symmetricMoleculesMergeIntoSingleEntry() {
+        // 两个对称等价水分子(同一 site 组合 O/H)→ 只生成一个分子项,含全部物理原子与键;
+        // 开关控制该位点组合的所有分子。
         val o1 = a(1, "O", "O", FractionalCoordinate(0.3, 0.3, 0.3))
         val h1 = a(2, "H", "H", FractionalCoordinate(0.3, 0.3, 0.4))
         val h2 = a(3, "H", "H", FractionalCoordinate(0.3, 0.4, 0.3))
@@ -101,10 +103,27 @@ class MoleculeParserTest {
             listOf(o1, h1, h2, o2, h3, h4),
             listOf(b(1, 2), b(1, 3), b(4, 5), b(4, 6)),
         ).toMolecules()
+        assertEquals(1, molecules.size, "同一 site 组合的分子应合并为一个分子项")
+        assertEquals("H2O", molecules[0].name)
+        assertEquals(6, molecules[0].atomCount)
+        assertEquals(4, molecules[0].bondCount)
+    }
+
+    @Test fun distinctSiteCombinationsStaySeparateEntries() {
+        // 不同 site 组合(O1-H1-H2 vs O2-H3-H4)→ 两个分子项。
+        val o1 = a(1, "O1", "O", FractionalCoordinate(0.3, 0.3, 0.3))
+        val h1 = a(2, "H1", "H", FractionalCoordinate(0.3, 0.3, 0.4))
+        val h2 = a(3, "H2", "H", FractionalCoordinate(0.3, 0.4, 0.3))
+        val o2 = a(4, "O2", "O", FractionalCoordinate(0.7, 0.7, 0.7))
+        val h3 = a(5, "H3", "H", FractionalCoordinate(0.7, 0.7, 0.8))
+        val h4 = a(6, "H4", "H", FractionalCoordinate(0.7, 0.8, 0.7))
+        val molecules = network(
+            listOf(o1, h1, h2, o2, h3, h4),
+            listOf(b(1, 2), b(1, 3), b(4, 5), b(4, 6)),
+        ).toMolecules()
         assertEquals(2, molecules.size)
         assertEquals(3, molecules[0].atomCount)
         assertEquals(2, molecules[0].bondCount)
-        assertEquals(setOf("O", "H", "H"), molecules[0].atoms.map { it.species.symbol }.toSet())
         assertEquals(3, molecules[1].atomCount)
         assertEquals(2, molecules[1].bondCount)
     }
@@ -153,7 +172,8 @@ class MoleculeParserTest {
 
     @Test fun hydrogenBondsDoNotSplitMolecules() {
         // 两个水分子 + 两条跨晶胞氢键(若计入会把两分子连成一个跨晶胞分量)。
-        // 氢键是分子间弱作用,不参与分子解析 → 仍为 2 个独立 Molecule。
+        // 氢键是分子间弱作用,不参与分子解析;两个 O-H 分子为同一 site 组合(O/H)
+        // → 合并为一个分子项(4 原子 2 键),氢键不把它们分裂开。
         val o1 = a(1, "O", "O", FractionalCoordinate(0.1, 0.1, 0.1))
         val h1 = a(2, "H", "H", FractionalCoordinate(0.1, 0.1, 0.2))
         val o2 = a(3, "O", "O", FractionalCoordinate(0.5, 0.5, 0.5))
@@ -171,8 +191,9 @@ class MoleculeParserTest {
                 Bond(3, 6, 2.4, hbond),
             ),
         ).toMolecules()
-        assertEquals(2, molecules.size)
-        assertTrue(molecules.all { it.atomCount == 2 && it.bondCount == 1 })
+        assertEquals(1, molecules.size, "同一 site 组合的 O-H 分子应合并为一个分子项")
+        assertEquals(4, molecules[0].atomCount)
+        assertEquals(2, molecules[0].bondCount)
     }
 
     @Test fun emptyNetworkYieldsEmptyList() {
