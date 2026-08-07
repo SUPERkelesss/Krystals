@@ -288,9 +288,10 @@ class CrystalSceneBuilder {
                 // 同原子周期自像(如跨晶胞面的 Cl2 分子两半)是分子内键,因此渲染。
                 options.moleculeExtend -> {
                     if (isHBond) {
-                        // 分子间氢键:不属于任何分子,不沿氢键展开分子,但氢键本身始终显示
-                        // (两端原子可见性由各自分子/hiddenSites 决定)。
-                        true
+                        // 分子间氢键:不属于任何分子,不沿氢键展开分子;氢键显示跟随两端
+                        // 原子可见性(各自分子开关 / hiddenSites),保证只显示可见原子之间的
+                        // 合法氢键(键本身由 BondDetector 按距离/角度/per-H 规则生成)。
+                        atomVisible(start) && atomVisible(end)
                     } else {
                         val mi = moleculeIndexOf(start)
                         val mj = moleculeIndexOf(end)
@@ -333,49 +334,65 @@ class CrystalSceneBuilder {
 
         // Per molecule-extend: BondDetector 只从 primary/boundary 中心生成键 —— 分子内两端
         // 都是外部壳层的键(如横跨晶胞的 P4 中两个胞外顶点 P2'-P3')不会生成,导致分子展开
-        // 时胞外原子配位缺失(白磷每个 P 应连三根键)。从分子的 MoleculeBond 补齐:分子原子
-        // position 是物理坐标,与场景原子(含晶胞偏移的绝对坐标)按位置匹配(容差 1e-3)。
+        // 时胞外原子配位缺失(白磷每个 P 应连三根键)。按"每个显示的外部壳层原子 → 其分子
+        // 拓扑邻居的最邻近映像"补齐(任意 cellOffset 映像,而非仅分子拓扑物理位置),并用
+        // 分子内键长验证,防止最近映像误配生成长键。
         if (options.moleculeExtend && options.molecules.isNotEmpty()) {
-            val emittedPairs = HashSet<Pair<Long, Long>>()
-            for (b in analysis.bonds) emittedPairs += minOf(b.atomA, b.atomB) to maxOf(b.atomA, b.atomB)
+            fun repIdOf(atom: AtomImage): Int? = when {
+                !atom.isShell && atom.cellOffset == Int3(0, 0, 0) -> atom.id.toInt()
+                else -> repBySiteId[atom.siteId]?.firstOrNull { isSameAtomPeriodicImage(it, atom) }?.id?.toInt()
+            }
+            // 分子拓扑:原胞原子 id → 分子内邻居 id 集合;分子内键长(排序原子对)。
+            val moleculeNeighbors = ArrayList<Map<Int, Set<Int>>>(options.molecules.size)
+            val bondLengthByPair = HashMap<Pair<Int, Int>, Double>()
+            for (m in options.molecules) {
+                val posById = m.atoms.associate { it.id to it.position.toVec3() }
+                val adj = HashMap<Int, MutableSet<Int>>()
+                for (mb in m.bonds) {
+                    adj.getOrPut(mb.from) { mutableSetOf() } += mb.to
+                    adj.getOrPut(mb.to) { mutableSetOf() } += mb.from
+                    val p1 = posById[mb.from] ?: continue
+                    val p2 = posById[mb.to] ?: continue
+                    bondLengthByPair[minOf(mb.from, mb.to) to maxOf(mb.from, mb.to)] = distance(p1, p2)
+                }
+                moleculeNeighbors += adj
+            }
+            // 场景原子按原胞代表 id 索引。
             val sceneByRepId = HashMap<Int, MutableList<AtomImage>>()
             for (a in analysis.atoms) {
-                val repId = if (!a.isShell && a.cellOffset == Int3(0, 0, 0)) {
-                    a.id.toInt()
-                } else {
-                    repBySiteId[a.siteId]?.firstOrNull { isSameAtomPeriodicImage(it, a) }?.id?.toInt() ?: continue
-                }
+                val repId = repIdOf(a) ?: continue
                 sceneByRepId.getOrPut(repId) { mutableListOf() } += a
             }
-            fun sceneAtomAt(repId: Int, position: Vec3): AtomImage? =
-                sceneByRepId[repId]?.firstOrNull { distance(it.cartesianCoordinate.toVec3(), position) < 1e-3 }
+            val emittedPairs = HashSet<Pair<Long, Long>>()
+            for (b in analysis.bonds) emittedPairs += minOf(b.atomA, b.atomB) to maxOf(b.atomA, b.atomB)
             val moleculeRule = BondRule("A", "B", 0.1, 10.0, BondRuleSource.CUSTOM)
-            options.molecules.forEachIndexed { molIndex, molecule ->
-                if (moleculeFullyHidden(molIndex)) return@forEachIndexed
-                val atomById = molecule.atoms.associateBy { it.id }
-                for (mb in molecule.bonds) {
-                    val fromPos = atomById[mb.from]?.position ?: continue
-                    val toPos = atomById[mb.to]?.position ?: continue
-                    val a1 = sceneAtomAt(mb.from, fromPos.toVec3()) ?: continue
-                    val a2 = sceneAtomAt(mb.to, toPos.toVec3()) ?: continue
-                    if (a1.id == a2.id) continue
-                    val pair = minOf(a1.id, a2.id) to maxOf(a1.id, a2.id)
+            for (a in analysis.atoms) {
+                if (!a.isShell || a.isBoundaryImage) continue
+                if (!atomVisible(a)) continue
+                val mol = moleculeIndexOf(a) ?: continue
+                if (moleculeFullyHidden(mol)) continue
+                val repId = repIdOf(a) ?: continue
+                val aPos = a.cartesianCoordinate.toVec3()
+                for (n in moleculeNeighbors[mol][repId].orEmpty()) {
+                    val cands = sceneByRepId[n] ?: continue
+                    val best = cands.minByOrNull { distance(aPos, it.cartesianCoordinate.toVec3()) } ?: continue
+                    if (best.id == a.id) continue
+                    val pair = minOf(a.id, best.id) to maxOf(a.id, best.id)
                     if (pair in emittedPairs) continue
+                    val bondLen = bondLengthByPair[minOf(repId, n) to maxOf(repId, n)] ?: continue
+                    val d = distance(aPos, best.cartesianCoordinate.toVec3())
+                    // 键长验证(±20%):最近映像必须落在分子内键长附近,否则是错误映像。
+                    if (d > bondLen * 1.2 || d < bondLen * 0.8) continue
                     emittedPairs += pair
-                    val key = listOf(a1.siteId, a2.siteId).sorted().joinToString("\u0000")
+                    val key = listOf(a.siteId, best.siteId).sorted().joinToString("\u0000")
                     objects += BondInstance(
-                        id = "molbond:${a1.id}:${a2.id}",
-                        bond = Bond(
-                            a1.id, a2.id,
-                            distance(a1.cartesianCoordinate.toVec3(), a2.cartesianCoordinate.toVec3()),
-                            moleculeRule,
-                            Int3(0, 0, 0),
-                        ),
-                        start = a1.cartesianCoordinate.toVec3(),
-                        end = a2.cartesianCoordinate.toVec3(),
+                        id = "molbond:${a.id}:${best.id}",
+                        bond = Bond(a.id, best.id, d, moleculeRule, Int3(0, 0, 0)),
+                        start = aPos,
+                        end = best.cartesianCoordinate.toVec3(),
                         radius = options.bondRadius,
-                        startMaterial = bondMaterial(a1),
-                        endMaterial = bondMaterial(a2),
+                        startMaterial = bondMaterial(a),
+                        endMaterial = bondMaterial(best),
                         visible = options.showBonds && key !in options.hiddenBondKeys,
                     )
                 }

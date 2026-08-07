@@ -283,6 +283,76 @@ class CrystalSceneBuilderMoleculeTest {
     }
 
     @Test
+    fun moleculeExtendCompletesShellShellBondsForEveryImage() {
+        // 白磷 P4 分子在 +z 与 -z 两个方向的映像都有外部壳层原子:BondDetector 只生成
+        // primary 相关的键,P2'-P3'(+z)与 P2''-P3''(-z)都需由分子展开补齐(任意映像)。
+        val pAtoms = listOf(
+            atom(21, "P1", "P", 0.3, 0.5, 0.5),
+            atom(22, "P2", "P", 0.3, 0.6, 0.5),
+            atom(23, "P3", "P", 0.4, 0.6, 0.5),
+            atom(24, "P4", "P", 0.4, 0.5, 0.5),
+            atom(25, "P2", "P", 0.3, 0.6, 1.5, offset = Int3(0, 0, 1), shell = true),
+            atom(26, "P3", "P", 0.4, 0.6, 1.5, offset = Int3(0, 0, 1), shell = true),
+            atom(27, "P2", "P", 0.3, 0.6, -0.5, offset = Int3(0, 0, -1), shell = true),
+            atom(28, "P3", "P", 0.4, 0.6, -0.5, offset = Int3(0, 0, -1), shell = true),
+        )
+        val pBonds = listOf(
+            bond(21, 25, "P1", "P2"), bond(21, 26, "P1", "P3"),
+            bond(24, 25, "P4", "P2"), bond(24, 26, "P4", "P3"),
+            bond(21, 27, "P1", "P2"), bond(21, 28, "P1", "P3"),
+            bond(24, 27, "P4", "P2"), bond(24, 28, "P4", "P3"),
+            bond(21, 24, "P1", "P4"), bond(22, 23, "P2", "P3"),
+        )
+        val p4 = Molecule(
+            "P4",
+            listOf(
+                MoleculeAtom(21, "P1", Species("P"), CartesianCoordinate(1.2, 2.0, 2.0)),
+                MoleculeAtom(22, "P2", Species("P"), CartesianCoordinate(1.2, 2.4, 6.0)),
+                MoleculeAtom(23, "P3", Species("P"), CartesianCoordinate(1.6, 2.4, 6.0)),
+                MoleculeAtom(24, "P4", Species("P"), CartesianCoordinate(1.6, 2.0, 2.0)),
+            ),
+            listOf(
+                MoleculeBond(21, 22), MoleculeBond(21, 23), MoleculeBond(21, 24),
+                MoleculeBond(22, 23), MoleculeBond(22, 24), MoleculeBond(23, 24),
+            ),
+        )
+        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(p4)), pBonds, pAtoms)
+        // +z 映像:P2'-P3'(25-26)补齐。
+        assertNotNull(
+            scene.bonds.firstOrNull {
+                (it.bond.atomA == 25L && it.bond.atomB == 26L) || (it.bond.atomA == 26L && it.bond.atomB == 25L)
+            },
+            "+z shell-shell bond 25-26 should be completed",
+        )
+        // -z 映像:P2''-P3''(27-28)补齐。
+        assertNotNull(
+            scene.bonds.firstOrNull {
+                (it.bond.atomA == 27L && it.bond.atomB == 28L) || (it.bond.atomA == 28L && it.bond.atomB == 27L)
+            },
+            "-z shell-shell bond 27-28 should be completed",
+        )
+        // 每个显示映像的 P2 配位完整:25 与 27 各连 3 根键(21、24、另一个 P3 映像)。
+        assertEquals(3, scene.bonds.count { it.bond.atomA == 25L || it.bond.atomB == 25L })
+        assertEquals(3, scene.bonds.count { it.bond.atomA == 27L || it.bond.atomB == 27L })
+    }
+
+    @Test
+    fun moleculeExtendHbondFollowsEndpointVisibility() {
+        // 分子间氢键 O1-H3:隐藏 H3 所在分子(水分子 2 全部原子)→ 氢键跟随端点隐藏。
+        val hbond = Bond(1, 5, 2.4, BondRule("O1", "H3", 1.5, 3.0, BondRuleSource.AUTO, isHBond = true))
+        val scene = build(
+            SceneBuildOptions(
+                moleculeExtend = true,
+                molecules = molecules,
+                hiddenSiteIds = setOf("O2", "H3", "H4"),
+            ),
+            bonds + hbond,
+        )
+        val h = scene.bonds.single { it.bond.rule.isHBond }
+        assertFalse(h.visible, "hbond to a fully-hidden molecule should hide with its endpoint")
+    }
+
+    @Test
     fun moleculeExtendShowsInterMolecularHbondsButNotCrossMoleculeCovalent() {
         // 分子间氢键(O1 与另一分子的 H3):分子展开下仍显示(氢键不属于分子,不沿其展开)。
         val hbond = Bond(1, 5, 2.4, BondRule("O1", "H3", 1.5, 3.0, BondRuleSource.AUTO, isHBond = true))
