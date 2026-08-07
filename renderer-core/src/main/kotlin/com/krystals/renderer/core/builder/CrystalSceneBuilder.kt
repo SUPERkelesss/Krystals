@@ -182,21 +182,19 @@ class CrystalSceneBuilder {
             return when {
                 atom.siteId in options.hiddenSiteIds -> false
                 !options.moleculeExtend -> !atom.isShell || atom.isBoundaryImage || atom.id in externallyVisible
-                // 分子展开:单胞内/边界映像按原逻辑(hiddenSites 已过滤)。
-                !atom.isShell || atom.isBoundaryImage -> true
-                // [0,1] 闭区间(超胞同理 [0,ex]):显示范围 [0,ex]×[0,ey]×[0,ez] 内的
-                // 原子(含 x/y/z=1 面、超胞 ex 面上的边界原子)直接显示——用户要求
-                // 单胞闭区间内的所有原子(含顶面 frac=1 的原子)都属于展开范围。
-                atom.fractionalCoordinate.let { f ->
-                    f.x in -1e-6..(displayEx.x + 1e-6) &&
-                        f.y in -1e-6..(displayEx.y + 1e-6) &&
-                        f.z in -1e-6..(displayEx.z + 1e-6)
-                } -> true
-                // 分子展开:外部壳层原子显示 ⟺ 其位置精确落在某可见分子的原子物理坐标上
-                // (完整分子 = 分子全部原子的物理位置;相邻分子的边界映像不误显示)。
+                // 分子展开:边界映像按原逻辑恒显(补全晶胞面)。
+                atom.isBoundaryImage -> true
                 else -> {
-                    val mol = moleculeIndexOf(atom) ?: return false
+                    val mol = moleculeIndexOf(atom) ?: return !atom.isShell || atom.fractionalCoordinate.let { f ->
+                        // 非分子原子:primary 恒显;[0,ex] 闭区间内壳层显(顶面 frac=1 规则)。
+                        f.x in -1e-6..(displayEx.x + 1e-6) &&
+                            f.y in -1e-6..(displayEx.y + 1e-6) &&
+                            f.z in -1e-6..(displayEx.z + 1e-6)
+                    }
                     if (moleculeFullyHidden(mol)) return false
+                    // 分子内原子(primary 或壳层):显示 ⟺ 位置精确落在该分子锚定后的原子
+                    // 物理坐标上。primary 不再无条件显示 —— 包裹复制原子(如跨胞分子的
+                    // frac 0.752..1.0 副本)被隐藏,每原子恰好显示一次。
                     val pos = atom.cartesianCoordinate.toVec3()
                     moleculePositions[mol].any { distance(it, pos) < 1e-3 }
                 }
@@ -506,9 +504,12 @@ class CrystalSceneBuilder {
                     visible = options.showBonds && key !in options.hiddenBondKeys,
                 )
             }
-            // 显示的外部壳层原子:补分子拓扑邻居键。
+            // 显示原子(含 primary)补其分子拓扑邻居键。BondDetector 从包裹中心扫描时
+            // 距离膨胀,漏掉两端都包裹的分子内键(如角笼包裹八分体内部边)——此处按
+            // 分子拓扑 + 键长验证补齐,键延伸式显示;emittedPairs 复用 analysis.bonds
+            // 种子去重,已存在的网键不重复发射。
             for (a in analysis.atoms) {
-                if (!a.isShell || a.isBoundaryImage) continue
+                if (a.isBoundaryImage) continue
                 if (!atomVisible(a)) continue
                 val mol = moleculeIndexOf(a) ?: continue
                 if (moleculeFullyHidden(mol)) continue
