@@ -372,6 +372,48 @@ class CrystalSceneBuilderMoleculeTest {
     }
 
     @Test
+    fun moleculeExtendShowsAllImagesIntersectingTheCell() {
+        // 分子链 A(0.9)→B(1.1)→C(1.3)→D(1.5) 跨 x 边界后继续延伸(尿素式)。与单胞相交的
+        // 映像:t=0(A 在胞内)与 t=-1(B/C/D 落在胞内),两个映像都要完整显示(键长 0.8,
+        // lattice a=4,helper cartesian = frac×4)。
+        val atoms = listOf(
+            atom(31, "A", "A", 0.9, 0.5, 0.5),   // (3.6,2,2)
+            atom(32, "B", "B", 0.1, 0.5, 0.5),   // (0.4,2,2)
+            atom(33, "C", "C", 0.2, 0.5, 0.5),   // (0.8,2,2)
+            atom(34, "D", "D", 0.3, 0.5, 0.5),   // (1.2,2,2)
+            atom(35, "B", "B", 1.1, 0.5, 0.5, offset = Int3(1, 0, 0), shell = true),  // (4.4,2,2)
+        )
+        val pBonds = listOf(bond(31, 35, "A", "B", offsetB = Int3(1, 0, 0)))
+        val chain = Molecule(
+            "ABCD",
+            listOf(
+                MoleculeAtom(31, "A", Species("A"), CartesianCoordinate(3.6, 2.0, 2.0), siteId = "A"),
+                MoleculeAtom(32, "B", Species("B"), CartesianCoordinate(4.4, 2.0, 2.0), siteId = "B"),
+                MoleculeAtom(33, "C", Species("C"), CartesianCoordinate(5.2, 2.0, 2.0), siteId = "C"),
+                MoleculeAtom(34, "D", Species("D"), CartesianCoordinate(6.0, 2.0, 2.0), siteId = "D"),
+            ),
+            listOf(MoleculeBond(31, 32), MoleculeBond(32, 33), MoleculeBond(33, 34)),
+        )
+        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(chain)), pBonds, atoms)
+        // B'(35) 是分子 t=0 映像的 B(位置 (4.4,2,2))→ 显示。
+        assertTrue(scene.atomInstance(35).visible, "B' at (4.4,2,2) is the molecule's B image")
+        // 动态原子:t=0 映像的 C(5.2)、D(6.0)+ t=-1 映像的 A(-0.4)、C(1.2)、D(2.0)。
+        // (t=-1 映像的 C(1.2) 恰与 D 的原胞位置重合,键长验证会正确挡住误配键。)
+        val dyns = scene.atoms.filter { it.id.startsWith("molatom:") }
+        assertEquals(5, dyns.size, "missing molecule images should be dynamic atoms")
+        val dynX = dyns.map { it.atom.cartesianCoordinate.x }.sorted()
+        dynX.zip(listOf(-0.4, 1.2, 2.0, 5.2, 6.0)).forEach { (actual, expected) ->
+            assertEquals(expected, actual, 1e-9)
+        }
+        // 分子键链完整:31-35(场景键)+ 补齐键(35-C'、C'-D'、A'-32、32-C'、C'-D')。
+        assertTrue(scene.bondBetween(31, 35).visible)
+        val chainBonds = scene.bonds.filter { it.id.startsWith("molbond:") }
+        assertEquals(5, chainBonds.size)
+        assertTrue(chainBonds.all { it.visible })
+        assertTrue(chainBonds.all { kotlin.math.abs(distance(it.start, it.end) - 0.8) < 1e-9 })
+    }
+
+    @Test
     fun moleculeExtendCreatesDynamicAtomsBeyondMaterializedShell() {
         // 分子原子物理位置超出 BondDetector 的 ±1 层壳层(如尿素分子跨两个晶胞,末端
         // 在 (2,0,0) 层)→ 场景无该原子 → 动态创建,并补齐其分子内键。
