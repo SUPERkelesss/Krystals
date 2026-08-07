@@ -129,7 +129,7 @@ fun KrystalsRoot(
         mutableStateOf(runCatching { ThemeMode.valueOf(preferences.getString(PreferencesStore.KEY_THEME, ThemeMode.SYSTEM.name)!!) }.getOrDefault(ThemeMode.SYSTEM))
     }
     var language by remember {
-        mutableStateOf(preferences.getString(PreferencesStore.KEY_LANGUAGE, defaultSystemLanguage()) ?: "en")
+        mutableStateOf(resolveLanguage(preferences.getString(PreferencesStore.KEY_LANGUAGE, defaultSystemLanguage()) ?: "en"))
     }
     val systemDark = isSystemInDarkTheme()
     var backgroundFollowTheme by remember {
@@ -391,21 +391,21 @@ fun KrystalsRoot(
                         when (settingsValues.bondRuleMode) {
                             BondRuleMode.AUTO -> {
                                 if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
-                                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null)
+                                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null, settingsValues.autoComputeHbonds)
                                 } else {
                                     val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
-                                        runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon) }.getOrNull()
+                                        runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = settingsValues.autoComputeHbonds) }.getOrNull()
                                     }
-                                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
+                                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)
                                 }
                             }
                             BondRuleMode.SMART_IONIC -> {
                                 val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
-                                    runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon) }.getOrNull()
+                                    runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = settingsValues.autoComputeHbonds) }.getOrNull()
                                 }
-                                CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic)
+                                CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)
                             }
-                            BondRuleMode.BONDING -> CrystalEditor.rebuildBondRules(structure, bondConfiguration, RadiusSource.BONDING, epsilon)
+                            BondRuleMode.BONDING -> CrystalEditor.rebuildBondRules(structure, bondConfiguration, RadiusSource.BONDING, epsilon, settingsValues.autoComputeHbonds)
                         }
                     }
                 )
@@ -416,6 +416,7 @@ fun KrystalsRoot(
                         targetTab.bondConfiguration,
                         RadiusSource.BONDING,
                         targetTab.bondEpsilon,
+                        settingsValues.autoComputeHbonds,
                     )
                 } else null
                 fallback?.let { Result.success(it) } ?: Result.failure(ce)
@@ -443,8 +444,19 @@ fun KrystalsRoot(
                         ),
                     ),
                 )
+                // Per v0.8.27: 默认显示氢键——关闭时把全部氢键规则 key 加入 hiddenBondPairs
+                // (保留规则,DisplayPanel"氢键"子菜单仍在,可手动重新显示)。
+                if (!settingsValues.defaultShowHbonds && targetTab in viewModel.tabs) {
+                    val hbondKeys = extended.bondConfiguration.rules.filter { it.isHBond }.map { it.key }.toSet()
+                    if (hbondKeys.isNotEmpty()) {
+                        targetTab.visibility = targetTab.visibility.copy(
+                            hiddenBondPairs = targetTab.visibility.hiddenBondPairs + hbondKeys,
+                        )
+                    }
+                }
                 if (CrystalEditor.SMART_IONIC_TIMEOUT in extended.warnings) showMessage(smartIonicTimeoutMessage)
                 if (targetTab in viewModel.tabs) viewModel.updateAnalysis(targetTab, extended)
+                debugLog(CIF_OPEN_TAG) { "OpenCIF 6/6: bond rules computed (${extended.bondConfiguration.rules.size} rules, ${extended.bondConfiguration.rules.count { it.isHBond }} hbonds, mode ${settingsValues.bondRuleMode})" }
             }.onFailure { error ->
                 if (error is VoronoiSearchLimitExceededException) voronoiWarningOpen = true
                 else if (error !is kotlin.coroutines.cancellation.CancellationException) showMessage(error.message ?: "Operation failed")
@@ -469,6 +481,7 @@ fun KrystalsRoot(
     fun doOpenParsed(parsed: ParsedStructure, name: String, uri: Uri?, expandedEstimate: Int) {
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
+        debugLog(CIF_OPEN_TAG) { "OpenCIF 5/6: tab ready ($name)" }
         // Per v0.8.26: apply user preference defaults for the new tab.
         tab.visibility = tab.visibility.copy(showBonds = settingsValues.defaultShowBonds)
         // Default extend-bonds setting.
@@ -507,6 +520,7 @@ fun KrystalsRoot(
         // that made opening a CIF freeze the UI before the viewer appeared.
         scope.launch {
             val expandedEstimate = withContext(Dispatchers.Default) { SymmetryExpander.expand(parsed.structure).size }
+            debugLog(CIF_OPEN_TAG) { "OpenCIF 4/6: symmetry expansion done ($expandedEstimate atoms)" }
             if (expandedEstimate > LARGE_CELL_WARN_THRESHOLD) {
                 pendingLargeOpen = PendingLargeOpen(parsed, name, uri, expandedEstimate)
                 return@launch
@@ -523,9 +537,11 @@ fun KrystalsRoot(
                     runCatching { resolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
                     val text = FileRepository.readText(resolver, uri)
                     require(text.contains(Regex("(?im)^\\s*data_"))) { "Not a CIF file" }
+                    debugLog(CIF_OPEN_TAG) { "OpenCIF 1/6: file read done (${text.length} chars)" }
                     val document = CifCodec.parse(text)
                     val candidates = CifCodec.structuralBlockIndices(document)
                     require(candidates.isNotEmpty()) { "No crystal structure found" }
+                    debugLog(CIF_OPEN_TAG) { "OpenCIF 2/6: document parsed (${candidates.size} blocks)" }
                     PendingOpen(uri, FileRepository.displayName(resolver, uri), text, candidates, document)
                 }
             }
@@ -535,6 +551,7 @@ fun KrystalsRoot(
                     // Per v0.6.4: parseStructure can be heavy (resolves space groups, creates
                     // symmetry operations) — run on Dispatchers.Default to avoid blocking the UI.
                     val parsed = withContext(Dispatchers.Default) { CifCodec.parseStructure(pending.text, pending.candidates.first(), autoConvertConventional = settingsValues.autoConvertCell) }
+                    debugLog(CIF_OPEN_TAG) { "OpenCIF 3/6: structure parsed (${parsed.structure.sites.size} sites, sg ${parsed.structure.spaceGroup.symbol})" }
                     openParsed(parsed, pending.name, pending.uri)
                 } else pendingOpen = pending
             } else {
@@ -697,6 +714,16 @@ fun KrystalsRoot(
                         onOnlineSource = { onlineSourceOpen = true },
                         themeMode = themeMode, onTheme = ::applyTheme, language = language,
                         onLanguage = ::applyLanguage,
+                        settingsValues = settingsValues,
+                        onSettingsChange = onSettingsChange,
+                        onRestoreDefaults = {
+                            PreferencesStore.clearAll(preferences)
+                            val defaults = SettingsValues.defaults()
+                            settingsValues = defaults
+                            PreferencesStore.save(preferences, defaults)
+                            if (language != defaults.language && defaults.language != "auto") applyLanguage(defaults.language)
+                            if (themeMode != defaults.theme) { themeMode = defaults.theme; preferences.edit { putString(PreferencesStore.KEY_THEME, defaults.theme.name) } }
+                        },
                         onHelp = { linkConfirmUrl = "https://www.kelesss.art/refs/software/krystals.html" }, onAbout = { aboutOpen = true }, onSponsor = { linkConfirmUrl = "https://ifdian.net/a/krystals/plan" }, onFeedback = { linkConfirmUrl = "https://github.com/SUPERkelesss/Krystals/issues" }, onExit = ::requestExit,
                     )
                 } else {
@@ -1079,7 +1106,10 @@ private fun KrystalsRootDialogs(
                     val parsed = withContext(Dispatchers.Default) {
                         runCatching { CifCodec.parseStructure(pending.text, index, autoConvertConventional = true) }
                     }
-                    parsed.onSuccess { pendingOpen = null; openParsed(it, pending.name, pending.uri) }
+                    parsed.onSuccess {
+                        debugLog(CIF_OPEN_TAG) { "OpenCIF 3/6: structure parsed (${it.structure.sites.size} sites, sg ${it.structure.spaceGroup.symbol})" }
+                        pendingOpen = null; openParsed(it, pending.name, pending.uri)
+                    }
                         .onFailure { if (it is com.krystals.crystal.core.CifParseException) { pendingOpen = null; cifWarningOpen = true } else showMessage(it.message ?: "Unable to open CIF") }
                 }
             }) { Text(document.blocks[index].name) } } } },

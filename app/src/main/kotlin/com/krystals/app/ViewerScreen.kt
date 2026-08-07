@@ -340,7 +340,8 @@ internal fun ViewerScreen(
                             tab.molecules.map { m -> m.atoms.mapNotNull { cellAtomSiteByAtomId[it.id] }.toSet() }
                         } else emptyList()
                         // 分子晶体默认启用"按分子展开"(仅在新打开/结构变更后分析时重置)。
-                        tab.moleculeExtend = tab.isMolecularCrystal
+                        // Per v0.8.27: 由偏好设置"分子晶体默认按分子延伸"决定(默认 true)。
+                        tab.moleculeExtend = tab.isMolecularCrystal && settingsValues.defaultMoleculeExtend
                         tab.moleculeAnalysisPending = false
                     }
                     CrystalRenderSceneFactory.build(
@@ -359,7 +360,10 @@ internal fun ViewerScreen(
             }
             dialogJob.cancel()
             sceneRebuilding = false
-            if (scene != null) Result.success(scene)
+            if (scene != null) {
+                debugLog(CIF_OPEN_TAG) { "Scene build done (${scene.atoms.size} atoms, ${scene.bonds.size} bonds, ${scene.meshes.size} meshes)" }
+                Result.success(scene)
+            }
             else {
                 // Per v0.6.3: scene build timed out — show dialog and undo.
                 sceneBuildError = sceneTimeoutMessage

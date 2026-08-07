@@ -164,6 +164,13 @@ class DocumentTab(
     var moleculeAnalysisPending by mutableStateOf(true)
     // Per v0.7.1: when non-null, EditorPanel opens on this tab ("atoms", "bonds", etc.)
     var pendingEditorTab by mutableStateOf<String?>(null)
+    // Per v0.8.27: last sub-menu the user opened in the EDITOR panel for THIS tab.
+    // null = never opened / new tab → EditorPanel falls back to the first sub-menu.
+    // Stored as enum name ("BASIC", "ATOMS", ...) so DocumentTab stays UI-agnostic.
+    var rememberedEditorTab by mutableStateOf<String?>(null)
+    // Per v0.8.27: last sub-menu the user opened in the DISPLAY panel for THIS tab.
+    // null = never opened / new tab → DisplayPanel falls back to the first sub-menu.
+    var rememberedDisplayTab by mutableStateOf<String?>(null)
     // Per v0.7.1: bond draw state — when DRAWING, atom taps are intercepted to pick two atoms
     // and pre-fill a BondRuleDialog. pendingBondDrawRule holds the preset until BondEditor opens.
     var bondDrawMode by mutableStateOf(BondDrawMode.NONE)

@@ -64,6 +64,18 @@ versionName = "0.8.26"
         jniLibs.useLegacyPackaging = true
     }
     testOptions { unitTests.all { it.useJUnitPlatform() } }
+    // Unit tests read the corpus from the repo root (res/cifs_example).
+    testOptions { unitTests.all { it.workingDir = rootProject.projectDir } }
+    // spglib native bridge: prebuilt libspglib.so per ABI in src/main/jniLibs,
+    // plus the JNI wrapper compiled here via CMake (links the prebuilt library).
+    ndkPath = "E:\\Android\\android-ndk-r27c"
+    ndkVersion = "27.2.12479018"
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
     // Release signing: populate a keystore.properties (gitignored) next to the repo root with
     //   storeFile=/absolute/path/to/release.keystore
     //   storePassword=...

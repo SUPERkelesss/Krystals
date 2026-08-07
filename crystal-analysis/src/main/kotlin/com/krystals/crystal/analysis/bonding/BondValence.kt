@@ -75,7 +75,8 @@ object BondValence {
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,
         epsilon: Double = 0.45,
-    ): SmartIonicResult = smartIonicRules(structure, bondConfiguration, epsilon, SymmetryExpander.expand(structure))
+        includeHbonds: Boolean = true,
+    ): SmartIonicResult = smartIonicRules(structure, bondConfiguration, epsilon, SymmetryExpander.expand(structure), includeHbonds)
 
     /** Internal overload that reuses pre-expanded atoms so callers that expanded for a size guard
      *  (e.g. CrystalEditor.smartOrBondingRules) don't expand the same structure a second time. */
@@ -84,6 +85,7 @@ object BondValence {
         bondConfiguration: BondConfiguration,
         epsilon: Double,
         atoms: List<AtomImage>,
+        includeHbonds: Boolean = true,
     ): SmartIonicResult {
         val analysis = try {
             analyze(atoms, structure)
@@ -107,13 +109,16 @@ object BondValence {
 
         // Per v0.8.1: collect H sites whose BVS resolved to valence 1 (protons) and append
         // H-bond rules for proton···acceptor contacts beyond the normal covalent windows.
+        // Per v0.8.27: gated by the auto-compute-hbonds preference (includeHbonds).
         val protonSiteIds = analysis.siteValence
             .filter { (_, sv) -> sv.valence == 1 && !sv.isAnion && !sv.isNeutral }
             .keys.filter { siteId -> structure.sites.any { it.id == siteId && it.species.symbol == "H" } }
             .toSet()
-        val hbondRules = HbondChecking.hbondRules(
-            structure, atoms, analysis.neighboursByAtomId, protonSiteIds, rules,
-        )
+        val hbondRules = if (includeHbonds) {
+            HbondChecking.hbondRules(
+                structure, atoms, analysis.neighboursByAtomId, protonSiteIds, rules,
+            )
+        } else emptyList()
 
         return SmartIonicResult(rules + hbondRules, success = true)
     }

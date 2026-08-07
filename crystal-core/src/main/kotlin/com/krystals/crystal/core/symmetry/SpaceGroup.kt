@@ -25,16 +25,20 @@ object SpaceGroupCatalog {
 
     fun resolve(symbol: String, number: Int? = null): SpaceGroup {
         // Per v0.6.5: strip COD hex/rhombohedral setting suffixes (:H, :R).
-        val noSuffix = symbol.let { s ->
-            if (s.endsWith(":H") || s.endsWith(":R") || s.endsWith(":h") || s.endsWith(":r")) s.dropLast(2) else s
-        }
+        // Per v0.8.27: also strip IT-origin-choice suffixes (:1, :2, ...) and any
+        // other trailing ':setting' (e.g. 'I41/amd:1' -> 'I41/amd'), so they match
+        // the catalog instead of falling into the unknown-group branch.
+        val noSuffix = stripSettingSuffix(symbol)
         val catalog = number?.let { all.getOrNull(it - 1) } ?: find(noSuffix)
         return if (catalog == null) {
             // Unknown group — preserve original symbol verbatim (without setting suffix).
             SpaceGroup(noSuffix, number)
         } else {
-            // Known group — normalize by removing spaces (CIF files often write "F m -3 m").
-            catalog.copy(symbol = noSuffix.replace(" ", ""), number = number ?: catalog.number)
+            // Known group — emit the canonical catalog symbol (standard H-M form),
+            // NOT the raw CIF spelling: CIFs may write 'F m -3 m', 'I4_1/amd'
+            // (pymatgen underscore style) or 'I41/amd:1'; all must normalize to the
+            // single canonical symbol so editors/UI show a consistent name.
+            catalog.copy(symbol = catalog.symbol, number = number ?: catalog.number)
         }
     }
 
@@ -50,10 +54,18 @@ object SpaceGroupCatalog {
 
     fun isRhombohedral(name: String): Boolean = find(name)?.number in RHOMBOHEDRAL_GROUPS
 
-    private fun normalize(value: String) = value.replace(" ", "").replace("_", "").lowercase().let {
-        // Per v0.6.5: strip COD hex/rhombohedral setting suffixes (:H, :R).
-        if (it.endsWith(":h") || it.endsWith(":r")) it.dropLast(2) else it
+    /** Drop any ':setting' suffix — COD hex/rhombohedral (:H/:R) and IT origin
+     *  choice (:1/:2) alike. Space-group symbols never contain ':', so the first
+     *  colon starts the suffix. */
+    private fun stripSettingSuffix(value: String): String {
+        val idx = value.indexOf(':')
+        return if (idx >= 0) value.substring(0, idx) else value
     }
+
+    private fun normalize(value: String) = stripSettingSuffix(value)
+        .replace(" ", "")
+        .replace("_", "")
+        .lowercase()
 
     private fun crystalSystem(number: Int): String = when (number) {
         1, 2 -> "Triclinic"

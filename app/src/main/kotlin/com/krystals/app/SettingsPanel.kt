@@ -121,11 +121,18 @@ fun SettingsPanel(
                         SegmentedSetting(null, localized("自动应用的键规则", "Auto Bond Rule Mode"), bondRuleLabels, draft.bondRuleMode.ordinal.coerceIn(0, bondRuleLabels.lastIndex)) { index ->
                             draft = draft.copy(bondRuleMode = BondRuleMode.entries[index])
                         }
+                        // Per v0.8.27: 自动计算氢键仅随"自动计算键规则"显示。
+                        Tog(draft.autoComputeHbonds, { draft = draft.copy(autoComputeHbonds = it) }, localized("自动计算氢键", "Auto Compute H-Bonds"))
                     }
                     Tog(draft.autoConvertCell, { draft = draft.copy(autoConvertCell = it) }, localized("素晶胞自动转正当晶胞", "Auto Convert Cell"))
                     Tog(draft.defaultShowBonds, { draft = draft.copy(defaultShowBonds = it) }, localized("默认显示所有化学键", "Default Show Bonds"))
-                    SegmentedSetting(null, localized("默认延伸化学键", "Default Extend Bonds"), extendLabels, draft.defaultExtendBonds.ordinal) { index ->
-                        draft = draft.copy(defaultExtendBonds = ExtendBondsDefault.entries[index])
+                    if (draft.defaultShowBonds) {
+                        // Per v0.8.27: 以下三项仅随"默认显示所有化学键"关联显示。
+                        Tog(draft.defaultShowHbonds, { draft = draft.copy(defaultShowHbonds = it) }, localized("默认显示所有氢键", "Default Show H-Bonds"))
+                        SegmentedSetting(null, localized("默认延伸化学键", "Default Extend Bonds"), extendLabels, draft.defaultExtendBonds.ordinal) { index ->
+                            draft = draft.copy(defaultExtendBonds = ExtendBondsDefault.entries[index])
+                        }
+                        Tog(draft.defaultMoleculeExtend, { draft = draft.copy(defaultMoleculeExtend = it) }, localized("分子晶体默认按分子延伸", "Molecule Extend by Default"))
                     }
                     SegmentedSetting(null, localized("默认显示多面体", "Default Polyhedra"), extendLabels, draft.defaultPolyhedra.ordinal) { index ->
                         draft = draft.copy(defaultPolyhedra = PolyhedraDefault.entries[index])

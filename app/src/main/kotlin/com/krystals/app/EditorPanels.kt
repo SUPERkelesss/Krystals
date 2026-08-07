@@ -2,6 +2,7 @@
 
 package com.krystals.app
 
+import com.krystals.crystal.analysis.bonding.BondConfiguration
 import com.krystals.crystal.analysis.editing.*
 import com.krystals.crystal.analysis.model.*
 import androidx.compose.foundation.background
@@ -104,29 +105,66 @@ fun EditorPanel(
     onRunBondComputation: ((suspend () -> EditResult?) -> Unit)? = null,
     onPersistentMessage: (String?) -> Unit = {},
 ) {
-    var selectedTab by remember { mutableStateOf(
-        when {
-            tab.editingSiteId != null -> EditorTab.ATOMS
-            tab.pendingEditorTab == "atoms" -> EditorTab.ATOMS
-            tab.pendingEditorTab == "bonds" -> EditorTab.BONDS
-            tab.pendingEditorTab == "expansion" -> EditorTab.EXPANSION
-            else -> EditorTab.BASIC
-        }
-    ) }
+    var selectedTab by remember {
+        mutableStateOf(
+            when {
+                tab.editingSiteId != null -> EditorTab.ATOMS
+                tab.pendingEditorTab == "atoms" -> EditorTab.ATOMS
+                tab.pendingEditorTab == "bonds" -> EditorTab.BONDS
+                tab.pendingEditorTab == "expansion" -> EditorTab.EXPANSION
+                // Per v0.8.27: otherwise remember this tab's last sub-menu; a new tab
+                // (or never-opened) falls through to the first sub-menu (BASIC).
+                tab.rememberedEditorTab != null -> runCatching {
+                    EditorTab.valueOf(tab.rememberedEditorTab!!)
+                }.getOrNull() ?: EditorTab.BASIC
+                else -> EditorTab.BASIC
+            }
+        )
+    }
     // Per v0.7.1: consume the pending tab hint once the editor opens.
-    LaunchedEffect(Unit) { tab.pendingEditorTab = null }
+    LaunchedEffect(Unit) {
+        tab.pendingEditorTab = null
+        // Per v0.8.27: an explicit intent (double-tap atom, add-bond, ...) is also a
+        // sub-menu switch — sync the remembered tab so reopening shows what the user
+        // actually last saw, not a stale memory.
+        if (tab.rememberedEditorTab != selectedTab.name) {
+            tab.rememberedEditorTab = selectedTab.name
+        }
+    }
     ResizableSlidePanel(
         ratioKey = "editor_panel_ratio",
         defaultRatio = 0.62f,
         onDismiss = onDismiss,
     ) { closePanel ->
         Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
-            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                listOf(
-                    EditorTab.BASIC to stringResource(R.string.basic_info), EditorTab.ATOMS to stringResource(R.string.atoms),
-                    EditorTab.BONDS to stringResource(R.string.bonds), EditorTab.EXPANSION to stringResource(R.string.expand_cell),
-                ).forEach { (kind, label) -> FilterChip(selectedTab == kind, onClick = { selectedTab = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
-                Spacer(Modifier.weight(1f)); IconButton(onClick = { closePanel() }) { Icon(Icons.Default.Close, null) }
+            // Per v0.8.27: sub-menu selector is a fixed-height horizontally-scrollable
+            // row; the close button stays pinned at the right edge (outside the scroll).
+            Row(
+                Modifier.fillMaxWidth().height(52.dp).padding(start = 8.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf(
+                        EditorTab.BASIC to stringResource(R.string.basic_info), EditorTab.ATOMS to stringResource(R.string.atoms),
+                        EditorTab.BONDS to stringResource(R.string.bonds), EditorTab.EXPANSION to stringResource(R.string.expand_cell),
+                    ).forEach { (kind, label) ->
+                        FilterChip(
+                            selectedTab == kind,
+                            onClick = {
+                                selectedTab = kind
+                                // Per v0.8.27: remember per-tab so reopening the editor
+                                // restores the sub-menu the user last had open.
+                                tab.rememberedEditorTab = kind.name
+                            },
+                            label = { Text(label) },
+                            modifier = Modifier.padding(horizontal = 3.dp),
+                        )
+                    }
+                }
+                IconButton(onClick = { closePanel() }) { Icon(Icons.Default.Close, null) }
             }
             when (selectedTab) {
                 EditorTab.BASIC -> BasicEditor(tab, onStructure, onMessage, onRunBondComputation)
@@ -221,12 +259,21 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
                         val result = if (tab.savedConventionalStructure != null) {
                             EditResult(tab.savedConventionalStructure!!, tab.savedConventionalBondConfig!!)
                         } else {
-                            runCatching { CrystalEditor.convertToConventional(tab.structure, tab.bondConfiguration) }
+                            // Per v0.8.40: spglib contributes ONLY the space-group number
+                            // (correcting a mislabelled cell); the actual matrix conversion
+                            // runs through CrystalEditor.convertToConventional (BravaisLatticeData
+                            // tables). The v0.8.39 spglib-raw-data path was removed — it built
+                            // sites with per-species ids ("spg:P1" for both Na1 and Cl1) which
+                            // crashed LazyColumn with "Key already used", and its species
+                            // handling was unreliable.
+                            val sgNumber = runCatching { SpglibStructure.toConventionalCell(tab.structure) }
+                                .getOrNull()?.spaceGroupNumber?.takeIf { it > 0 }
+                            val corrected = sgNumber?.let { n ->
+                                SpaceGroupCatalog.all.getOrNull(n - 1)?.takeIf { it.number != tab.structure.spaceGroup.number }
+                                    ?.let { tab.structure.copy(spaceGroup = it) }
+                            } ?: tab.structure
+                            runCatching { CrystalEditor.convertToConventional(corrected, tab.bondConfiguration) }
                                 .getOrElse { onMessage(it.message ?: "Conversion failed"); return@OutlinedButton }
-                                .also {
-                                    tab.savedConventionalStructure = it.structure
-                                    tab.savedConventionalBondConfig = it.bondConfiguration
-                                }
                         }
                         if (onRunBondComputation != null) onRunBondComputation {
                             CrystalEditor.ensureAutoBondRules(result.structure, result.bondConfiguration)
@@ -241,12 +288,18 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
                         val result = if (tab.savedPrimitiveStructure != null) {
                             EditResult(tab.savedPrimitiveStructure!!, tab.savedPrimitiveBondConfig!!)
                         } else {
-                            runCatching { CrystalEditor.convertToPrimitive(tab.structure, tab.bondConfiguration) }
+                            // Per v0.8.40: spglib contributes ONLY the space-group number;
+                            // matrix conversion runs through CrystalEditor.convertToPrimitive
+                            // (BravaisLatticeData tables). See conventional branch for why the
+                            // v0.8.39 spglib-raw-data path was removed.
+                            val sgNumber = runCatching { SpglibStructure.toPrimitiveCell(tab.structure) }
+                                .getOrNull()?.spaceGroupNumber?.takeIf { it > 0 }
+                            val corrected = sgNumber?.let { n ->
+                                SpaceGroupCatalog.all.getOrNull(n - 1)?.takeIf { it.number != tab.structure.spaceGroup.number }
+                                    ?.let { tab.structure.copy(spaceGroup = it) }
+                            } ?: tab.structure
+                            runCatching { CrystalEditor.convertToPrimitive(corrected, tab.bondConfiguration) }
                                 .getOrElse { onMessage(it.message ?: "Conversion failed"); return@OutlinedButton }
-                                .also {
-                                    tab.savedPrimitiveStructure = it.structure
-                                    tab.savedPrimitiveBondConfig = it.bondConfiguration
-                                }
                         }
                         if (onRunBondComputation != null) onRunBondComputation {
                             CrystalEditor.ensureAutoBondRules(result.structure, result.bondConfiguration)
@@ -321,6 +374,7 @@ private fun CellField(label: String, value: String, onValue: (String) -> Unit, e
 private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (EditResult) -> Unit, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> EditResult?) -> Unit)? = null, onPersistentMessage: (String?) -> Unit = {}) {
     var atomDialog by remember { mutableStateOf<Site?>(null) }
     var newElement by remember { mutableStateOf<String?>(null) }
+    var manualNewAtom by remember { mutableStateOf(false) }
     var periodicOpen by remember { mutableStateOf(false) }
     LaunchedEffect(tab.editingSiteId) { tab.editingSiteId?.let { id -> atomDialog = tab.structure.sites.firstOrNull { it.id == id }; tab.editingSiteId = null } }
     val atomEditHint = localized("点击需要修改/删除的原子", "Tap the atom to modify/delete")
@@ -352,7 +406,11 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Ed
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(Modifier.size(20.dp).background(colorFromArgb(RenderPalette.resolveArgb(site.species.symbol, tab.renderConfiguration)), CircleShape))
-                    Text("${site.label}  ${site.species.symbol}   (${fmt(site.fractionalCoordinate.x)}, ${fmt(site.fractionalCoordinate.y)}, ${fmt(site.fractionalCoordinate.z)})", modifier = Modifier.weight(1f).padding(start = 10.dp))
+                    Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                        // Per inspection-window layout: [element] [label] [occ] / (x, y, z).
+                        Text("${site.species.symbol}  ${site.label}  occ ${site.occupancy}")
+                        Text("(${fmt(site.fractionalCoordinate.x)}, ${fmt(site.fractionalCoordinate.y)}, ${fmt(site.fractionalCoordinate.z)})", style = MaterialTheme.typography.bodySmall)
+                    }
                     IconButton(onClick = {
                         val deleted = runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.DeleteAtom(site.id)) }
                             .onFailure { onMessage(it.message ?: "Delete failed") }.getOrNull() ?: return@IconButton
@@ -364,8 +422,9 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Ed
             }
         }
     }
-    if (periodicOpen) PeriodicTableDialog(onDismiss = { periodicOpen = false }) { element -> periodicOpen = false; newElement = element }
-    newElement?.let { element -> AtomDialog(null, element, onDismiss = { newElement = null }) { label, chosen, frac, occupancy ->
+    // Per user spec: adding an atom must NOT modify bond rules or auto-apply them —
+    // AddAtom preserves existing rules (v0.7.1), no ensureAutoBondRules here.
+    val applyNewAtom: (String, String, FractionalCoordinate, Double, () -> Unit) -> Unit = { label, chosen, frac, occupancy, close ->
         runCatching {
             CrystalEditor.apply(
                 tab.structure,
@@ -373,12 +432,21 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Ed
                 EditCommand.AddAtom(Species(chosen), label, frac, occupancy),
             )
         }
-            .onSuccess {
-                // Per v0.7.1: AddAtom no longer regenerates bond rules — existing rules are preserved.
-                onStructure(it); it.warnings.forEach(onMessage); newElement = null
-            }.onFailure { onMessage(it.message ?: "Invalid atom") }
+            .onSuccess { onStructure(it); it.warnings.forEach(onMessage); close() }
+            .onFailure { onMessage(it.message ?: "Invalid atom") }
+    }
+    if (periodicOpen) PeriodicTableDialog(
+        onDismiss = { periodicOpen = false },
+        onElement = { element -> periodicOpen = false; newElement = element },
+        onManualInput = { periodicOpen = false; manualNewAtom = true },
+    )
+    newElement?.let { element -> AtomDialog(null, element, tab.structure.sites, onDismiss = { newElement = null }) { label, chosen, frac, occupancy ->
+        applyNewAtom(label, chosen, frac, occupancy) { newElement = null }
     } }
-    atomDialog?.let { site -> AtomDialog(site, site.species.symbol, onDismiss = { atomDialog = null }) { label, chosen, frac, occupancy ->
+    if (manualNewAtom) AtomDialog(null, "", tab.structure.sites, onDismiss = { manualNewAtom = false }) { label, chosen, frac, occupancy ->
+        applyNewAtom(label, chosen, frac, occupancy) { manualNewAtom = false }
+    }
+    atomDialog?.let { site -> AtomDialog(site, site.species.symbol, tab.structure.sites, onDismiss = { atomDialog = null }) { label, chosen, frac, occupancy ->
         runCatching {
             CrystalEditor.apply(
                 tab.structure,
@@ -473,15 +541,27 @@ private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, Fr
 
 
 @Composable
-private fun AtomDialog(site: Site?, initialElement: String, onDismiss: () -> Unit, onApply: (String, String, FractionalCoordinate, Double) -> Unit) {
-    var label by remember { mutableStateOf(site?.label ?: initialElement) }; var element by remember { mutableStateOf(initialElement) }
-    var x by remember { mutableStateOf(site?.fractionalCoordinate?.x?.toString() ?: "0") }; var y by remember { mutableStateOf(site?.fractionalCoordinate?.y?.toString() ?: "0") }
-    var z by remember { mutableStateOf(site?.fractionalCoordinate?.z?.toString() ?: "0") }; var occupancy by remember { mutableStateOf(site?.occupancy?.toString() ?: "1") }
+private fun AtomDialog(site: Site?, initialElement: String, sites: List<Site>, onDismiss: () -> Unit, onApply: (String, String, FractionalCoordinate, Double) -> Unit) {
+    val isNew = site == null
+    var element by remember(site) { mutableStateOf(initialElement) }
+    // New atoms: label auto-suggests the CrystalEditor.uniqueLabel scheme (X, X2, X3...) and follows
+    // the element field while it changes — until the user edits the label field themselves.
+    var labelTouched by remember(site) { mutableStateOf(!isNew) }
+    var label by remember(site) { mutableStateOf(if (isNew) suggestedNewAtomLabel(sites, initialElement) else site!!.label) }
+    var x by remember(site) { mutableStateOf(site?.fractionalCoordinate?.x?.toString() ?: "0") }; var y by remember(site) { mutableStateOf(site?.fractionalCoordinate?.y?.toString() ?: "0") }
+    var z by remember(site) { mutableStateOf(site?.fractionalCoordinate?.z?.toString() ?: "0") }; var occupancy by remember(site) { mutableStateOf(site?.occupancy?.toString() ?: "1") }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(if (site == null) localized("新建原子", "New atom") else localized("修改原子", "Modify atom")) }, text = { Column {
-        OutlinedTextField(element, { element = it }, label = { Text(localized("元素", "Element")) }); OutlinedTextField(label, { label = it }, label = { Text(localized("标签", "Label")) })
+        OutlinedTextField(element, { newElement -> element = newElement; if (isNew && !labelTouched) label = suggestedNewAtomLabel(sites, newElement) }, label = { Text(localized("元素", "Element")) })
+        OutlinedTextField(label, { label = it; labelTouched = true }, label = { Text(localized("标签", "Label")) })
         Row { CellField("x", x, { x = it }, true, Modifier.weight(1f)); CellField("y", y, { y = it }, true, Modifier.weight(1f)); CellField("z", z, { z = it }, true, Modifier.weight(1f)) }
         OutlinedTextField(occupancy, { occupancy = it }, label = { Text(localized("占据率", "Occupancy")) })
     } }, confirmButton = { TextButton(onClick = { runCatching { onApply(label, element, FractionalCoordinate(eval(x), eval(y), eval(z)), eval(occupancy)) } }) { Text(stringResource(R.string.confirm)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })
+}
+
+/** New-atom label auto-suggestion matching CrystalEditor.uniqueLabel: X, X2, X3... */
+private fun suggestedNewAtomLabel(sites: List<Site>, element: String): String {
+    val e = element.trim()
+    return if (e.isEmpty()) "" else CrystalEditor.uniqueLabel(e, sites)
 }
 
 
@@ -501,7 +581,7 @@ private val actinides = listOf("Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "B
 
 
 @Composable
-private fun PeriodicTableDialog(onDismiss: () -> Unit, onElement: (String) -> Unit) {
+private fun PeriodicTableDialog(onDismiss: () -> Unit, onElement: (String) -> Unit, onManualInput: () -> Unit) {
     val cellWidth = 44.dp
     val cellH = 46.dp
     AlertDialog(
@@ -528,6 +608,7 @@ private fun PeriodicTableDialog(onDismiss: () -> Unit, onElement: (String) -> Un
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+        dismissButton = { TextButton(onClick = onManualInput) { Text(localized("手动输入", "Manual input")) } },
     )
 }
 

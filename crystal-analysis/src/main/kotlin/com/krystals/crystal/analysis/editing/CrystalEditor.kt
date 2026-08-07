@@ -194,8 +194,9 @@ object CrystalEditor {
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,
         epsilon: Double = 0.45,
+        includeHbonds: Boolean = true,
     ): EditResult {
-        val generated = smartOrBondingRules(structure, bondConfiguration, epsilon)
+        val generated = smartOrBondingRules(structure, bondConfiguration, epsilon, includeHbonds)
         // Per v0.6.3: replace existing rules with generated ones, but preserve
         // disabledPairs from the input and filter out any rules for disabled pairs.
         val filtered = generated.filter { it.key !in bondConfiguration.disabledPairs }
@@ -213,18 +214,22 @@ object CrystalEditor {
         bondConfiguration: BondConfiguration,
         epsilon: Double,
         smartIonic: BondValence.SmartIonicResult?,
+        includeHbonds: Boolean = true,
     ): EditResult {
         val atoms = SymmetryExpander.expand(structure)
         val sizeGuarded = atoms.size > BondValence.SMART_IONIC_ATOM_LIMIT
         // Per v0.8.7: all-non-metal structures skip smartIonic entirely.
         val useBonding = isAllNonMetals(structure) || sizeGuarded
         var timedOut = false
-        val generated = if (!useBonding && smartIonic != null && smartIonic.success) {
+        val generatedRaw = if (!useBonding && smartIonic != null && smartIonic.success) {
             smartIonic.rules
         } else {
             if (!useBonding && smartIonic == null) timedOut = true
-            bondingRulesWithHbonds(structure, atoms, bondingRules(structure, epsilon))
+            bondingRulesWithHbonds(structure, atoms, bondingRules(structure, epsilon), includeHbonds)
         }
+        // Per v0.8.27: unified hbond gate — any H-bond rules from any source are dropped
+        // when auto-compute-hbonds is off (belt-and-braces on top of the per-path gate).
+        val generated = if (includeHbonds) generatedRaw else generatedRaw.filterNot { it.isHBond }
         val warnings = if (timedOut) listOf(SMART_IONIC_TIMEOUT) else emptyList()
         // Per v0.6.3: replace existing rules with generated ones, but preserve
         // disabledPairs and filter out any rules for disabled pairs.
@@ -236,16 +241,17 @@ object CrystalEditor {
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,
         epsilon: Double,
+        includeHbonds: Boolean = true,
     ): List<BondRule> {
         val atoms = SymmetryExpander.expand(structure)
         // Per v0.8.7: all-non-metal structures skip smartIonic, go to bonding rules directly.
         if (!isAllNonMetals(structure) && atoms.size <= BondValence.SMART_IONIC_ATOM_LIMIT) {
-            val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon, atoms)
+            val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon, atoms, includeHbonds)
             if (result.success) return result.rules
         }
         // Per v0.8.6: the bonding-radius fallback path also gets hbond detection.
         val rules = bondingRules(structure, epsilon)
-        return bondingRulesWithHbonds(structure, atoms, rules)
+        return bondingRulesWithHbonds(structure, atoms, rules, includeHbonds)
     }
 
     /** Per v0.8.6: append hbond rules to the bonding-radius rule set.
@@ -259,7 +265,10 @@ object CrystalEditor {
         structure: CrystalStructure,
         atoms: List<com.krystals.crystal.core.model.AtomImage>,
         rules: List<BondRule>,
+        includeHbonds: Boolean = true,
     ): List<BondRule> {
+        // Per v0.8.27: auto-compute-hbonds preference OFF → skip the whole H-bond pass.
+        if (!includeHbonds) return rules
         // Per v0.8.12: cheap gates BEFORE the Voronoi search — it is the dominant cost of this
         // path and ran unconditionally, so H-free structures or structures without any acceptor
         // element (O/N/F/S/P/Cl) paid a full periodic Voronoi pass for nothing.
@@ -343,10 +352,11 @@ object CrystalEditor {
         bondConfiguration: BondConfiguration,
         source: RadiusSource,
         epsilon: Double = 0.45,
+        includeHbonds: Boolean = true,
     ): EditResult {
         // Per v0.8.7: all-non-metal structures skip smartIonic entirely.
         if (source == RadiusSource.SMART_IONIC && !isAllNonMetals(structure)) {
-            val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon)
+            val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = includeHbonds)
             if (result.success) {
                 val filtered = result.rules.filter { it.key !in bondConfiguration.disabledPairs }
                 return EditResult(structure, bondConfiguration.copy(rules = filtered))
@@ -354,7 +364,7 @@ object CrystalEditor {
             val fallback = bondingRules(structure, epsilon)
             // Per v0.8.6: append hbond rules on the bonding fallback path.
             val atoms = SymmetryExpander.expand(structure)
-            val withHbonds = bondingRulesWithHbonds(structure, atoms, fallback)
+            val withHbonds = bondingRulesWithHbonds(structure, atoms, fallback, includeHbonds)
             val filteredFallback = withHbonds.filter { it.key !in bondConfiguration.disabledPairs }
             return EditResult(structure, bondConfiguration.copy(rules = filteredFallback), listOf(SMART_IONIC_UNAVAILABLE))
         }
@@ -362,7 +372,7 @@ object CrystalEditor {
         if (source == RadiusSource.SMART_IONIC) {
             val atoms = SymmetryExpander.expand(structure)
             val rules = bondingRules(structure, epsilon)
-            val withHbonds = bondingRulesWithHbonds(structure, atoms, rules)
+            val withHbonds = bondingRulesWithHbonds(structure, atoms, rules, includeHbonds)
             val filtered = withHbonds.filter { it.key !in bondConfiguration.disabledPairs }
             return EditResult(structure, bondConfiguration.copy(rules = filtered))
         }
@@ -591,7 +601,18 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
     // ── Per v0.8.0: Primitive ↔ Conventional cell conversion ──────────────────
 
     /**
-     * Per v0.8.0: Convert from conventional to primitive cell.
+     * Per v0.8.40: cell conversion is matrix-based via [convertToConventional] /
+     * [convertToPrimitive] (BravaisLatticeData tables). The spglib-first raw-data
+     * path (convertToPrimitiveWithSpglib / convertToConventionalWithSpglib) was
+     * REMOVED: it rebuilt sites with per-species counters under the id prefix
+     * "spg:P" which collided across species (Na1 and Cl1 both "spg:P1" ->
+     * LazyColumn "Key already used" crash) and its species handling was
+     * unreliable. spglib now contributes only the space-group number for
+     * correcting a mislabelled cell; the caller applies the matrix conversion.
+     */
+
+    /**
+     * Per v0.6.5: Convert from conventional to primitive cell.
      * Expands atoms via symmetry, applies the conv→prim matrix, deduplicates,
      * transforms symmetry operations to the primitive basis, and finds the ASU.
      * Per v0.6.5: sets isConventional=false.
@@ -771,7 +792,7 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         else -> lattice
     }
 
-    private fun uniqueLabel(base: String, sites: List<Site>): String {
+    fun uniqueLabel(base: String, sites: List<Site>): String {
         if (sites.none { it.label == base }) return base
         var suffix = 2
         while (sites.any { it.label == "$base$suffix" }) suffix++

@@ -7,6 +7,7 @@ import com.krystals.crystal.analysis.model.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -81,7 +82,15 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
     val allBondsVisible = tab.visibility.showBonds && tab.visibility.hiddenBondPairs.none { key -> normalRules.any { it.key == key } }
     val allHbondsVisible = tab.visibility.showBonds && tab.visibility.hiddenBondPairs.none { key -> hbondRules.any { it.key == key } }
     val allPolyhedraEnabled = siteIds.isNotEmpty() && siteIds.all { it in tab.visibility.polyhedronSites }
-    var selected by remember { mutableStateOf(DisplayTab.ATOMS) }
+    var selected by remember {
+        mutableStateOf(
+            // Per v0.8.27: restore this tab's last display sub-menu; a new tab
+            // (or never-opened) falls through to the first sub-menu (ATOMS).
+            tab.rememberedDisplayTab?.let { remembered ->
+                runCatching { DisplayTab.valueOf(remembered) }.getOrNull()
+            } ?: DisplayTab.ATOMS
+        )
+    }
     // Per v0.8.1: if HBONDS tab is selected but no hbond rules exist anymore, fall back to BONDS.
     if (selected == DisplayTab.HBONDS && hbondRules.isEmpty()) selected = DisplayTab.BONDS
     // Per v0.3.44: per-group collapse state for the ATOMS/POLYHEDRA/BONDS grouped lists. Keyed by
@@ -94,17 +103,44 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
         onDismiss = onDismiss,
     ) { closePanel ->
         Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
-                    Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        val tabEntries = buildList {
-                            // Per molecule-extend: 分子子菜单插在原子之前,仅分子晶体显示。
-                            if (tab.isMolecularCrystal) add(DisplayTab.MOLECULES to localized("分子", "Molecules"))
-                            add(DisplayTab.ATOMS to localized("原子", "Atoms"))
-                            add(DisplayTab.BONDS to localized("化学键", "Bonds"))
-                            add(DisplayTab.POLYHEDRA to localized("多面体", "Polyhedra"))
-                            if (hbondRules.isNotEmpty()) add(DisplayTab.HBONDS to localized("氢键", "H-Bonds"))
+                    // Per v0.8.27: sub-menu selector is a fixed-height horizontally-scrollable
+                    // row; the close button stays pinned at the right edge (outside the scroll).
+                    Row(
+                        Modifier.fillMaxWidth().height(52.dp).padding(start = 8.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            val tabEntries = buildList {
+                                // Per molecule-extend: 分子子菜单插在原子之前,仅分子晶体显示。
+                                if (tab.isMolecularCrystal) add(DisplayTab.MOLECULES to localized("分子", "Molecules"))
+                                add(DisplayTab.ATOMS to localized("原子", "Atoms"))
+                                add(DisplayTab.BONDS to localized("化学键", "Bonds"))
+                                add(DisplayTab.POLYHEDRA to localized("多面体", "Polyhedra"))
+                                if (hbondRules.isNotEmpty()) add(DisplayTab.HBONDS to localized("氢键", "H-Bonds"))
+                            }
+                            // Per v0.8.27: if the remembered sub-menu is not available for
+                            // this tab (e.g. MOLECULES on a non-molecular crystal, HBONDS with
+                            // no hbond rules), fall back to the first available sub-menu.
+                            if (selected !in tabEntries.map { it.first }) {
+                                selected = tabEntries.firstOrNull()?.first ?: DisplayTab.ATOMS
+                            }
+                            tabEntries.forEach { (kind, label) ->
+                                FilterChip(
+                                    selected == kind,
+                                    onClick = {
+                                        selected = kind
+                                        // Per v0.8.27: remember per-tab so reopening the
+                                        // display panel restores the last sub-menu.
+                                        tab.rememberedDisplayTab = kind.name
+                                    },
+                                    label = { Text(label) },
+                                    modifier = Modifier.padding(horizontal = 3.dp),
+                                )
+                            }
                         }
-                        tabEntries.forEach { (kind, label) -> FilterChip(selected == kind, onClick = { selected = kind }, label = { Text(label) }, modifier = Modifier.padding(horizontal = 3.dp)) }
-                        Spacer(Modifier.weight(1f))
                         IconButton(onClick = { closePanel() }) { Icon(Icons.Default.Close, null) }
                     }
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
@@ -275,13 +311,6 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                         viewModel.updateAnalysis(tab, EditResult(tab.structure, working))
                                     })
                                     Text(localized("扩展到晶胞外", "Extend Outside Cell"), style = MaterialTheme.typography.bodySmall)
-                                    if (tab.moleculeExtend) {
-                                        Text(
-                                            localized("按分子展开已启用", "Expand-by-molecule active"),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
                                 }
                                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                                 if (normalWithMatch.isEmpty()) {

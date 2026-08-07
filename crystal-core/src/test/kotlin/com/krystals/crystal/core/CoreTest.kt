@@ -35,6 +35,42 @@ class CoreTest {
         assertTrue(SpaceGroupCatalog.operations("Fm-3m").size > 1)
     }
 
+    /**
+     * Per v0.8.27: CIF files spell space groups in many ways — standard H-M
+     * ("I41/amd"), pymatgen underscore style ("I4_1/amd"), IT origin-choice
+     * suffixes ("I41/amd:1") and spaced forms ("F m -3 m"). resolve() must
+     * always emit the single canonical catalog symbol so editors/UI are
+     * consistent, and suffixed names must resolve instead of falling into the
+     * unknown-group branch.
+     */
+    @Test fun resolveNormalizesAllSpellingsToCanonicalSymbol() {
+        // Canonical tetragonal space group #141
+        val canonical = SpaceGroupCatalog.all[140]
+        assertEquals("I41/amd", canonical.symbol)
+
+        // Underscore style used by pymatgen/Materials Project CIFs
+        val underscored = SpaceGroupCatalog.resolve("I4_1/amd", 141)
+        assertEquals("I41/amd", underscored.symbol, "underscore spelling must normalize to canonical")
+        assertEquals(141, underscored.number)
+
+        // IT origin-choice suffix
+        val suffixed = SpaceGroupCatalog.resolve("I41/amd:1", 141)
+        assertEquals("I41/amd", suffixed.symbol, "origin-choice suffix must be stripped")
+        assertEquals(141, suffixed.number)
+
+        // Spaced form
+        val spaced = SpaceGroupCatalog.resolve("F m -3 m", 225)
+        assertEquals("Fm-3m", spaced.symbol, "spaced spelling must normalize to canonical")
+        assertEquals(225, spaced.number)
+
+        // find() must also match suffixed/underscored spellings (used by operations())
+        assertEquals(141, SpaceGroupCatalog.find("I4_1/amd:2")?.number)
+        assertEquals(225, SpaceGroupCatalog.find("F m -3 m")?.number)
+
+        // Operations must be found through the suffixed spelling, not fall back to identity
+        assertTrue(SpaceGroupCatalog.operations("I41/amd:1").size > 1)
+    }
+
     @Test fun latticeCoordinatesRoundTrip() {
         val lattice = Lattice(4.1, 5.2, 6.3, 78.0, 91.0, 113.0)
         val fractional = FractionalCoordinate(0.2, 0.4, 0.7)

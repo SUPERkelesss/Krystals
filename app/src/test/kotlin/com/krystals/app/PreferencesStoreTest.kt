@@ -78,6 +78,9 @@ class PreferencesStoreTest {
         assertTrue(d.autoConvertCell)
         assertTrue(d.defaultShowBonds)
         assertEquals(ExtendBondsDefault.METALS_ONLY, d.defaultExtendBonds)
+        assertTrue(d.autoComputeHbonds)
+        assertTrue(d.defaultShowHbonds)
+        assertTrue(d.defaultMoleculeExtend)
         assertEquals(PolyhedraDefault.NEVER, d.defaultPolyhedra)
         assertEquals(CodMirrorMode.AUTO, d.codMirrorMode)
         assertEquals(0, d.codFixedIndex)
@@ -102,6 +105,9 @@ class PreferencesStoreTest {
             autoConvertCell = false,
             defaultShowBonds = false,
             defaultExtendBonds = ExtendBondsDefault.ALL,
+            autoComputeHbonds = false,
+            defaultShowHbonds = false,
+            defaultMoleculeExtend = false,
             defaultPolyhedra = PolyhedraDefault.ALL,
             codMirrorMode = CodMirrorMode.FIXED,
             codFixedIndex = 2,

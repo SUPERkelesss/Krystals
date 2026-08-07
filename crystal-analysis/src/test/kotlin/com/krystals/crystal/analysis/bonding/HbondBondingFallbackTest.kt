@@ -97,6 +97,55 @@ class HbondBondingFallbackTest {
         assertTrue(result.bondConfiguration.rules.none { it.isHBond }, "no H → no hbond rules")
     }
 
+    /**
+     * Per v0.8.27: auto-compute-hbonds preference OFF (includeHbonds=false) must
+     * suppress H-bond generation on every public entry point while keeping the
+     * normal (non-H) rules intact. The fixture is the same H1–O2 proton case from
+     * bondingPathAppendsHbondRulesForSingleBondH, which produces an hbond rule
+     * when includeHbonds defaults to true.
+     */
+    @Test
+    fun includeHbondsFalseSuppressesHbondsOnAllEntryPoints() {
+        val structure = simpleStructure(
+            listOf(
+                Site("O1", "O1", Species("O"), FractionalCoordinate(0.5, 0.5, 0.3)),
+                Site("H1", "H1", Species("H"), FractionalCoordinate(0.5, 0.5, 0.4)),   // ~1.0 AA from O1
+                Site("O2", "O2", Species("O"), FractionalCoordinate(0.5, 0.5, 0.59)),  // ~1.9 AA from H1
+                Site("O3", "O3", Species("O"), FractionalCoordinate(0.3, 0.2, 0.5)),
+                Site("O4", "O4", Species("O"), FractionalCoordinate(0.3, 0.4, 0.5)),
+                Site("H2", "H2", Species("H"), FractionalCoordinate(0.3, 0.3, 0.5)),
+            ),
+        )
+
+        // fromSmartIonicAttempt (bonding fallback path)
+        val attempt = CrystalEditor.fromSmartIonicAttempt(
+            structure, BondConfiguration(), 0.45, smartIonic = null, includeHbonds = false,
+        )
+        assertTrue(attempt.bondConfiguration.rules.none { it.isHBond }, "fromSmartIonicAttempt must drop hbonds")
+        assertTrue(attempt.bondConfiguration.rules.isNotEmpty(), "normal rules must survive")
+
+        // ensureAutoBondRules
+        val ensured = CrystalEditor.ensureAutoBondRules(
+            structure, BondConfiguration(), 0.45, includeHbonds = false,
+        )
+        assertTrue(ensured.bondConfiguration.rules.none { it.isHBond }, "ensureAutoBondRules must drop hbonds")
+        assertTrue(ensured.bondConfiguration.rules.isNotEmpty(), "normal rules must survive")
+
+        // rebuildBondRules (SMART_IONIC + BONDING sources)
+        val rebuiltSmart = CrystalEditor.rebuildBondRules(
+            structure, BondConfiguration(), RadiusSource.SMART_IONIC, 0.45, includeHbonds = false,
+        )
+        assertTrue(rebuiltSmart.bondConfiguration.rules.none { it.isHBond }, "rebuildBondRules(SMART_IONIC) must drop hbonds")
+        val rebuiltBonding = CrystalEditor.rebuildBondRules(
+            structure, BondConfiguration(), RadiusSource.BONDING, 0.45, includeHbonds = false,
+        )
+        assertTrue(rebuiltBonding.bondConfiguration.rules.none { it.isHBond }, "rebuildBondRules(BONDING) must drop hbonds")
+
+        // Sanity: default includeHbonds=true still produces the H1–O2 hbond rule.
+        val defaultResult = CrystalEditor.fromSmartIonicAttempt(structure, BondConfiguration(), 0.45, smartIonic = null)
+        assertTrue(defaultResult.bondConfiguration.rules.any { it.isHBond }, "default must keep hbonds")
+    }
+
     @Test
     fun bondingPathDoesNotTreatCarbonBondedHAsProton() {
         // Per v0.8.39: C is removed from the proton-partner set — an H bonded ONLY to C

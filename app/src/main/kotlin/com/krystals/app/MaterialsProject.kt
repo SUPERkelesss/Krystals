@@ -163,21 +163,40 @@ object MaterialsProject {
             // Fetch the conventional structure + real symmetry from the new API.
             val item = fetchNextgenStructure(key, materialId)
             val symmetry = item.optJSONObject("symmetry")
-            val realNumber = symmetry?.optInt("number", 0)?.takeIf { it > 0 }
-            val realSymbol = symmetry?.optString("symbol")?.takeIf { it.isNotBlank() }
+            val mpNumber = symmetry?.optInt("number", 0)?.takeIf { it > 0 }
+            val mpSymbol = symmetry?.optString("symbol")?.takeIf { it.isNotBlank() }
 
-            // Build a CIF with the real space group and identity symmetry operations.
+            // Per v0.8.27: route the MP cell through spglib first — standardize to
+            // conventional (idealized) then refine — so downstream computation and
+            // rendering see a symmetrized conventional cell with exact special
+            // positions. Falls back to the raw MP structure when spglib fails.
+            val rawStructure = item.optJSONObject("structure") ?: error("Material $materialId has no structure")
+            val refined = SpglibNative.refineStructureJson(rawStructure)
+            val structureJson = refined ?: rawStructure
+            val sgNumber = refined
+                ?.optInt("spglib_spacegroup_number", 0)?.takeIf { it > 0 }
+                ?: mpNumber
+            val sgSymbol = sgNumber?.let { SpaceGroupCatalog.all.getOrNull(it - 1)?.symbol } ?: mpSymbol
+
+            // Build a CIF with the refined space group and identity symmetry operations.
             // The cell atoms are all listed explicitly, so no expansion is needed at parse time.
-            val cif = buildCif(materialId, item, realSymbol, realNumber)
+            val cif = buildCif(materialId, structureJson, sgSymbol, sgNumber)
             target.parentFile?.mkdirs()
             target.writeText(cif, Charsets.UTF_8)
-            val parsed = CifCodec.parseStructure(cif, autoConvertConventional = autoConvertConventional)
 
-            // Per v0.8.0: Avoid double-conventionalization. If CifCodec recognized the cell
-            // as already conventional (metric fallback), restore full symmetry operations so
-            // the saved file matches the MP conventional CIF. If it is a genuine primitive
-            // cell, CifCodec has already converted it and we leave its symmetry ops as-is.
-            val finalStructure = if (CrystalEditor.isConventionalCell(parsed.structure)) {
+            // Per v0.8.27 (spglib path): when spglib succeeded the cell is already the
+            // conventional+refined result, so the legacy conversion/restore pipeline is
+            // temporarily DISABLED — CifCodec must not re-convert (autoConvertConventional
+            // forced off) and the isConventionalCell restore branch is skipped, letting
+            // spglib's output flow straight through to Krystals. Only on spglib failure do
+            // we fall back to the v0.8.0 legacy behavior.
+            val parsed = CifCodec.parseStructure(
+                cif,
+                autoConvertConventional = refined == null && autoConvertConventional,
+            )
+            val finalStructure = if (refined != null) {
+                parsed.structure
+            } else if (CrystalEditor.isConventionalCell(parsed.structure)) {
                 parsed.structure.copy(
                     symmetryOperations = SpaceGroupCatalog.operations(parsed.structure.spaceGroup.symbol),
                     isConventional = true,
@@ -187,7 +206,8 @@ object MaterialsProject {
             }
             debugLog("MP") {
                 "downloadCif ok: $materialId -> ${finalStructure.sites.size} sites, " +
-                    "sg=${finalStructure.spaceGroup.symbol}, conventional=${finalStructure.isConventional}"
+                    "sg=${finalStructure.spaceGroup.symbol}, conventional=${finalStructure.isConventional}, " +
+                    "spglib=${refined != null}"
             }
             parsed.copy(structure = finalStructure)
         }
@@ -211,13 +231,14 @@ object MaterialsProject {
 
     /**
      * Build a self-contained CIF from a summary-endpoint material object.
-     * Per v0.8.0: writes the real space group (not P1) so CifCodec can detect the Bravais
-     * lattice type. Symmetry operations are set to identity because the downloaded cell has
-     * all atoms listed explicitly — no expansion is wanted at this stage. downloadCif later
-     * restores full space-group operations when the cell is recognized as conventional.
+     * Per v0.8.27: consumes the (spglib-refined) `structure` JSON directly; writes
+     * the refined space group (not P1) so CifCodec can detect the Bravais
+     * lattice type. Symmetry operations are set to identity because the cell has
+     * all atoms listed explicitly — no expansion is wanted at this stage.
+     * downloadCif later restores full space-group operations when the cell is
+     * recognized as conventional.
      */
-    private fun buildCif(materialId: String, item: JSONObject, realSymbol: String?, realNumber: Int?): String {
-        val structure = item.optJSONObject("structure") ?: error("Material $materialId has no structure")
+    private fun buildCif(materialId: String, structure: JSONObject, realSymbol: String?, realNumber: Int?): String {
         val lattice = structure.optJSONObject("lattice") ?: error("Material $materialId has no lattice")
         val sites = structure.optJSONArray("sites") ?: JSONArray()
         val sgNumber = realNumber ?: 1
