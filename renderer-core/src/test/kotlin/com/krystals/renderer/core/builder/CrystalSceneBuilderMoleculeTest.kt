@@ -372,10 +372,10 @@ class CrystalSceneBuilderMoleculeTest {
     }
 
     @Test
-    fun moleculeExtendShowsAllImagesIntersectingTheCell() {
-        // 分子链 A(0.9)→B(1.1)→C(1.3)→D(1.5) 跨 x 边界后继续延伸(尿素式)。与单胞相交的
-        // 映像:t=0(A 在胞内)与 t=-1(B/C/D 落在胞内),两个映像都要完整显示(键长 0.8,
-        // lattice a=4,helper cartesian = frac×4)。
+    fun moleculeExtendShowsOnlyInCellImages() {
+        // 分子链 A(0.9)→B(1.1)→C(1.3)→D(1.5) 跨 x 边界后继续延伸(尿素式)。显示范围 =
+        // 单胞 0-1a:只显示分子 t=0 物理位置(含跨胞延伸 C@5.2、D@6.0),相邻晶胞映像
+        // (t=(-1,0,0):A@-0.4、C@1.2、D@2.0)不显示(键长 0.8,lattice a=4)。
         val atoms = listOf(
             atom(31, "A", "A", 0.9, 0.5, 0.5),   // (3.6,2,2)
             atom(32, "B", "B", 0.1, 0.5, 0.5),   // (0.4,2,2)
@@ -397,29 +397,24 @@ class CrystalSceneBuilderMoleculeTest {
         val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(chain)), pBonds, atoms)
         // B'(35) 是分子 t=0 映像的 B(位置 (4.4,2,2))→ 显示。
         assertTrue(scene.atomInstance(35).visible, "B' at (4.4,2,2) is the molecule's B image")
-        // 动态原子:t=0 映像的 C(5.2)、D(6.0)+ t=-1 映像的 A(-0.4)、C(1.2)、D(2.0)。
-        // (t=-1 映像的 C(1.2) 恰与 D 的原胞位置重合,键长验证会正确挡住误配键。)
-        val dyns = scene.atoms.filter { it.id.startsWith("molatom:") }
-        assertEquals(5, dyns.size, "missing molecule images should be dynamic atoms")
-        val dynX = dyns.map { it.atom.cartesianCoordinate.x }.sorted()
-        dynX.zip(listOf(-0.4, 1.2, 2.0, 5.2, 6.0)).forEach { (actual, expected) ->
+        // 动态原子仅 t=0 映像的 C(5.2)、D(6.0)(场景无);t=(-1,0,0) 映像不显示。
+        val dynX = scene.atoms.filter { it.id.startsWith("molatom:") }.map { it.atom.cartesianCoordinate.x }.sorted()
+        dynX.zip(listOf(5.2, 6.0)).forEach { (actual, expected) ->
             assertEquals(expected, actual, 1e-9)
         }
-        // 分子键链完整:31-35(场景键)+ 补齐键(35-C'、C'-D'、A'-32、32-C'、C'-D')。
+        // 分子键链完整:31-35(场景键)+ 35-动态C、动态C-动态D(补齐)。
         assertTrue(scene.bondBetween(31, 35).visible)
         val chainBonds = scene.bonds.filter { it.id.startsWith("molbond:") }
-        assertEquals(5, chainBonds.size)
+        assertEquals(2, chainBonds.size)
         assertTrue(chainBonds.all { it.visible })
         assertTrue(chainBonds.all { kotlin.math.abs(distance(it.start, it.end) - 0.8) < 1e-9 })
     }
 
     @Test
-    fun moleculeExtendSkipsImagesWithNoSubstantialOverlap() {
-        // 分子 A:Z1(0.97)↔Z2(1.03 物理,原胞代表 0.03)。其 t=(0,0,-1) 映像的 Z2 落在
-        // z=0.03(贴 z=0 边界,深度 0.03 < 0.05)→ 与单胞无实质重叠,不显示(用户:无重叠
-        // 分子太多);但 Z2 的原胞代表 42(z=0.03)是单胞内原子,经周期键 41-42 配位完整。
-        // 分子 B:Y1(0.25)↔Y2(-0.25 物理,原胞代表 0.75)。t=(0,0,1) 映像有原子深入 z=0.75
-        // → 与单胞实质重叠,显示完整。
+    fun moleculeExtendShowsOnlyInCellMoleculeExtension() {
+        // 显示范围 = 单胞 0-1a:只显示单胞内分子(t=0 物理位置,含跨胞延伸),不显示任何
+        // 相邻晶胞映像。分子 A 的 Z2 跨 z 边界(物理 z=1.03 → 场景 43 显示);分子 B 的
+        // Y2 跨 z 负边界(物理 z=-0.25 → 动态原子);t=(0,0,1) 映像(Y1@z=5)不显示。
         val atoms = listOf(
             atom(41, "Z1", "Z", 0.5, 0.5, 0.97),                  // (2,2,3.88)
             atom(42, "Z2", "Z", 0.5, 0.5, 0.03),                  // (2,2,0.12) 原胞代表
@@ -457,11 +452,9 @@ class CrystalSceneBuilderMoleculeTest {
         assertTrue(scene.bondBetween(41, 42).visible, "periodic Z1-Z2 bond")
         assertTrue(scene.bondBetween(41, 43).visible, "in-image Z1-Z2 bond")
         assertTrue(scene.bondBetween(51, 52).visible)
-        // 动态原子:仅 B 的 Y2@(2,2,-1)(t=0 映像)与 Y1@(2,2,5)(t=(0,0,1) 映像,深入 0.75)。
+        // 动态原子仅 B 的 Y2@(2,2,-1)(t=0 映像);t=(0,0,1) 映像(Y1@(2,2,5))不显示。
         val dynY = scene.atoms.filter { it.id.startsWith("molatom:") }.map { it.atom.cartesianCoordinate.z }.sorted()
-        assertEquals(listOf(-1.0, 5.0), dynY, "A 的贴边映像 (z=0.03) 不产生动态原子")
-        // A 的 t=(0,0,-1) 映像位置 (2,2,0.12) 不存在(ε 排除贴边映像)。
-        assertTrue(scene.atoms.none { it.id.startsWith("molatom:") && kotlin.math.abs(it.atom.cartesianCoordinate.z - 0.12) < 1e-9 })
+        assertEquals(listOf(-1.0), dynY, "仅 t=0 映像的跨胞部分产生动态原子")
     }
 
     @Test

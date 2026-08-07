@@ -121,33 +121,11 @@ class CrystalSceneBuilder {
             moleculeIndexByRepId = repIndex
             moleculeSiteIds = perMolSiteIds.map { it.toSet() }
             repBySiteId = repAtoms.groupBy { it.siteId }
-            val lattice = structure.lattice
-            fun cellShift(t: Int3): Vec3 =
-                lattice.toCartesian(FractionalCoordinate(t.x.toDouble(), t.y.toDouble(), t.z.toDouble())).toVec3()
-            val images = ArrayList<List<Pair<Int, Vec3>>>(options.molecules.size)
-            // 映像与单胞"实质重叠"的阈值(分数坐标):原子中心须距所有晶胞边界 ≥ 该值,
-            // 否则视为贴边/无重叠的相邻分子(如尿素沿 c 只伸入 0.03 的映像),不显示。
-            // t=0(单胞内分子本身)恒显示,含其跨胞延伸。
-            val imageEps = 0.05
-            for (m in options.molecules) {
-                val fracs = m.atoms.map { lattice.toFractional(it.position) }
-                val entries = ArrayList<Pair<Int, Vec3>>()
-                for (tx in -1..1) for (ty in -1..1) for (tz in -1..1) {
-                    val t = Int3(tx, ty, tz)
-                    val intersects = if (tx == 0 && ty == 0 && tz == 0) {
-                        true
-                    } else {
-                        fracs.any { f ->
-                            (f.x + tx) in imageEps..(1.0 - imageEps) &&
-                                (f.y + ty) in imageEps..(1.0 - imageEps) &&
-                                (f.z + tz) in imageEps..(1.0 - imageEps)
-                        }
-                    }
-                    if (!intersects) continue
-                    val shift = cellShift(t)
-                    for (ma in m.atoms) entries += ma.id to (ma.position.toVec3() + shift)
-                }
-                images += entries.distinct()
+            val images = options.molecules.map { m ->
+                // 只显示单胞内分子的物理位置(t=0 映像,含其跨胞延伸,如尿素上下底面的
+                // H 与 x∈[1,1.25] 的分子部分);相邻晶胞的周期映像(t≠0,如 x=1.5a 的
+                // C60/尿素)不在显示范围(0-1a)内,不显示。
+                m.atoms.map { it.id to it.position.toVec3() }.distinct()
             }
             moleculeImageAtoms = images
             moleculePositions = images.map { it.map { p -> p.second } }
