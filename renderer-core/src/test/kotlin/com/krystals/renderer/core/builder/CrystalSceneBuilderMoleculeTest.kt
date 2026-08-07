@@ -8,6 +8,7 @@ import com.krystals.crystal.analysis.model.Expansion
 import com.krystals.crystal.core.coordinate.CartesianCoordinate
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
+import com.krystals.crystal.core.math.distance
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.core.model.Molecule
@@ -105,8 +106,9 @@ class CrystalSceneBuilderMoleculeTest {
         bond(1, 3, "O1", "H2"),
         bond(4, 5, "O2", "H3"),
         bond(4, 6, "O2", "H4"),
-        bond(7, 8, "Cl1", "Cl2"),
-        // 同原子周期自像跨胞键:Cl2 与其 +x 外部映像(氯分子在晶胞外的另一半)。
+        // 氯分子横跨晶胞:Cl1(胞内)与 Cl2 在 (1,0,0) 层的映像(10)成键。
+        bond(7, 10, "Cl1", "Cl2", offsetB = Int3(1, 0, 0)),
+        // 同原子周期自像键:Cl2 与其 +x 外部映像 —— 非分子内键,分子展开下不显示。
         bond(8, 10, "Cl2", "Cl2", offsetB = Int3(1, 0, 0)),
     )
 
@@ -133,7 +135,8 @@ class CrystalSceneBuilderMoleculeTest {
             "Cl2",
             listOf(
                 MoleculeAtom(7, "Cl1", Species("Cl"), CartesianCoordinate(0.2, 2.0, 2.0)),
-                MoleculeAtom(8, "Cl2", Species("Cl"), CartesianCoordinate(3.8, 2.0, 2.0)),
+                // 跨胞:Cl2 在 (1,0,0) 层(与场景原子 10 位置一致)。
+                MoleculeAtom(8, "Cl2", Species("Cl"), CartesianCoordinate(7.8, 2.0, 2.0)),
             ),
             listOf(MoleculeBond(7, 8)),
         ),
@@ -171,18 +174,18 @@ class CrystalSceneBuilderMoleculeTest {
     @Test
     fun moleculeExtendShowsWholeMoleculesAcrossCell() {
         val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = molecules))
-        // 分子原子(含外部壳层映像)全部可见。
-        listOf(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L).forEach {
+        // 单胞内分子原子(原胞 + 边界)可见;氯分子跨胞部分(10,Cl2 在 (1,0,0) 层)可见。
+        listOf(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 10L, 11L, 13L).forEach {
             assertTrue(scene.atomInstance(it).visible, "molecule atom $it should be visible")
         }
-        // 游离(非分子)原胞原子仍可见,但其外部映像不可见。
-        assertTrue(scene.atomInstance(11).visible)
-        assertFalse(scene.atomInstance(12).visible, "non-molecule external atom should stay hidden")
-        // 边界映像按原逻辑可见。
-        assertTrue(scene.atomInstance(13).visible)
-        // 跨胞键可见:同原子自像键(8-10)与原胞内键(7-8)都是氯分子的一部分。
-        assertTrue(scene.bondBetween(8, 10).visible, "cross-cell Cl2 self-image bond should be visible")
-        assertTrue(scene.bondBetween(7, 8).visible)
+        // 相邻分子的外部映像不显示(精确归属:位置必须落在分子原子物理坐标上)。
+        // 9 = O1 的 +y 映像(水分子不跨胞);12 = 游离 X1 的 +y 映像。
+        listOf(9L, 12L).forEach {
+            assertFalse(scene.atomInstance(it).visible, "foreign image $it should stay hidden")
+        }
+        // 跨胞氯分子键 7-10 可见;同原子自像键 8-10 非分子内键 → 不可见。
+        assertTrue(scene.bondBetween(7, 10).visible, "cross-cell Cl2 molecule bond should be visible")
+        assertFalse(scene.bondBetween(8, 10).visible, "same-atom self-image bond is not a molecule bond")
     }
 
     @Test
@@ -227,7 +230,7 @@ class CrystalSceneBuilderMoleculeTest {
             assertFalse(scene.atomInstance(it).visible, "hidden Cl2 atom $it")
         }
         assertFalse(scene.bondBetween(8, 10).visible, "cross-cell bond of a fully-hidden molecule")
-        assertFalse(scene.bondBetween(7, 8).visible)
+        assertFalse(scene.bondBetween(7, 10).visible)
     }
 
     @Test
@@ -317,23 +320,20 @@ class CrystalSceneBuilderMoleculeTest {
             ),
         )
         val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(p4)), pBonds, pAtoms)
-        // +z 映像:P2'-P3'(25-26)补齐。
+        // +z 映像:P2'(25)、P3'(26)是分子 P4 的物理位置 → 显示;25-26 键补齐。
         assertNotNull(
             scene.bonds.firstOrNull {
                 (it.bond.atomA == 25L && it.bond.atomB == 26L) || (it.bond.atomA == 26L && it.bond.atomB == 25L)
             },
             "+z shell-shell bond 25-26 should be completed",
         )
-        // -z 映像:P2''-P3''(27-28)补齐。
-        assertNotNull(
-            scene.bonds.firstOrNull {
-                (it.bond.atomA == 27L && it.bond.atomB == 28L) || (it.bond.atomA == 28L && it.bond.atomB == 27L)
-            },
-            "-z shell-shell bond 27-28 should be completed",
-        )
-        // 每个显示映像的 P2 配位完整:25 与 27 各连 3 根键(21、24、另一个 P3 映像)。
+        // -z 映像:P2''(27)、P3''(28)是相邻分子的映像(位置 ≠ 分子原子物理坐标)→ 不显示,
+        // 也没有可见键(其 BondDetector 键 21-27/24-27 因端点不可见而隐藏)。
+        assertFalse(scene.atomInstance(27).visible, "-z image 27 belongs to a neighbouring molecule")
+        assertFalse(scene.atomInstance(28).visible, "-z image 28 belongs to a neighbouring molecule")
+        assertTrue(scene.bonds.none { (it.bond.atomA == 27L || it.bond.atomB == 27L) && it.visible })
+        // 显示的 P2'(25)配位完整:3 根键(21、24、26)。
         assertEquals(3, scene.bonds.count { it.bond.atomA == 25L || it.bond.atomB == 25L })
-        assertEquals(3, scene.bonds.count { it.bond.atomA == 27L || it.bond.atomB == 27L })
     }
 
     @Test
@@ -369,5 +369,40 @@ class CrystalSceneBuilderMoleculeTest {
         val crossBond = bond(1, 5, "O1", "H3")
         val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = molecules), bonds + crossBond)
         assertFalse(scene.bondBetween(1, 5).visible, "cross-molecule covalent bond should stay hidden")
+    }
+
+    @Test
+    fun moleculeExtendCreatesDynamicAtomsBeyondMaterializedShell() {
+        // 分子原子物理位置超出 BondDetector 的 ±1 层壳层(如尿素分子跨两个晶胞,末端
+        // 在 (2,0,0) 层)→ 场景无该原子 → 动态创建,并补齐其分子内键。
+        val atoms = listOf(
+            atom(31, "X", "X", 0.1, 0.5, 0.5),   // 原胞 X(primary (1,5,5))
+            atom(32, "Y", "Y", 0.2, 0.5, 0.5),   // 原胞 Y(primary (2,5,5),属于相邻分子)
+        )
+        // 分子:X 在原胞,Y 的物理位置在 (2,0,0) 层((20.8,2,2))→ 无场景原子 → 动态创建。
+        // 注意测试 lattice a=4,helper cartesian = frac×4:31=(0.4,2,2), 32=(0.8,2,2)。
+        val molecule = Molecule(
+            "XY",
+            listOf(
+                MoleculeAtom(31, "X", Species("X"), CartesianCoordinate(0.4, 2.0, 2.0), siteId = "X"),
+                MoleculeAtom(32, "Y", Species("Y"), CartesianCoordinate(20.8, 2.0, 2.0), siteId = "Y"),
+            ),
+            listOf(MoleculeBond(31, 32)),
+        )
+        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(molecule)), emptyList(), atoms)
+        // 动态原子被创建:Y 在 (20.8,2,2)(超出 ±1 层)无场景原子。
+        val dyn = scene.atoms.firstOrNull { it.id.startsWith("molatom:") }
+        assertNotNull(dyn, "molecule atom beyond the materialized shell should be created dynamically")
+        assertTrue(dyn.visible)
+        assertEquals(20.8, dyn.atom.cartesianCoordinate.x, 1e-9)
+        assertEquals("Y", dyn.atom.siteId)
+        // 原胞原子照常显示。
+        assertTrue(scene.atomInstance(31).visible)
+        assertTrue(scene.atomInstance(32).visible)
+        // 动态原子与 X 的分子键补齐(键长 = |(0.4,2,2)-(20.8,2,2)| = 20.4)。
+        val molBond = scene.bonds.firstOrNull { it.id.startsWith("molbond:") }
+        assertNotNull(molBond, "dynamic atom's molecule bond should be completed")
+        assertTrue(molBond.visible)
+        assertEquals(20.4, distance(molBond.start, molBond.end), 1e-9)
     }
 }

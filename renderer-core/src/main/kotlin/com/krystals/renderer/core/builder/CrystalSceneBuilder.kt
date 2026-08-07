@@ -6,6 +6,7 @@ import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
 import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
+import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.math.Vec3
 import com.krystals.crystal.core.math.distance
 import com.krystals.crystal.core.model.AtomImage
@@ -94,6 +95,12 @@ class CrystalSceneBuilder {
         val moleculeIndexByRepId: Map<Long, Int>
         val moleculeSiteIds: List<Set<String>>
         val repBySiteId: Map<String, List<AtomImage>>
+        // 分子原子物理位置(完整分子的空间位置),用于外部壳层原子的精确归属:
+        // 壳层原子显示 ⟺ 其位置精确落在某可见分子的原子物理坐标上(而非仅 rep 归属,
+        // 否则相邻分子的边界映像会被误显示为"该分子的一部分")。
+        val moleculePositions: List<List<Vec3>>
+        // 分子拓扑邻居(原胞原子 id → 分子内邻居 id),用于键的分子归属判定。
+        val moleculeNeighbors: List<Map<Int, Set<Int>>>
         if (options.moleculeExtend) {
             val indexByAtomId = HashMap<Int, Int>()
             options.molecules.forEachIndexed { index, m -> m.atoms.forEach { indexByAtomId[it.id] = index } }
@@ -108,10 +115,29 @@ class CrystalSceneBuilder {
             moleculeIndexByRepId = repIndex
             moleculeSiteIds = perMolSiteIds.map { it.toSet() }
             repBySiteId = repAtoms.groupBy { it.siteId }
+            moleculePositions = options.molecules.map { m -> m.atoms.map { it.position.toVec3() } }
+            val neighbors = ArrayList<Map<Int, Set<Int>>>(options.molecules.size)
+            for (m in options.molecules) {
+                val adj = HashMap<Int, MutableSet<Int>>()
+                for (mb in m.bonds) {
+                    adj.getOrPut(mb.from) { mutableSetOf() } += mb.to
+                    adj.getOrPut(mb.to) { mutableSetOf() } += mb.from
+                }
+                neighbors += adj
+            }
+            moleculeNeighbors = neighbors
         } else {
             moleculeIndexByRepId = emptyMap()
             moleculeSiteIds = emptyList()
             repBySiteId = emptyMap()
+            moleculePositions = emptyList()
+            moleculeNeighbors = emptyList()
+        }
+
+        /** 场景原子 → 原胞代表原子 id(分子拓扑节点)。 */
+        fun repIdOf(atom: AtomImage): Int? = when {
+            !atom.isShell && atom.cellOffset == Int3(0, 0, 0) -> atom.id.toInt()
+            else -> repBySiteId[atom.siteId]?.firstOrNull { isSameAtomPeriodicImage(it, atom) }?.id?.toInt()
         }
 
         /** 场景原子 → 分子索引:原胞原子直查;shell/边界映像经原胞代表(re-same-site + 整数平移)查。 */
@@ -128,15 +154,20 @@ class CrystalSceneBuilder {
             return siteIds.isNotEmpty() && siteIds.all { it in options.hiddenSiteIds }
         }
 
-        fun atomVisible(atom: AtomImage): Boolean = when {
-            atom.siteId in options.hiddenSiteIds -> false
-            !options.moleculeExtend -> !atom.isShell || atom.isBoundaryImage || atom.id in externallyVisible
-            // 分子展开:单胞内/边界映像按原逻辑(hiddenSites 已过滤)。
-            !atom.isShell || atom.isBoundaryImage -> true
-            // 分子展开:外部壳层原子属于"未整分子隐藏"的分子才显示。
-            else -> {
-                val mol = moleculeIndexOf(atom) ?: return false
-                !moleculeFullyHidden(mol)
+        fun atomVisible(atom: AtomImage): Boolean {
+            return when {
+                atom.siteId in options.hiddenSiteIds -> false
+                !options.moleculeExtend -> !atom.isShell || atom.isBoundaryImage || atom.id in externallyVisible
+                // 分子展开:单胞内/边界映像按原逻辑(hiddenSites 已过滤)。
+                !atom.isShell || atom.isBoundaryImage -> true
+                // 分子展开:外部壳层原子显示 ⟺ 其位置精确落在某可见分子的原子物理坐标上
+                // (完整分子 = 分子全部原子的物理位置;相邻分子的边界映像不误显示)。
+                else -> {
+                    val mol = moleculeIndexOf(atom) ?: return false
+                    if (moleculeFullyHidden(mol)) return false
+                    val pos = atom.cartesianCoordinate.toVec3()
+                    moleculePositions[mol].any { distance(it, pos) < 1e-3 }
+                }
             }
         }
 
@@ -293,9 +324,19 @@ class CrystalSceneBuilder {
                         // 合法氢键(键本身由 BondDetector 按距离/角度/per-H 规则生成)。
                         atomVisible(start) && atomVisible(end)
                     } else {
+                        // 分子展开:两端必须属于同一分子、拓扑相邻、且端点原子均显示
+                        // (拓扑相邻排除同原子自像键等非分子内键)。
                         val mi = moleculeIndexOf(start)
                         val mj = moleculeIndexOf(end)
-                        mi != null && mi == mj && !moleculeFullyHidden(mi)
+                        if (mi == null || mi != mj || moleculeFullyHidden(mi)) {
+                            false
+                        } else {
+                            val sRep = repIdOf(start)
+                            val eRep = repIdOf(end)
+                            sRep != null && eRep != null && sRep != eRep &&
+                                eRep in moleculeNeighbors[mi][sRep].orEmpty() &&
+                                atomVisible(start) && atomVisible(end)
+                        }
                     }
                 }
                 !start.isShell && !end.isShell -> true
@@ -332,30 +373,22 @@ class CrystalSceneBuilder {
             )
         }
 
-        // Per molecule-extend: BondDetector 只从 primary/boundary 中心生成键 —— 分子内两端
-        // 都是外部壳层的键(如横跨晶胞的 P4 中两个胞外顶点 P2'-P3')不会生成,导致分子展开
-        // 时胞外原子配位缺失(白磷每个 P 应连三根键)。按"每个显示的外部壳层原子 → 其分子
-        // 拓扑邻居的最邻近映像"补齐(任意 cellOffset 映像,而非仅分子拓扑物理位置),并用
-        // 分子内键长验证,防止最近映像误配生成长键。
+        // Per molecule-extend: BondDetector 只从 primary/boundary 中心生成键并 materialize
+        // 与之成键的 ±1 层壳层 —— 分子伸出更远(如尿素沿 c 跨两个晶胞,末端在 (0,0,2))
+        // 的原子缺失,分子显示不完整。补齐两部分:
+        //  1) 动态原子:分子原子在其物理位置无场景原子 → 直接从 Molecule 发射合成原子;
+        //  2) 键补齐:对每个显示的外部壳层原子与动态原子,补其分子拓扑邻居的最邻近映像键
+        //     (任意 cellOffset),并用分子内键长验证,防止误配生成长键。
         if (options.moleculeExtend && options.molecules.isNotEmpty()) {
-            fun repIdOf(atom: AtomImage): Int? = when {
-                !atom.isShell && atom.cellOffset == Int3(0, 0, 0) -> atom.id.toInt()
-                else -> repBySiteId[atom.siteId]?.firstOrNull { isSameAtomPeriodicImage(it, atom) }?.id?.toInt()
-            }
-            // 分子拓扑:原胞原子 id → 分子内邻居 id 集合;分子内键长(排序原子对)。
-            val moleculeNeighbors = ArrayList<Map<Int, Set<Int>>>(options.molecules.size)
+            // 分子内键长(排序原子对),用于键补齐的键长验证;邻居集合已在归属块构建。
             val bondLengthByPair = HashMap<Pair<Int, Int>, Double>()
             for (m in options.molecules) {
                 val posById = m.atoms.associate { it.id to it.position.toVec3() }
-                val adj = HashMap<Int, MutableSet<Int>>()
                 for (mb in m.bonds) {
-                    adj.getOrPut(mb.from) { mutableSetOf() } += mb.to
-                    adj.getOrPut(mb.to) { mutableSetOf() } += mb.from
                     val p1 = posById[mb.from] ?: continue
                     val p2 = posById[mb.to] ?: continue
                     bondLengthByPair[minOf(mb.from, mb.to) to maxOf(mb.from, mb.to)] = distance(p1, p2)
                 }
-                moleculeNeighbors += adj
             }
             // 场景原子按原胞代表 id 索引。
             val sceneByRepId = HashMap<Int, MutableList<AtomImage>>()
@@ -363,9 +396,80 @@ class CrystalSceneBuilder {
                 val repId = repIdOf(a) ?: continue
                 sceneByRepId.getOrPut(repId) { mutableListOf() } += a
             }
+            fun sceneAtomAt(repId: Int, position: Vec3): AtomImage? =
+                sceneByRepId[repId]?.firstOrNull { distance(it.cartesianCoordinate.toVec3(), position) < 1e-3 }
+
+            // 动态原子:分子原子物理位置无场景原子 → 发射合成原子(id 取负避免冲突;
+            // isShell=true 使其可见性走分子归属)。分子原子 id 保留为 repId(MoleculeAtom.id)。
+            val dynamicAtoms = HashMap<Int, AtomImage>()   // MoleculeAtom.id → 合成原子
+            val dynamicMolOf = HashMap<Int, Int>()         // MoleculeAtom.id → 分子索引
+            var nextDynId = -1L
+            options.molecules.forEachIndexed { molIndex, m ->
+                if (moleculeFullyHidden(molIndex)) return@forEachIndexed
+                for (ma in m.atoms) {
+                    if (sceneAtomAt(ma.id, ma.position.toVec3()) != null) continue
+                    val dyn = AtomImage(
+                        id = nextDynId--,
+                        siteId = ma.siteId,
+                        siteLabel = ma.label,
+                        species = ma.species,
+                        fractionalCoordinate = FractionalCoordinate.ZERO,
+                        cartesianCoordinate = ma.position,
+                        occupancy = 1.0,
+                        cellOffset = Int3(0, 0, 0),
+                        isShell = true,
+                        isBoundaryImage = false,
+                    )
+                    dynamicAtoms[ma.id] = dyn
+                    dynamicMolOf[ma.id] = molIndex
+                    objects += AtomInstance(
+                        id = "molatom:$molIndex:${ma.id}",
+                        atom = dyn,
+                        radius = options.atomRadiusByElement[ma.species.symbol] ?: options.defaultAtomRadius,
+                        material = atomMaterial(dyn),
+                        visible = ma.siteId !in options.hiddenSiteIds,
+                    )
+                }
+            }
+
+            // 邻居解析:场景最近映像 或 动态原子(同 MoleculeAtom.id),取更近者。
+            fun neighborRef(n: Int, molIndex: Int, fromPos: Vec3): AtomImage? {
+                val dyn = dynamicAtoms[n]
+                val sceneBest = sceneByRepId[n]?.minByOrNull { distance(fromPos, it.cartesianCoordinate.toVec3()) }
+                return when {
+                    sceneBest != null && dyn == null -> sceneBest
+                    sceneBest == null && dyn != null -> dyn
+                    sceneBest != null && dyn != null ->
+                        if (distance(fromPos, dyn.cartesianCoordinate.toVec3()) <= distance(fromPos, sceneBest.cartesianCoordinate.toVec3())) dyn else sceneBest
+                    else -> null
+                }
+            }
             val emittedPairs = HashSet<Pair<Long, Long>>()
             for (b in analysis.bonds) emittedPairs += minOf(b.atomA, b.atomB) to maxOf(b.atomA, b.atomB)
             val moleculeRule = BondRule("A", "B", 0.1, 10.0, BondRuleSource.CUSTOM)
+            fun emitMoleculeBond(a: AtomImage, aRepId: Int, n: Int, aPos: Vec3, molIndex: Int) {
+                val best = neighborRef(n, molIndex, aPos) ?: return
+                if (best.id == a.id) return
+                val pair = minOf(a.id, best.id) to maxOf(a.id, best.id)
+                if (pair in emittedPairs) return
+                val bondLen = bondLengthByPair[minOf(aRepId, n) to maxOf(aRepId, n)] ?: return
+                val d = distance(aPos, best.cartesianCoordinate.toVec3())
+                // 键长验证(±20%):最近映像必须落在分子内键长附近,否则是错误映像。
+                if (d > bondLen * 1.2 || d < bondLen * 0.8) return
+                emittedPairs += pair
+                val key = listOf(a.siteId, best.siteId).sorted().joinToString("\u0000")
+                objects += BondInstance(
+                    id = "molbond:${a.id}:${best.id}",
+                    bond = Bond(a.id, best.id, d, moleculeRule, Int3(0, 0, 0)),
+                    start = aPos,
+                    end = best.cartesianCoordinate.toVec3(),
+                    radius = options.bondRadius,
+                    startMaterial = bondMaterial(a),
+                    endMaterial = bondMaterial(best),
+                    visible = options.showBonds && key !in options.hiddenBondKeys,
+                )
+            }
+            // 显示的外部壳层原子:补分子拓扑邻居键。
             for (a in analysis.atoms) {
                 if (!a.isShell || a.isBoundaryImage) continue
                 if (!atomVisible(a)) continue
@@ -374,27 +478,15 @@ class CrystalSceneBuilder {
                 val repId = repIdOf(a) ?: continue
                 val aPos = a.cartesianCoordinate.toVec3()
                 for (n in moleculeNeighbors[mol][repId].orEmpty()) {
-                    val cands = sceneByRepId[n] ?: continue
-                    val best = cands.minByOrNull { distance(aPos, it.cartesianCoordinate.toVec3()) } ?: continue
-                    if (best.id == a.id) continue
-                    val pair = minOf(a.id, best.id) to maxOf(a.id, best.id)
-                    if (pair in emittedPairs) continue
-                    val bondLen = bondLengthByPair[minOf(repId, n) to maxOf(repId, n)] ?: continue
-                    val d = distance(aPos, best.cartesianCoordinate.toVec3())
-                    // 键长验证(±20%):最近映像必须落在分子内键长附近,否则是错误映像。
-                    if (d > bondLen * 1.2 || d < bondLen * 0.8) continue
-                    emittedPairs += pair
-                    val key = listOf(a.siteId, best.siteId).sorted().joinToString("\u0000")
-                    objects += BondInstance(
-                        id = "molbond:${a.id}:${best.id}",
-                        bond = Bond(a.id, best.id, d, moleculeRule, Int3(0, 0, 0)),
-                        start = aPos,
-                        end = best.cartesianCoordinate.toVec3(),
-                        radius = options.bondRadius,
-                        startMaterial = bondMaterial(a),
-                        endMaterial = bondMaterial(best),
-                        visible = options.showBonds && key !in options.hiddenBondKeys,
-                    )
+                    emitMoleculeBond(a, repId, n, aPos, mol)
+                }
+            }
+            // 动态原子:补其分子拓扑邻居键。
+            for ((maId, dyn) in dynamicAtoms) {
+                val mol = dynamicMolOf[maId] ?: continue
+                val aPos = dyn.cartesianCoordinate.toVec3()
+                for (n in moleculeNeighbors[mol][maId].orEmpty()) {
+                    emitMoleculeBond(dyn, maId, n, aPos, mol)
                 }
             }
         }
