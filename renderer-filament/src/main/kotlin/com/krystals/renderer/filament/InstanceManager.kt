@@ -9,7 +9,7 @@ import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.crystal.core.math.Vec3
 
-enum class GeometryKind { SPHERE_HIGH, SPHERE_MEDIUM, SPHERE_LOW, CYLINDER, HBOND, POLYHEDRON, FRAME, AXIS, MEASUREMENT, PIE_SECTOR }
+enum class GeometryKind { SPHERE_HIGH, HIGHLIGHT, SPHERE_MEDIUM, SPHERE_LOW, CYLINDER, HBOND, POLYHEDRON, FRAME, AXIS, MEASUREMENT, PIE_SECTOR }
 
 data class MaterialKey(
     val argb: Long,

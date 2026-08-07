@@ -219,6 +219,9 @@ internal fun ViewerScreen(
                     else -> null
                 }
                 tab.bondDrawMode = BondDrawMode.NONE
+                // Per v0.8.x: exiting draw/delete mode resets the target type flag so the next
+                // entry (from the covalent or hbond sub-menu) starts from a clean state.
+                tab.bondDrawTargetIsHbond = false
                 tab.bondDrawFirstSiteId = null
                 tab.bondDrawFirstCartesian = null
                 tab.selectedAtomIds = emptyList()
@@ -305,7 +308,7 @@ internal fun ViewerScreen(
     // Per v0.7.1: scene rebuild loading dialog — shows after 300ms delay to avoid flicker
     // on fast rebuilds. Back button undoes the last change.
     var sceneRebuilding by remember(tab.id) { mutableStateOf(false) }
-    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility, tab.moleculeExtend) {
+    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility, tab.moleculeExtend, tab.hbondAngleThreshold) {
         // Per v0.6.3: removed currentOrientation key + delay — the Filament viewport already
         // handles size changes via onSizeChanged → SetViewport, so rebuilding the entire scene on
         // rotation was unnecessary and caused the freeze. The renderer's updateInteraction handles
@@ -355,6 +358,7 @@ internal fun ViewerScreen(
                         structuralExpansion = tab.structuralExpansion,
                         moleculeExtend = tab.moleculeExtend,
                         molecules = tab.molecules,
+                        hbondAngleThreshold = tab.hbondAngleThreshold,
                     )
                 }
             }
@@ -515,8 +519,10 @@ internal fun ViewerScreen(
                                         tab.bondDrawFirstSiteId!!, atom.siteId,
                                         0.1, dist + 0.1,
                                         BondRuleSource.CUSTOM,
+                                        isHBond = tab.bondDrawTargetIsHbond,
                                     )
                                     tab.bondDrawMode = BondDrawMode.NONE
+                                    tab.bondDrawTargetIsHbond = false
                                     tab.bondDrawFirstSiteId = null
                                     tab.bondDrawFirstCartesian = null
                                     tab.selectedAtomIds = emptyList()
@@ -537,7 +543,11 @@ internal fun ViewerScreen(
                                 } else {
                                     val siteA = tab.bondDrawFirstSiteId!!
                                     val siteB = atom.siteId
-                                    val key = listOf(siteA, siteB).sorted().joinToString("\u0000")
+                                    // Per v0.8.x: hbond rules carry the "\u0000hbond" key suffix -
+                                    // match by the draw target type so deleting an H-bond never
+                                    // hits a normal rule for the same site pair (or vice versa).
+                                    val key = listOf(siteA, siteB).sorted().joinToString("\u0000") +
+                                        if (tab.bondDrawTargetIsHbond) "\u0000hbond" else ""
                                     val matchingRule = tab.bondConfiguration.rules.firstOrNull { it.key == key }
                                     if (matchingRule != null) {
                                         tab.recordHistory()
@@ -550,6 +560,7 @@ internal fun ViewerScreen(
                                         onMessage(noBondMessage)
                                     }
                                     tab.bondDrawMode = BondDrawMode.NONE
+                                    tab.bondDrawTargetIsHbond = false
                                     tab.bondDrawFirstSiteId = null
                                     tab.bondDrawFirstCartesian = null
                                     tab.selectedAtomIds = emptyList()

@@ -1,5 +1,8 @@
 package com.krystals.app
 
+/** Per v0.8.x: log tag for the CIF open pipeline. */
+const val CIF_OPEN_TAG = "CIFOpen"
+
 /**
  * Per v0.8.39: debug-only logging — production builds compile the message away entirely.
  * Mirrors Log.d/Log.w so network-layer diagnostics never leak into release builds.

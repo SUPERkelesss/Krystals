@@ -714,16 +714,6 @@ fun KrystalsRoot(
                         onOnlineSource = { onlineSourceOpen = true },
                         themeMode = themeMode, onTheme = ::applyTheme, language = language,
                         onLanguage = ::applyLanguage,
-                        settingsValues = settingsValues,
-                        onSettingsChange = onSettingsChange,
-                        onRestoreDefaults = {
-                            PreferencesStore.clearAll(preferences)
-                            val defaults = SettingsValues.defaults()
-                            settingsValues = defaults
-                            PreferencesStore.save(preferences, defaults)
-                            if (language != defaults.language && defaults.language != "auto") applyLanguage(defaults.language)
-                            if (themeMode != defaults.theme) { themeMode = defaults.theme; preferences.edit { putString(PreferencesStore.KEY_THEME, defaults.theme.name) } }
-                        },
                         onHelp = { linkConfirmUrl = "https://www.kelesss.art/refs/software/krystals.html" }, onAbout = { aboutOpen = true }, onSponsor = { linkConfirmUrl = "https://ifdian.net/a/krystals/plan" }, onFeedback = { linkConfirmUrl = "https://github.com/SUPERkelesss/Krystals/issues" }, onExit = ::requestExit,
                     )
                 } else {
