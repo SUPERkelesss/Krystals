@@ -411,6 +411,90 @@ class CrystalSceneBuilderMoleculeTest {
     }
 
     @Test
+    fun moleculeExtendShowsAtomsOnCellBoundaryFaces() {
+        // [0,1] 闭区间:分子原子物理位置恰在 z=1 面(frac 1.0)的映像(场景边界原子 32)
+        // 必须显示——边界属于单胞显示范围,不是 [0,1)。分子 X-W:X 原胞代表 frac 0.0
+        // (31),键跨 x=1 边界使 X 的物理位置 frac 1.0;W frac 0.75(34)。
+        val atoms = listOf(
+            atom(31, "X", "X", 0.5, 0.5, 0.0),                            // (2,2,0) 原胞代表
+            atom(32, "X", "X", 0.5, 0.5, 1.0, offset = Int3(0, 0, 1), shell = true, boundary = true),  // (2,2,4) 边界
+            atom(34, "W", "W", 0.5, 0.5, 0.75),                           // (2,2,3)
+        )
+        val pBonds = listOf(bond(32, 34, "X", "W", offsetB = Int3(0, 0, 1)))
+        val mol = Molecule(
+            "XW",
+            listOf(
+                MoleculeAtom(31, "X", Species("X"), CartesianCoordinate(2.0, 2.0, 4.0), siteId = "X"),
+                MoleculeAtom(34, "W", Species("W"), CartesianCoordinate(2.0, 2.0, 3.0), siteId = "W"),
+            ),
+            listOf(MoleculeBond(31, 34)),
+        )
+        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(mol)), pBonds, atoms)
+        // 32(frac 1.0 边界)是分子 X 的显示位置 → 可见(闭区间 [0,1] 含 z=1)。
+        assertTrue(scene.atomInstance(31).visible)
+        assertTrue(scene.atomInstance(32).visible, "atom on z=1 face (frac 1.0) must be shown (closed [0,1])")
+        assertTrue(scene.atomInstance(34).visible)
+        assertTrue(scene.bondBetween(32, 34).visible, "in-molecule bond crossing the z=1 face")
+        // 无动态原子:X@(2,2,4) 由场景边界原子 32 承载。
+        assertTrue(scene.atoms.none { it.id.startsWith("molatom:") })
+    }
+
+    @Test
+    fun moleculeExtendClosedIntervalShowsTopFaceAtoms() {
+        // [0,1] 闭区间:单胞顶面(z=1,frac 1.0)的原子属于展开范围,即使不属于任何分子
+        // (siteId Q/R 不在分子列表);frac=1.5(超出 [0,1])的非分子原子不显示。
+        val atoms = listOf(
+            atom(31, "X", "X", 0.5, 0.5, 0.25),                            // (2,2,1)
+            atom(32, "Y", "Y", 0.5, 0.5, 0.75),                            // (2,2,3)
+            atom(35, "Q", "Q", 0.5, 0.5, 1.0, offset = Int3(0, 0, 1), shell = true),  // (2,2,4) 顶面 frac=1.0
+            atom(36, "R", "R", 0.5, 0.5, 1.5, offset = Int3(0, 0, 1), shell = true),  // (2,2,6) frac=1.5
+        )
+        val pBonds = listOf(bond(31, 32, "X", "Y"))
+        val mol = Molecule(
+            "XY",
+            listOf(
+                MoleculeAtom(31, "X", Species("X"), CartesianCoordinate(2.0, 2.0, 1.0), siteId = "X"),
+                MoleculeAtom(32, "Y", Species("Y"), CartesianCoordinate(2.0, 2.0, 3.0), siteId = "Y"),
+            ),
+            listOf(MoleculeBond(31, 32)),
+        )
+        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(mol)), pBonds, atoms)
+        assertTrue(scene.atomInstance(31).visible)
+        assertTrue(scene.atomInstance(32).visible)
+        assertTrue(scene.atomInstance(35).visible, "atom on z=1 top face (frac 1.0) is inside the closed [0,1] range")
+        assertFalse(scene.atomInstance(36).visible, "frac 1.5 lies outside [0,1] and is not a molecule atom")
+    }
+
+    @Test
+    fun moleculeExtendSupercellClosedInterval() {
+        // 显示用超胞(2×1×1):显示范围 [0,2] 闭区间。primary 覆盖 [0,2)³(第 2 晶胞的
+        // X 是 primary,isShell=false → 无条件显示);超胞顶面 frac=2.0 的边界原子属于
+        // 闭区间 [0,2] → 显示(displayEx 从 primary cellOffset 推断为 (2,1,1))。
+        val atoms = listOf(
+            atom(31, "X", "X", 0.5, 0.5, 0.25),                                  // (2,2,1) 第 1 晶胞
+            atom(32, "Y", "Y", 0.5, 0.5, 0.75),                                  // (2,2,3)
+            atom(33, "X", "X", 1.5, 0.5, 0.25, offset = Int3(1, 0, 0)),           // (6,2,1) 第 2 晶胞 primary
+            atom(34, "Q", "Q", 2.0, 0.5, 1.0, offset = Int3(2, 0, 1), shell = true, boundary = true),  // (8,2,4) 超胞顶面 frac x=2.0
+            atom(35, "R", "R", 2.5, 0.5, 0.5, offset = Int3(2, 0, 0), shell = true),  // (10,2,2) frac 2.5 超出
+        )
+        val pBonds = listOf(bond(31, 32, "X", "Y"))
+        val mol = Molecule(
+            "XY",
+            listOf(
+                MoleculeAtom(31, "X", Species("X"), CartesianCoordinate(2.0, 2.0, 1.0), siteId = "X"),
+                MoleculeAtom(32, "Y", Species("Y"), CartesianCoordinate(2.0, 2.0, 3.0), siteId = "Y"),
+            ),
+            listOf(MoleculeBond(31, 32)),
+        )
+        val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(mol)), pBonds, atoms)
+        assertTrue(scene.atomInstance(31).visible)
+        assertTrue(scene.atomInstance(32).visible)
+        assertTrue(scene.atomInstance(33).visible, "second-cell primary is displayed (supercell)")
+        assertTrue(scene.atomInstance(34).visible, "supercell top face frac x=2.0 is inside the closed [0,2] range")
+        assertFalse(scene.atomInstance(35).visible, "frac 2.5 lies outside the supercell [0,2] range and is not a molecule atom")
+    }
+
+    @Test
     fun moleculeExtendShowsOnlyInCellMoleculeExtension() {
         // 显示范围 = 单胞 0-1a:只显示单胞内分子(t=0 物理位置,含跨胞延伸),不显示任何
         // 相邻晶胞映像。分子 A 的 Z2 跨 z 边界(物理 z=1.03 → 场景 43 显示);分子 B 的

@@ -102,6 +102,8 @@ class CrystalSceneBuilder {
         // 否则相邻分子的边界映像会被误显示为"该分子的一部分")。周期映像覆盖 ±1 晶胞:
         // 分子 M 的映像 M+t 与单胞相交 ⟺ ∃ 分子原子 frac + t ∈ [0,1]³ —— 这些映像都要
         // 完整显示(如尿素分子跨晶胞,(1,0.5)/(0.5,1)/上下底面的部分是相邻映像)。
+        // 分子展开归属/显示范围数据(见归属块)。
+        var displayEx = Int3(1, 1, 1)
         val moleculePositions: List<List<Vec3>>
         // 每分子的显示映像原子(MoleculeAtom.id → 映像物理位置),供动态原子创建复用。
         val moleculeImageAtoms: List<List<Pair<Int, Vec3>>>
@@ -139,6 +141,14 @@ class CrystalSceneBuilder {
                 neighbors += adj
             }
             moleculeNeighbors = neighbors
+            // 显示范围边界:[0,ex]×[0,ey]×[0,ez] 闭区间(单胞 = [0,1]³;显示用超胞 =
+            // [0,N]³)。primary 的 cellOffset ∈ [0,ex)³,最大值 +1 即闭区间上界;结构性
+            // 超胞(晶胞本身经 3×3 变换扩大)的 primary 仍 ∈ [0,1)³ → (1,1,1)。
+            displayEx = Int3(
+                (analysis.atoms.maxOfOrNull { if (it.isShell) 0 else it.cellOffset.x } ?: 0) + 1,
+                (analysis.atoms.maxOfOrNull { if (it.isShell) 0 else it.cellOffset.y } ?: 0) + 1,
+                (analysis.atoms.maxOfOrNull { if (it.isShell) 0 else it.cellOffset.z } ?: 0) + 1,
+            )
         } else {
             moleculeIndexByRepId = emptyMap()
             moleculeSiteIds = emptyList()
@@ -174,6 +184,14 @@ class CrystalSceneBuilder {
                 !options.moleculeExtend -> !atom.isShell || atom.isBoundaryImage || atom.id in externallyVisible
                 // 分子展开:单胞内/边界映像按原逻辑(hiddenSites 已过滤)。
                 !atom.isShell || atom.isBoundaryImage -> true
+                // [0,1] 闭区间(超胞同理 [0,ex]):显示范围 [0,ex]×[0,ey]×[0,ez] 内的
+                // 原子(含 x/y/z=1 面、超胞 ex 面上的边界原子)直接显示——用户要求
+                // 单胞闭区间内的所有原子(含顶面 frac=1 的原子)都属于展开范围。
+                atom.fractionalCoordinate.let { f ->
+                    f.x in -1e-6..(displayEx.x + 1e-6) &&
+                        f.y in -1e-6..(displayEx.y + 1e-6) &&
+                        f.z in -1e-6..(displayEx.z + 1e-6)
+                } -> true
                 // 分子展开:外部壳层原子显示 ⟺ 其位置精确落在某可见分子的原子物理坐标上
                 // (完整分子 = 分子全部原子的物理位置;相邻分子的边界映像不误显示)。
                 else -> {
