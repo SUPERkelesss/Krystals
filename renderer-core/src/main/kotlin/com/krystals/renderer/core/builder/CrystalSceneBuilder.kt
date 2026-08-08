@@ -21,7 +21,6 @@ import com.krystals.crystal.core.periodic.Int3
 import com.krystals.crystal.core.periodic.PeriodicBoundary
 import kotlin.math.ceil
 import kotlin.math.floor
-import kotlin.math.max
 import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
@@ -59,9 +58,10 @@ data class SceneBuildOptions(
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val environment: RenderEnvironment = RenderEnvironment(),
     val structuralExpansion: Boolean = false,
-    // Per molecule-extend: show whole molecules across the cell. When enabled, external-shell
-    // atoms and cross-cell bonds render when their molecule (by MoleculeAtom id == primary
-    // AtomImage id) has at least one visible in-cell atom, replacing the per-rule extend flags.
+    // Per molecule-extend: any molecule image intersecting the display region [0,ex]³ — in any
+    // direction, negative sides included — is rendered whole (atoms, dynamic atoms and molecule
+    // bonds). Hydrogen bonds render when both endpoint spheres are visible; they never trigger
+    // molecule expansion (the molecule topology channel contains no hbonds).
     val moleculeExtend: Boolean = false,
     val molecules: List<Molecule> = emptyList(),
 ) {
@@ -108,12 +108,12 @@ class CrystalSceneBuilder {
         val moleculeIndexByRepId: Map<Long, Int>
         val moleculeSiteIds: List<Set<String>>
         val repBySiteId: Map<String, List<AtomImage>>
-        // 分子原子物理位置(含所有与单胞相交的周期映像),用于外部壳层原子的精确归属:
-        // 壳层原子显示 ⟺ 其位置精确落在某可见分子映像的原子物理坐标上(而非仅 rep 归属,
-        // 否则相邻分子的边界映像会被误显示为"该分子的一部分")。周期映像覆盖 ±1 晶胞:
-        // 分子 M 的映像 M+t 与单胞相交 ⟺ ∃ 分子原子 frac + t ∈ [0,1]³ —— 这些映像都要
-        // 完整显示(如尿素分子跨晶胞,(1,0.5)/(0.5,1)/上下底面的部分是相邻映像)。
-        // 分子展开归属/显示范围数据(见归属块)。
+        // 分子原子物理位置(含任一方向与显示区相交的周期映像),用于外部壳层原子的精确
+        // 归属:壳层原子显示 ⟺ 其位置精确落在某可见分子映像的原子物理坐标上(而非仅 rep
+        // 归属,否则相邻分子的边界映像会被误显示为"该分子的一部分")。映像 M+t 与显示区
+        // [0,ex]³ 相交 ⟺ min+t ≤ ex 且 max+t ≥ 0,不限正负 —— 这些映像都要完整显示
+        // (如尿素分子跨晶胞,(1,0.5)/(0.5,1)/上下底面的部分是相邻映像;低对称晶胞的
+        // 负侧钻入映像同样补全)。分子展开归属/显示范围数据(见归属块)。
         var displayEx = Int3(1, 1, 1)
         val moleculePositions: List<List<Vec3>>
         // 每分子的显示映像原子(MoleculeAtom.id → 映像物理位置),供动态原子创建复用。
@@ -138,6 +138,15 @@ class CrystalSceneBuilder {
             moleculeIndexByRepId = repIndex
             moleculeSiteIds = perMolSiteIds.map { it.toSet() }
             repBySiteId = repAtoms.groupBy { it.siteId }
+            // 显示范围边界:[0,ex]×[0,ey]×[0,ez] 闭区间(单胞 = [0,1]³;显示用超胞 =
+            // [0,N]³)。primary 的 cellOffset ∈ [0,ex)³,最大值 +1 即闭区间上界;结构性
+            // 超胞(晶胞本身经 3×3 变换扩大)的 primary 仍 ∈ [0,1)³ → (1,1,1)。
+            // 必须先于映像生成计算:全方向 t 范围公式依赖 [0,ex] 上界。
+            displayEx = Int3(
+                (analysis.atoms.maxOfOrNull { if (it.isShell) 0 else it.cellOffset.x } ?: 0) + 1,
+                (analysis.atoms.maxOfOrNull { if (it.isShell) 0 else it.cellOffset.y } ?: 0) + 1,
+                (analysis.atoms.maxOfOrNull { if (it.isShell) 0 else it.cellOffset.z } ?: 0) + 1,
+            )
             val images = options.molecules.map { m ->
                 // 按连通分量(物理分子/笼)分组:合并条目(如 C60 的 240 原子 = 4 笼)必须
                 // 逐笼生成映像,否则 4 笼被捆成一个整体生成 8 个整体映像 → 4×8=32 个笼
@@ -162,8 +171,7 @@ class CrystalSceneBuilder {
                     }
                     components += comp
                 }
-                // 每个分量(物理笼)独立计算与 [0,ex] 显示范围相交的正侧周期映像:
-                // C60 角笼 → t ∈ {0,1}³ = 8 顶点映像;面心笼 → 单轴 t ∈ {0,1} = 6 面心映像。
+                // 每个分量(物理笼)独立计算与 [0,ex] 显示区相交的全方向周期映像。
                 components.flatMap { comp ->
                     val fr = comp.map {
                         it.id to structure.lattice.toFractional(CartesianCoordinate(it.position.x, it.position.y, it.position.z))
@@ -171,9 +179,12 @@ class CrystalSceneBuilder {
                     val minX = fr.minOf { it.second.x }; val maxX = fr.maxOf { it.second.x }
                     val minY = fr.minOf { it.second.y }; val maxY = fr.maxOf { it.second.y }
                     val minZ = fr.minOf { it.second.z }; val maxZ = fr.maxOf { it.second.z }
-                    val txRange = max(0, ceil(-maxX + 1e-6).toInt())..floor(displayEx.x - minX - 1e-6).toInt()
-                    val tyRange = max(0, ceil(-maxY + 1e-6).toInt())..floor(displayEx.y - minY - 1e-6).toInt()
-                    val tzRange = max(0, ceil(-maxZ + 1e-6).toInt())..floor(displayEx.z - minZ - 1e-6).toInt()
+                    // 全方向相交映像:映像 M+t 与 [0,ex] 显示区相交 ⟺ min+t ≤ ex 且
+                    // max+t ≥ 0 → t ∈ [ceil(-max), floor(ex-min)],不限正负(低对称
+                    // 晶胞的负侧钻入映像由此补全;C60 角笼/面心笼 t∈{0,1}³ 不变)。
+                    val txRange = ceil(-maxX + 1e-6).toInt()..floor(displayEx.x - minX - 1e-6).toInt()
+                    val tyRange = ceil(-maxY + 1e-6).toInt()..floor(displayEx.y - minY - 1e-6).toInt()
+                    val tzRange = ceil(-maxZ + 1e-6).toInt()..floor(displayEx.z - minZ - 1e-6).toInt()
                     val result = mutableListOf<Pair<Int, Vec3>>()
                     for (tx in txRange) for (ty in tyRange) for (tz in tzRange) {
                         for ((id, f) in fr) {
@@ -198,14 +209,6 @@ class CrystalSceneBuilder {
                 neighbors += adj
             }
             moleculeNeighbors = neighbors
-            // 显示范围边界:[0,ex]×[0,ey]×[0,ez] 闭区间(单胞 = [0,1]³;显示用超胞 =
-            // [0,N]³)。primary 的 cellOffset ∈ [0,ex)³,最大值 +1 即闭区间上界;结构性
-            // 超胞(晶胞本身经 3×3 变换扩大)的 primary 仍 ∈ [0,1)³ → (1,1,1)。
-            displayEx = Int3(
-                (analysis.atoms.maxOfOrNull { if (it.isShell) 0 else it.cellOffset.x } ?: 0) + 1,
-                (analysis.atoms.maxOfOrNull { if (it.isShell) 0 else it.cellOffset.y } ?: 0) + 1,
-                (analysis.atoms.maxOfOrNull { if (it.isShell) 0 else it.cellOffset.z } ?: 0) + 1,
-            )
         } else {
             moleculeIndexByRepId = emptyMap()
             moleculeSiteIds = emptyList()
@@ -236,93 +239,34 @@ class CrystalSceneBuilder {
             return siteIds.isNotEmpty() && siteIds.all { it in options.hiddenSiteIds }
         }
 
-        /** 分子是否跨出 [0,ex] 显示范围边界(跨胞分子 → 其周期映像补全显示)。 */
-        fun moleculeCrossesCell(mol: Int): Boolean {
-            return moleculePositions[mol].any { p ->
-                val f = structure.lattice.toFractional(CartesianCoordinate(p.x, p.y, p.z))
-                f.x < -1e-6 || f.y < -1e-6 || f.z < -1e-6 ||
-                    f.x > displayEx.x + 1e-6 || f.y > displayEx.y + 1e-6 || f.z > displayEx.z + 1e-6
-            }
-        }
-
-        fun atomVisible(atom: AtomImage): Boolean {
-            return when {
-                atom.siteId in options.hiddenSiteIds -> false
-                !options.moleculeExtend -> !atom.isShell || atom.isBoundaryImage || atom.id in externallyVisible
-                // 分子展开:原胞 primary 与边界映像恒显 —— 分子在晶胞内的原子(含包裹
-                // 副本)始终可见,分子以原胞位置完整呈现。例外:包裹副本 —— primary 的
-                // 物理位置(frac + cellOffset)不在其分子拓扑坐标上时,说明该原子被跨胞
-                // 包裹(如尿素分子 B 的 H2 物理 z=1.028 被包裹到 z=0.028),球不在此处
-                // 渲染(孤立球劈开分子),由分子映像/壳层在物理位置承载。
-                !atom.isShell || atom.isBoundaryImage -> {
-                    if (atom.isShell) true
-                    else {
-                        // 包裹副本判定:primary 实际位置(frac+cellOffset)与其分子拓扑
-                        // 位置(未包裹)不一致时,说明原子被跨胞包裹(如尿素分子 B 的
-                        // H2 物理 z=1.028 被包裹到 z=0.028)。仅当拓扑位置落在该 primary
-                        // 实际胞的正侧(> floor(phys)+1)时隐藏球 —— 正侧映像/壳层在
-                        // 物理位置承载,避免分子被劈出孤立球;负侧跨界(如分子 A 的 H2
-                        // 物理 z=-0.028 包裹到 z=0.972)无映像承载,保留包裹副本。
-                        val rep = repIdOf(atom) ?: return true
-                        val ma = moleculeAtomById[rep] ?: return true
-                        val topo = Vec3(ma.position.x, ma.position.y, ma.position.z)
-                        val topoFrac = structure.lattice.toFractional(CartesianCoordinate(topo.x, topo.y, topo.z))
-                        val phys = atom.fractionalCoordinate + atom.cellOffset
-                        val physCart = structure.lattice.toCartesian(phys).toVec3()
-                        if (distance(topo, physCart) < 1e-3) {
-                            true
-                        } else {
-                            !(topoFrac.x > Math.floor(phys.x) + 1 + 1e-6 ||
-                                topoFrac.y > Math.floor(phys.y) + 1 + 1e-6 ||
-                                topoFrac.z > Math.floor(phys.z) + 1 + 1e-6)
-                        }
-                    }
-                }
-                // 非分子壳层:[0,ex] 闭区间内显示(顶面 frac=1 规则,5722d2e)。
-                moleculeIndexOf(atom) == null && atom.fractionalCoordinate.let { f ->
-                    f.x in -1e-6..(displayEx.x + 1e-6) &&
-                        f.y in -1e-6..(displayEx.y + 1e-6) &&
-                        f.z in -1e-6..(displayEx.z + 1e-6)
-                } -> true
-                // 跨胞分子的补全映像:分子跨出 [0,ex] 边界时,其向正侧(+x/+y/+z)的
-                // 周期映像完整显示 —— C60 角笼的 8 个顶点映像((0..1)³ 组合)+ 面心笼
-                // 的 6 个面心映像由此补全(8 顶点 + 6 面心 = 14 个完整 C60);负侧拷贝
-                // (如相邻分子向 -z 的重复映像)不显示。晶胞内的映像位置由 primary 承载。
-                atom.fractionalCoordinate.let { f ->
-                    (f.x < -1e-6 || f.x > displayEx.x + 1e-6 ||
-                        f.y < -1e-6 || f.y > displayEx.y + 1e-6 ||
-                        f.z < -1e-6 || f.z > displayEx.z + 1e-6) &&
-                        f.x in -1.0 - 1e-6..(displayEx.x + 1.0 + 1e-6) &&
-                        f.y in -1.0 - 1e-6..(displayEx.y + 1.0 + 1e-6) &&
-                        f.z in -1.0 - 1e-6..(displayEx.z + 1.0 + 1e-6)
-                } -> {
-                    val mol = moleculeIndexOf(atom) ?: return false
-                    if (moleculeFullyHidden(mol) || !moleculeCrossesCell(mol)) return false
-                    // 映像平移基点 = 该原子原胞代表在分子中的物理位置;仅补正侧平移。
-                    val rep = repBySiteId[atom.siteId]?.firstOrNull { isSameAtomPeriodicImage(it, atom) }
-                        ?: return false
-                    val ma = moleculeAtomById[rep.id.toInt()] ?: return false
-                    val base = structure.lattice.toFractional(CartesianCoordinate(ma.position.x, ma.position.y, ma.position.z))
-                    // 壳层 frac 是绝对坐标(getShellAtom: q.frac + off),primary 才是包裹值。
-                    // 不能再加 cellOffset(双重偏移会掩盖负向壳层,如 H2 的 (0,0,-1) 映像)。
-                    val f = atom.fractionalCoordinate
-                    val t = Vec3(
-                        f.x - base.x,
-                        f.y - base.y,
-                        f.z - base.z,
-                    )
-                    t.x >= -1e-6 && t.y >= -1e-6 && t.z >= -1e-6
-                }
-                else -> false
-            }
-        }
-
         /** 原子是否落在其所属分子的原子物理坐标上(跨胞键按此判定,端点球可能隐藏)。 */
         fun atMoleculePosition(atom: AtomImage): Boolean {
             val mol = moleculeIndexOf(atom) ?: return false
             if (moleculeFullyHidden(mol)) return false
             val pos = atom.cartesianCoordinate.toVec3()
             return moleculePositions[mol].any { distance(it, pos) < 1e-3 }
+        }
+
+        fun atomVisible(atom: AtomImage): Boolean {
+            if (atom.siteId in options.hiddenSiteIds) return false
+            if (!options.moleculeExtend) {
+                return !atom.isShell || atom.isBoundaryImage || atom.id in externallyVisible
+            }
+            // 分子展开(全方向完整映像):原胞 primary 与边界映像恒显 —— 其位置必被某
+            // 相交映像覆盖(含负侧),不再有"孤球"问题,包裹副本特判随之取消。
+            if (!atom.isShell || atom.isBoundaryImage) return true
+            val mol = moleculeIndexOf(atom)
+            if (mol == null) {
+                // 非分子壳层:[0,ex] 闭区间内显示(顶面 frac=1 规则,5722d2e)。
+                return atom.fractionalCoordinate.let { f ->
+                    f.x in -1e-6..(displayEx.x + 1e-6) &&
+                        f.y in -1e-6..(displayEx.y + 1e-6) &&
+                        f.z in -1e-6..(displayEx.z + 1e-6)
+                }
+            }
+            // 分子壳层:位置落在某可见分子映像的原子物理坐标上即显示
+            // (atMoleculePosition 内部已查 moleculeFullyHidden)。
+            return atMoleculePosition(atom)
         }
 
         fun atomMaterial(atom: AtomImage): Material =
@@ -551,6 +495,27 @@ class CrystalSceneBuilder {
             if (b.species.symbol == "H") covalentPartnersByAtom.getOrPut(b.id) { mutableListOf() } += a
         }
         val seenHbondKeys = mutableSetOf<Triple<Any, Any, Triple<Int, Int, Int>>>()
+        // Per molecule-extend(决策 2):氢键端点位置有可见球才显示。可见球位置 =
+        // 可见场景原子球 ∪ 显示带内、位点未隐藏、分子未整隐的映像原子位置
+        // (映像位置必有球 —— 场景原子或动态原子承载;动态原子在后方补全块发射,
+        // 此处仅借其位置做端点判定,无需调整 pass 顺序)。
+        val visibleBallPositions: List<Vec3> = if (options.moleculeExtend) {
+            val fromScene = objects.filterIsInstance<AtomInstance>().filter { it.visible }
+                .map { it.atom.cartesianCoordinate.toVec3() }
+            val fromImages = moleculeImageAtoms.flatMapIndexed { mol, imgs ->
+                if (moleculeFullyHidden(mol)) emptyList()
+                else imgs.filter { (maId, _) ->
+                    moleculeAtomById[maId]?.siteId !in options.hiddenSiteIds
+                }.map { it.second }
+            }.filter { p ->
+                val f = structure.lattice.toFractional(CartesianCoordinate(p.x, p.y, p.z))
+                f.x in -1.0 - 1e-6..(displayEx.x + 1.0 + 1e-6) &&
+                    f.y in -1.0 - 1e-6..(displayEx.y + 1.0 + 1e-6) &&
+                    f.z in -1.0 - 1e-6..(displayEx.z + 1.0 + 1e-6)
+            }
+            fromScene + fromImages
+        } else emptyList()
+        fun hasVisibleBallAt(p: Vec3): Boolean = visibleBallPositions.any { distance(it, p) < 1e-3 }
         analysis.hbonds.forEachIndexed { index, hbond ->
             val start = atomById[hbond.donorId]
                 ?: error("hbond ${hbond.donorId}-${hbond.acceptorId} references missing atom ${hbond.donorId}")
@@ -578,9 +543,12 @@ class CrystalSceneBuilder {
             val endPos = rawEnd - dir * endRadius
 
             val externalAllowed = when {
-                // 分子模式不渲染氢键:分子间氢键不属于分子显示(只需延伸化学键/共价
-                // 拓扑)。非分子模式照旧渲染氢键(晶胞内分子间 N-H···O 等)。
-                options.moleculeExtend -> false
+                // 分子展开:两端球都可见才显示(不漏 —— 分子完整化后胞内分子与其映像
+                // 间的氢键两端必有球;不悬空 —— 指向未显示胞外原子的氢键不画;
+                // 氢键永不触发分子展开 —— 需求 2,分子拓扑通道本就不含氢键)。
+                options.moleculeExtend ->
+                    hasVisibleBallAt(start.cartesianCoordinate.toVec3()) &&
+                        hasVisibleBallAt(end.cartesianCoordinate.toVec3())
                 !start.isShell && !end.isShell -> true
                 // Same-atom periodic self-images are never rendered (see normal-bond pass).
                 isSameAtomPeriodicImage(start, end) -> false
