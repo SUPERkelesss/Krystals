@@ -665,7 +665,9 @@ class CrystalSceneBuilderMoleculeTest {
         // (Y2'@0.75 落在晶胞内,映像 t=1 与显示范围相交 → 完整补全),以及分子 A 的
         // t=(0,0,-1) 映像 Z1@(2,2,-0.12)(场景无该位置原子)。
         val dynY = scene.atoms.filter { it.id.startsWith("molatom:") }.map { it.atom.cartesianCoordinate.z }.sorted()
-        assertEquals(listOf(-1.0, -0.12, 5.0), dynY, "近侧/负侧相交映像产生动态原子")
+        dynY.zip(listOf(-1.0, -0.12, 5.0)).forEach { (actual, expected) ->
+            assertEquals(expected, actual, 1e-9)
+        }
     }
 
     @Test
@@ -703,11 +705,13 @@ class CrystalSceneBuilderMoleculeTest {
         // (0.8,2,2) 恰是 Y 的 t=-5 映像 → 挂在该映像上显示)。
         assertTrue(scene.atomInstance(31).visible)
         assertTrue(scene.atomInstance(32).visible, "wrapped copy of far-cell Y sits on the t=-5 image")
-        // 动态原子与 X 的分子键补齐(键长 = |(0.4,2,2)-(20.8,2,2)| = 20.4)。
-        val molBond = scene.bonds.firstOrNull { it.id.startsWith("molbond:") }
+        // 动态原子与 X 的分子键补齐(键长 = |(0.4,2,2)-(20.8,2,2)| = 20.4;补齐块
+        // dynamicAtomsByRep 是 HashMap,发射顺序不定,按真实键长查找)。
+        val molBond = scene.bonds.firstOrNull {
+            it.id.startsWith("molbond:") && kotlin.math.abs(distance(it.start, it.end) - 20.4) < 1e-9
+        }
         assertNotNull(molBond, "dynamic atom's molecule bond should be completed")
         assertTrue(molBond.visible)
-        assertEquals(20.4, distance(molBond.start, molBond.end), 1e-9)
     }
 
     @Test
