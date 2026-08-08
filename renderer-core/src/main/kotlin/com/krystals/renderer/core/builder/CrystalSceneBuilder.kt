@@ -495,6 +495,27 @@ class CrystalSceneBuilder {
             if (b.species.symbol == "H") covalentPartnersByAtom.getOrPut(b.id) { mutableListOf() } += a
         }
         val seenHbondKeys = mutableSetOf<Triple<Any, Any, Triple<Int, Int, Int>>>()
+        // Per molecule-extend(决策 2):氢键端点位置有可见球才显示。可见球位置 =
+        // 可见场景原子球 ∪ 显示带内、位点未隐藏、分子未整隐的映像原子位置
+        // (映像位置必有球 —— 场景原子或动态原子承载;动态原子在后方补全块发射,
+        // 此处仅借其位置做端点判定,无需调整 pass 顺序)。
+        val visibleBallPositions: List<Vec3> = if (options.moleculeExtend) {
+            val fromScene = objects.filterIsInstance<AtomInstance>().filter { it.visible }
+                .map { it.atom.cartesianCoordinate.toVec3() }
+            val fromImages = moleculeImageAtoms.flatMapIndexed { mol, imgs ->
+                if (moleculeFullyHidden(mol)) emptyList()
+                else imgs.filter { (maId, _) ->
+                    moleculeAtomById[maId]?.siteId !in options.hiddenSiteIds
+                }.map { it.second }
+            }.filter { p ->
+                val f = structure.lattice.toFractional(CartesianCoordinate(p.x, p.y, p.z))
+                f.x in -1.0 - 1e-6..(displayEx.x + 1.0 + 1e-6) &&
+                    f.y in -1.0 - 1e-6..(displayEx.y + 1.0 + 1e-6) &&
+                    f.z in -1.0 - 1e-6..(displayEx.z + 1.0 + 1e-6)
+            }
+            fromScene + fromImages
+        } else emptyList()
+        fun hasVisibleBallAt(p: Vec3): Boolean = visibleBallPositions.any { distance(it, p) < 1e-3 }
         analysis.hbonds.forEachIndexed { index, hbond ->
             val start = atomById[hbond.donorId]
                 ?: error("hbond ${hbond.donorId}-${hbond.acceptorId} references missing atom ${hbond.donorId}")
@@ -522,7 +543,12 @@ class CrystalSceneBuilder {
             val endPos = rawEnd - dir * endRadius
 
             val externalAllowed = when {
-                options.moleculeExtend -> false
+                // 分子展开:两端球都可见才显示(不漏 —— 分子完整化后胞内分子与其映像
+                // 间的氢键两端必有球;不悬空 —— 指向未显示胞外原子的氢键不画;
+                // 氢键永不触发分子展开 —— 需求 2,分子拓扑通道本就不含氢键)。
+                options.moleculeExtend ->
+                    hasVisibleBallAt(start.cartesianCoordinate.toVec3()) &&
+                        hasVisibleBallAt(end.cartesianCoordinate.toVec3())
                 !start.isShell && !end.isShell -> true
                 // Same-atom periodic self-images are never rendered (see normal-bond pass).
                 isSameAtomPeriodicImage(start, end) -> false
