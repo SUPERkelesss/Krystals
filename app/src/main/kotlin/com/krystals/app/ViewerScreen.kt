@@ -214,7 +214,8 @@ internal fun ViewerScreen(
             // Priority is higher than floating-ball secondary menu retraction.
             tab.bondDrawMode != BondDrawMode.NONE || tab.atomEditMode != AtomEditMode.NONE || persistentMessage != null -> {
                 tab.pendingEditorTab = when {
-                    tab.bondDrawMode != BondDrawMode.NONE -> "bonds"
+                    // Per v0.8.x: return to the tab matching the draw target type.
+                    tab.bondDrawMode != BondDrawMode.NONE -> if (tab.bondDrawTargetIsHbond) "hbonds" else "bonds"
                     tab.atomEditMode != AtomEditMode.NONE -> "atoms"
                     else -> null
                 }
@@ -515,11 +516,14 @@ internal fun ViewerScreen(
                                 } else {
                                     val firstCartesian = tab.bondDrawFirstCartesian!!
                                     val dist = (atom.cartesianCoordinate.toVec3() - firstCartesian).length()
+                                    // Per v0.8.x: capture the target type before the flag resets,
+                                    // then auto-navigate to the matching tab.
+                                    val drawTargetIsHbond = tab.bondDrawTargetIsHbond
                                     tab.pendingBondDrawRule = BondRule(
                                         tab.bondDrawFirstSiteId!!, atom.siteId,
                                         0.1, dist + 0.1,
                                         BondRuleSource.CUSTOM,
-                                        isHBond = tab.bondDrawTargetIsHbond,
+                                        isHBond = drawTargetIsHbond,
                                     )
                                     tab.bondDrawMode = BondDrawMode.NONE
                                     tab.bondDrawTargetIsHbond = false
@@ -527,8 +531,8 @@ internal fun ViewerScreen(
                                     tab.bondDrawFirstCartesian = null
                                     tab.selectedAtomIds = emptyList()
                                     persistentMessage = null
-                                    // Per v0.7.1: auto-navigate to the bonds tab.
-                                    tab.pendingEditorTab = "bonds"
+                                    // Per v0.7.1: auto-navigate to the bond tab matching the draw target.
+                                    tab.pendingEditorTab = if (drawTargetIsHbond) "hbonds" else "bonds"
                                     tab.editorOpen = true
                                 }
                                 true
@@ -543,11 +547,13 @@ internal fun ViewerScreen(
                                 } else {
                                     val siteA = tab.bondDrawFirstSiteId!!
                                     val siteB = atom.siteId
+                                    // Per v0.8.x: capture the target type before the flag resets.
+                                    val deleteTargetIsHbond = tab.bondDrawTargetIsHbond
                                     // Per v0.8.x: hbond rules carry the "\u0000hbond" key suffix -
                                     // match by the draw target type so deleting an H-bond never
                                     // hits a normal rule for the same site pair (or vice versa).
                                     val key = listOf(siteA, siteB).sorted().joinToString("\u0000") +
-                                        if (tab.bondDrawTargetIsHbond) "\u0000hbond" else ""
+                                        if (deleteTargetIsHbond) "\u0000hbond" else ""
                                     val matchingRule = tab.bondConfiguration.rules.firstOrNull { it.key == key }
                                     if (matchingRule != null) {
                                         tab.recordHistory()
@@ -565,8 +571,8 @@ internal fun ViewerScreen(
                                     tab.bondDrawFirstCartesian = null
                                     tab.selectedAtomIds = emptyList()
                                     persistentMessage = null
-                                    // Per v0.7.1: auto-navigate to the bonds tab.
-                                    tab.pendingEditorTab = "bonds"
+                                    // Per v0.7.1: auto-navigate to the bond tab matching the draw target.
+                                    tab.pendingEditorTab = if (deleteTargetIsHbond) "hbonds" else "bonds"
                                     tab.editorOpen = true
                                 }
                                 true
