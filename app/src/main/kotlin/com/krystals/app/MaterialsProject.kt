@@ -183,6 +183,9 @@ object MaterialsProject {
             val cif = buildCif(materialId, structureJson, sgSymbol, sgNumber)
             target.parentFile?.mkdirs()
             target.writeText(cif, Charsets.UTF_8)
+            // Per v0.8.43: keep the 6-step open trace complete — MP opens build+parse
+            // here, so log the same 1/6..3/6 steps the file-picker path logs in loadUri.
+            debugLog(CIF_OPEN_TAG) { "OpenCIF 1/6: CIF text built (${cif.length} chars)" }
 
             // Per v0.8.27 (spglib path): when spglib succeeded the cell is already the
             // conventional+refined result, so the legacy conversion/restore pipeline is
@@ -194,6 +197,8 @@ object MaterialsProject {
                 cif,
                 autoConvertConventional = refined == null && autoConvertConventional,
             )
+            debugLog(CIF_OPEN_TAG) { "OpenCIF 2/6: document parsed (${CifCodec.structuralBlockIndices(parsed.document).size} blocks)" }
+            debugLog(CIF_OPEN_TAG) { "OpenCIF 3/6: structure parsed (${parsed.structure.sites.size} sites, sg ${parsed.structure.spaceGroup.symbol})" }
             val finalStructure = if (refined != null) {
                 parsed.structure
             } else if (CrystalEditor.isConventionalCell(parsed.structure)) {

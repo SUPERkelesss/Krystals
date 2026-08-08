@@ -203,7 +203,12 @@ object PresetRepository {
             PresetSource.BUNDLED -> context.assets.open(entry.assetPath!!).bufferedReader().use { it.readText() }
             PresetSource.USER -> entry.file!!.readText()
         }
+        debugLog(CIF_OPEN_TAG) { "OpenCIF 1/6: file read done (${text.length} chars)" }
         val parsed = CifCodec.parseStructure(text, autoConvertConventional = autoConvertConventional)
+        // Per v0.8.43: keep the 6-step open trace complete — the file-picker path logs
+        // 1/6..3/6 in loadUri; preset opens parse here, so log the same three steps.
+        debugLog(CIF_OPEN_TAG) { "OpenCIF 2/6: document parsed (${CifCodec.structuralBlockIndices(parsed.document).size} blocks)" }
+        debugLog(CIF_OPEN_TAG) { "OpenCIF 3/6: structure parsed (${parsed.structure.sites.size} sites, sg ${parsed.structure.spaceGroup.symbol})" }
         // Per v0.2: only synthesize bond rules when the CIF has none of its own.
         // Per v0.5.0: rule synthesis (smart-ionic) is deferred to the caller's async path so the UI
         // can show a "computing" overlay — return the parsed structure as-is here.

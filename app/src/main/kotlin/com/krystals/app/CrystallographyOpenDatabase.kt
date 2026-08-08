@@ -389,7 +389,12 @@ object CrystallographyOpenDatabase {
                 if (!cif.contains(Regex("(?im)^\\s*data_"))) error("COD did not return a CIF for $fileId")
                 target.parentFile?.mkdirs()
                 target.writeText(cif, Charsets.UTF_8)
+                // Per v0.8.43: keep the 6-step open trace complete — network opens parse
+                // here, so log the same 1/6..3/6 steps the file-picker path logs in loadUri.
+                debugLog(CIF_OPEN_TAG) { "OpenCIF 1/6: CIF text retrieved (${cif.length} chars)" }
                 val parsed = CifCodec.parseStructure(cif, autoConvertConventional = autoConvertConventional)
+                debugLog(CIF_OPEN_TAG) { "OpenCIF 2/6: document parsed (${CifCodec.structuralBlockIndices(parsed.document).size} blocks)" }
+                debugLog(CIF_OPEN_TAG) { "OpenCIF 3/6: structure parsed (${parsed.structure.sites.size} sites, sg ${parsed.structure.spaceGroup.symbol})" }
                 debugLog("COD") { "downloadCif ok: $fileId -> ${parsed.structure.sites.size} sites, sg=${parsed.structure.spaceGroup.symbol}" }
                 // Per v0.5.0: bond-rule synthesis is deferred to the caller's async path so the UI
                 // can show a "computing" overlay — return the parsed structure as-is here.
