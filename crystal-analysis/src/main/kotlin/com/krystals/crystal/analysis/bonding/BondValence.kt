@@ -176,12 +176,18 @@ object BondValence {
         // symmetry-equivalent and share the same environment, so this just picks a representative
         // value while tolerating any edge-case variation).
         // Per v0.6.5: for anion sites, negate the BVS so the displayed s is negative.
+        // Per v0.8.43: a site with no BVS contribution (missing bvparm pair, e.g. Ca-C in CaC2)
+        // falls back to its resolved nominal valence so the atom-info window still shows s.
         val bySite = HashMap<String, Double>()
         for ((siteId, siteAtoms) in analysis.atomsBySiteId) {
             val values = siteAtoms.mapNotNull { bvsByAtom[it.id] }
             if (values.isNotEmpty()) {
                 val avg = values.average()
                 bySite[siteId] = if (siteValence[siteId]?.isAnion == true) -avg else avg
+            } else {
+                val sv = siteValence[siteId] ?: continue
+                val v = sv.valence ?: continue
+                bySite[siteId] = v.toDouble()
             }
         }
         return bySite
@@ -307,7 +313,17 @@ object BondValence {
 
         val candidates = PeriodicTable.cationValences(site.species.symbol)
             .filter { v -> PeriodicTable.bondValenceParam(site.species.symbol, v, anionElement, anionV) != null }
-        if (candidates.isEmpty()) return SiteValence(null, null, false)
+        if (candidates.isEmpty()) {
+            // No BVPARM pair exists for this (cation, anion) combination, so the BVS cannot be
+            // estimated (e.g. Ca in CaC2 — bvparm2020 has C4- anion parameters for As/B/Cu/Pd/Si/Sn
+            // but not for the alkaline-earth cations). Per v0.8.43: fall back to the cation's lowest
+            // tabulated valence so the atom-info window can still show a nominal s instead of
+            // omitting the line; radius stays null so smart-ionic rules keep the bonding radius
+            // and bond geometry is unchanged.
+            val fallbackV = PeriodicTable.cationValences(site.species.symbol).minOrNull()
+                ?: return SiteValence(null, null, false)
+            return SiteValence(null, fallbackV, isAnion = false)
+        }
 
         var bestV = candidates.first()
         var bestErr = Double.POSITIVE_INFINITY

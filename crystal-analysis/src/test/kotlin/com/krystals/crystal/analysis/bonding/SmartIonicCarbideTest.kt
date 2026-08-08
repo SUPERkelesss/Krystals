@@ -8,6 +8,7 @@ import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -44,6 +45,17 @@ class SmartIonicCarbideTest {
         assertTrue(r2.success, "BaO2-equivalent structure must resolve")
         assertTrue(r2.rules.any { setOf(it.siteA, it.siteB) == setOf("Ca", "O") },
             "oxide must produce an A-B rule")
+    }
+
+    @Test
+    fun cac2BondValenceSumsShowNominalValences() {
+        // bvparm2020 has no Ca-C(-4) pair, so the BVS sum cannot be computed for CaC2;
+        // the atom-info window must still show the resolved nominal valences
+        // (Ca +2, carbide C -4) instead of omitting the s = X.XX line entirely.
+        val cac2 = carbideStructure("Ca", "C")
+        val bvs = BondValence.bondValenceSums(cac2, BondConfiguration())
+        assertEquals(2.0, bvs["Ca"], "Ca must display its nominal valence +2")
+        assertEquals(-4.0, bvs["C"], "carbide C must display its nominal valence -4")
     }
 
     @Test
