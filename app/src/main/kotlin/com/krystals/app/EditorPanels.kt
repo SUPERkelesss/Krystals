@@ -48,9 +48,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -96,7 +93,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.setValue
 
-private enum class EditorTab { BASIC, ATOMS, BONDS, EXPANSION }
+// Per v0.8.x: H-bonds live in their own independent tab (after BONDS), shown only
+// when the structure contains hydrogen — no longer a sub-section inside BONDS.
+private enum class EditorTab { BASIC, ATOMS, BONDS, HBONDS, EXPANSION }
 
 
 @Composable
@@ -114,6 +113,7 @@ fun EditorPanel(
                 tab.editingSiteId != null -> EditorTab.ATOMS
                 tab.pendingEditorTab == "atoms" -> EditorTab.ATOMS
                 tab.pendingEditorTab == "bonds" -> EditorTab.BONDS
+                tab.pendingEditorTab == "hbonds" -> EditorTab.HBONDS
                 tab.pendingEditorTab == "expansion" -> EditorTab.EXPANSION
                 // Per v0.8.27: otherwise remember this tab's last sub-menu; a new tab
                 // (or never-opened) falls through to the first sub-menu (BASIC).
@@ -150,10 +150,15 @@ fun EditorPanel(
                     Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    listOf(
+                    // Per v0.8.x: the "氢键" tab appears only when the structure contains H —
+                    // an independent tab, not a sub-section of BONDS.
+                    val hbondsTab = if (tab.structure.sites.any { it.species.symbol == "H" }) {
+                        listOf(EditorTab.HBONDS to localized("氢键", "H-bonds"))
+                    } else emptyList()
+                    (listOf(
                         EditorTab.BASIC to stringResource(R.string.basic_info), EditorTab.ATOMS to stringResource(R.string.atoms),
-                        EditorTab.BONDS to stringResource(R.string.bonds), EditorTab.EXPANSION to stringResource(R.string.expand_cell),
-                    ).forEach { (kind, label) ->
+                        EditorTab.BONDS to stringResource(R.string.bonds),
+                    ) + hbondsTab + listOf(EditorTab.EXPANSION to stringResource(R.string.expand_cell))).forEach { (kind, label) ->
                         FilterChip(
                             selectedTab == kind,
                             onClick = {
@@ -173,6 +178,7 @@ fun EditorPanel(
                 EditorTab.BASIC -> BasicEditor(tab, onStructure, onMessage, onRunBondComputation)
                 EditorTab.ATOMS -> AtomEditor(tab, { closePanel() }, onStructure, onMessage, onRunBondComputation, onPersistentMessage)
                 EditorTab.BONDS -> BondEditor(tab, onStructure, onMessage, { closePanel() }, onPersistentMessage)
+                EditorTab.HBONDS -> HbondEditor(tab, onStructure, onMessage, { closePanel() }, onPersistentMessage)
                 EditorTab.EXPANSION -> ExpansionEditor(tab, onMessage, onRunBondComputation)
             }
         }
@@ -636,10 +642,6 @@ private fun PeriodicCell(w: androidx.compose.ui.unit.Dp, h: androidx.compose.ui.
     }
 }
 
-// Per v0.8.x: bond editor sub-sections — covalent bonds vs hydrogen bonds. The H-bond
-// section appears only when the structure contains hydrogen.
-private enum class BondSection { NORMAL, HBOND }
-
 @OptIn(ExperimentalMaterial3Api::class)
 
 @Composable
@@ -669,26 +671,12 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
     )
     val computingMessage = localized("计算中...", "Computing...")
     val epsilonHint = localized("max = rA + rB + ε，建议在 0.35–0.45 之间", "max = rA + rB + ε, suggested 0.35–0.45")
-    val rules = tab.bondConfiguration.rules
+    // Per v0.8.x: an H-bond rule must include at least one hydrogen atom.
+    val hbondMustIncludeHydrogenMessage = localized("氢键必须包含一个氢原子", "An H-bond must include a hydrogen atom")
     // Per v0.2.3: hide rules that produce no bond in the current structure (no atom pair within
     // the distance window), not just rules whose sites are gone.
-    // Per v0.5.2b: expand + grid once and reuse across all rules so MOF-scale cells don't freeze.
-    val bondGrid = remember(tab.structure) {
-        val atoms = SymmetryExpander.expand(tab.structure)
-        BondGrid(atoms, tab.structure, BondRuleMatching.estimateCellSize(tab.structure)) to atoms
-    }
-    val visibleRules = rules.filter { rule ->
-        BondRuleMatching.hasMatchingBond(
-            rule,
-            tab.structure,
-            tab.bondConfiguration,
-            bondGrid.second,
-            bondGrid.first,
-        )
-    }.distinctBy { it.key } // Per v0.5.4b: bondRules can carry duplicate site-pair keys (e.g. a large
-    // cell whose ASU has repeated site ids, or a smart-ionic regen that re-emitted a pair). The
-    // renderer dedups via associateBy, but LazyColumn's key must be unique — collapse duplicates
-    // here so opening 编辑-化学键 on a large cell no longer crashes with "Key was already used".
+    // Per v0.5.2b/v0.8.x: shared by BondEditor and HbondEditor via [visibleBondRules].
+    val visibleRules = visibleBondRules(tab)
 
     // Rebuild rules off the UI thread, showing a "computing" dialog while it runs.
     fun rebuildAsync(source: RadiusSource, epsilon: Double, skipConfirm: Boolean) {
@@ -726,49 +714,14 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
     }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        // Per v0.8.x: covalent / H-bond sub-sections. The H-bond section appears only when the
-        // structure contains hydrogen and sits after the covalent section. Both sections share
-        // the same New/Draw/Delete actions — the draw/delete target type flag
-        // (tab.bondDrawTargetIsHbond) is set before entering either flow.
-        val hasHydrogen = sites.any { it.species.symbol == "H" }
-        val covalentBondsLabel = localized("化学键", "Covalent bonds")
-        val hbondsLabel = localized("氢键", "H-bonds")
-        var bondSection by remember { mutableStateOf(BondSection.NORMAL) }
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-            val optionCount = if (hasHydrogen) 2 else 1
-            SegmentedButton(
-                selected = bondSection == BondSection.NORMAL,
-                onClick = { bondSection = BondSection.NORMAL },
-                shape = SegmentedButtonDefaults.itemShape(index = 0, count = optionCount),
-            ) { Text(covalentBondsLabel, maxLines = 1) }
-            if (hasHydrogen) {
-                SegmentedButton(
-                    selected = bondSection == BondSection.HBOND,
-                    onClick = { bondSection = BondSection.HBOND },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                ) { Text(hbondsLabel, maxLines = 1) }
-            }
-        }
-        // Per v0.5.0: "自动应用半径" (auto-apply radii) clears every bond rule and regenerates them
-        // from one of three radius sources (smart-ionic default / bonding / vdW).
-        // Per v0.7.1: "绘制" (draw) and "删除" (delete) buttons replace the old auto-apply button position.
-        // Auto-apply is now a compact row with a Switch + source selector + ε slider.
-        val isHbondSection = bondSection == BondSection.HBOND
-        val drawHint = localized(
-            if (isHbondSection) "点击成键的两个目标原子（氢键）" else "点击成键的两个目标原子",
-            if (isHbondSection) "Tap two atoms to bond (H-bond)" else "Tap two atoms to bond",
-        )
-        val deleteHint = localized(
-            if (isHbondSection) "点击要删除氢键的两个原子" else "点击要删除键的两个原子",
-            if (isHbondSection) "Tap two atoms to delete their H-bond" else "Tap two atoms to delete their bond",
-        )
+        // Per v0.8.x: BONDS is covalent-only now — H-bonds live in their own independent
+        // tab (HbondEditor). Draw/delete therefore always target the normal-bond type
+        // (bondDrawTargetIsHbond stays false).
+        val drawHint = localized("点击成键的两个目标原子", "Tap two atoms to bond")
+        val deleteHint = localized("点击要删除键的两个原子", "Tap two atoms to delete their bond")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                tab.bondDrawTargetIsHbond = isHbondSection
-                addOpen = true
-            }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建", "New")) }
+            Button(onClick = { addOpen = true }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建", "New")) }
             OutlinedButton(onClick = {
-                tab.bondDrawTargetIsHbond = isHbondSection
                 tab.bondDrawMode = BondDrawMode.DRAWING
                 tab.bondDrawFirstSiteId = null
                 tab.bondDrawFirstCartesian = null
@@ -777,7 +730,6 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
                 onDismiss()
             }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Create, null); Text(localized("绘制", "Draw")) }
             OutlinedButton(onClick = {
-                tab.bondDrawTargetIsHbond = isHbondSection
                 tab.bondDrawMode = BondDrawMode.DELETING
                 tab.bondDrawFirstSiteId = null
                 tab.bondDrawFirstCartesian = null
@@ -786,129 +738,78 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
                 onDismiss()
             }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Text(localized("删除", "Delete")) }
         }
-        if (bondSection == BondSection.NORMAL) {
-            // Per v0.7.1: label on first line, mode button + slider on second line.
-            var sliderEpsilon by remember(tab.bondEpsilon) { mutableFloatStateOf(tab.bondEpsilon.toFloat().coerceIn(0.1f, 0.6f)) }
-            Text(
-                localized("自动应用规则：容忍度 ε = ", "Auto-apply rules: tolerance ε = ") + "%.2f".format(sliderEpsilon.toDouble()),
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
-            )
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                // Per v0.7.1: highlighted "模式" button opens a dropdown to pick radius source.
-                Box {
-                    Button(
-                        onClick = { radiiMenuOpen = true },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary,
-                        ),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    ) {
-                        Icon(Icons.Default.Settings, null, modifier = Modifier.size(16.dp))
-                        Text(localized("模式", "modes"), modifier = Modifier.padding(start = 4.dp), style = MaterialTheme.typography.labelSmall)
-                    }
-                    DropdownMenu(expanded = radiiMenuOpen, onDismissRequest = { radiiMenuOpen = false }) {
-                        DropdownMenuItem(text = { Text(localized("智能离子", "Smart ionic")) }, onClick = {
-                            radiiMenuOpen = false
-                            tab.lastRadiusSource = RadiusSource.SMART_IONIC
-                            rebuildAsync(RadiusSource.SMART_IONIC, tab.bondEpsilon, skipConfirm = false)
-                        })
-                        DropdownMenuItem(text = { Text(localized("键合半径", "Bonding radius")) }, onClick = {
-                            radiiMenuOpen = false
-                            tab.lastRadiusSource = RadiusSource.BONDING
-                            rebuildAsync(RadiusSource.BONDING, tab.bondEpsilon, skipConfirm = true)
-                        })
-                        DropdownMenuItem(text = { Text(localized("vdW 半径", "vdW radius")) }, onClick = {
-                            radiiMenuOpen = false
-                            tab.lastRadiusSource = RadiusSource.VDW
-                            rebuildAsync(RadiusSource.VDW, tab.bondEpsilon, skipConfirm = true)
-                        })
-                    }
+        // Per v0.5.0: "自动应用半径" (auto-apply radii) clears every bond rule and regenerates them
+        // from one of three radius sources (smart-ionic default / bonding / vdW).
+        // Auto-apply is a compact row with a mode button + ε slider.
+        // Per v0.7.1: label on first line, mode button + slider on second line.
+        var sliderEpsilon by remember(tab.bondEpsilon) { mutableFloatStateOf(tab.bondEpsilon.toFloat().coerceIn(0.1f, 0.6f)) }
+        Text(
+            localized("自动应用规则：容忍度 ε = ", "Auto-apply rules: tolerance ε = ") + "%.2f".format(sliderEpsilon.toDouble()),
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Per v0.7.1: highlighted "模式" button opens a dropdown to pick radius source.
+            Box {
+                Button(
+                    onClick = { radiiMenuOpen = true },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    Icon(Icons.Default.Settings, null, modifier = Modifier.size(16.dp))
+                    Text(localized("模式", "modes"), modifier = Modifier.padding(start = 4.dp), style = MaterialTheme.typography.labelSmall)
                 }
-                // Per v0.6.3: only trigger rebuild on finger release to prevent lag.
-                Slider(
-                    value = sliderEpsilon,
-                    onValueChange = { v -> sliderEpsilon = v },
-                    onValueChangeFinished = {
-                        tab.bondEpsilon = sliderEpsilon.toDouble()
-                        rebuildAsync(tab.lastRadiusSource, tab.bondEpsilon, skipConfirm = true)
-                    },
-                    valueRange = 0.1f..0.6f,
-                    modifier = Modifier.weight(1f),
-                )
+                DropdownMenu(expanded = radiiMenuOpen, onDismissRequest = { radiiMenuOpen = false }) {
+                    DropdownMenuItem(text = { Text(localized("智能离子", "Smart ionic")) }, onClick = {
+                        radiiMenuOpen = false
+                        tab.lastRadiusSource = RadiusSource.SMART_IONIC
+                        rebuildAsync(RadiusSource.SMART_IONIC, tab.bondEpsilon, skipConfirm = false)
+                    })
+                    DropdownMenuItem(text = { Text(localized("键合半径", "Bonding radius")) }, onClick = {
+                        radiiMenuOpen = false
+                        tab.lastRadiusSource = RadiusSource.BONDING
+                        rebuildAsync(RadiusSource.BONDING, tab.bondEpsilon, skipConfirm = true)
+                    })
+                    DropdownMenuItem(text = { Text(localized("vdW 半径", "vdW radius")) }, onClick = {
+                        radiiMenuOpen = false
+                        tab.lastRadiusSource = RadiusSource.VDW
+                        rebuildAsync(RadiusSource.VDW, tab.bondEpsilon, skipConfirm = true)
+                    })
+                }
             }
-            Text(epsilonHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else {
-            // Per v0.8.x: H-bond angle threshold (display filter, 0–180°, default 110°).
-            // Replaces the auto-apply area — H-bonds have no "auto-generate rules" section.
-            // The scene rebuilds on commit (tab.hbondAngleThreshold keys the scene-build
-            // effect in ViewerScreen), so dragging only updates the local slider value.
-            var sliderHbondThreshold by remember(tab.hbondAngleThreshold) { mutableFloatStateOf(tab.hbondAngleThreshold.toFloat().coerceIn(0f, 180f)) }
-            Text(
-                localized("角度阈值", "Angle threshold") + ": %.0f°".format(sliderHbondThreshold),
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
-            )
+            // Per v0.6.3: only trigger rebuild on finger release to prevent lag.
             Slider(
-                value = sliderHbondThreshold,
-                onValueChange = { v -> sliderHbondThreshold = v },
-                onValueChangeFinished = { tab.hbondAngleThreshold = sliderHbondThreshold.toDouble() },
-                valueRange = 0f..180f,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                localized("仅显示 D–H···A 角度大于阈值的氢键", "Show only H-bonds whose D–H···A angle exceeds the threshold"),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                value = sliderEpsilon,
+                onValueChange = { v -> sliderEpsilon = v },
+                onValueChangeFinished = {
+                    tab.bondEpsilon = sliderEpsilon.toDouble()
+                    rebuildAsync(tab.lastRadiusSource, tab.bondEpsilon, skipConfirm = true)
+                },
+                valueRange = 0.1f..0.6f,
+                modifier = Modifier.weight(1f),
             )
         }
+        Text(epsilonHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
         // Per v0.8.2: compute co-located site groups for border coloring.
         val gatheredSiteInfo = remember(tab.structure) { computeGatheredSiteInfo(sites, tab.renderConfiguration) }
-        // Per v0.8.x: each section lists only its own rules — hbonds no longer mix into the
-        // covalent list. Rows keep their existing structure (incl. the "H-bond" grey label).
-        val sectionRules = if (bondSection == BondSection.HBOND) {
-            visibleRules.filter { it.isHBond }
-        } else {
-            visibleRules.filter { !it.isHBond }
-        }
+        // Per v0.8.x: this editor lists only normal (covalent) rules — hbonds have their
+        // own tab. Rows no longer carry the hbond grey frame/label.
+        val sectionRules = visibleRules.filter { !it.isHBond }
         LazyColumn(Modifier.fillMaxSize()) {
             items(sectionRules, key = { it.key }) { rule ->
-                val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
-                val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
-                // Per v0.8.2: border precedence — red (Σocc>1) > mixedColor > hbond-gray.
-                val gatherA = gatheredSiteInfo[rule.siteA]
-                val gatherB = gatheredSiteInfo[rule.siteB]
-                val anyNormalized = (gatherA?.wasNormalized == true) || (gatherB?.wasNormalized == true)
-                val anyGathered = gatherA != null || gatherB != null
-                val borderColor = when {
-                    anyNormalized -> Color.Red
-                    anyGathered -> Color(0xFF808080) // placeholder mixedColor
-                    rule.isHBond -> Color.Gray
-                    else -> null
-                }
-                val rowModifier = Modifier.fillMaxWidth()
-                    .clickable { editingRule = rule }
-                    .padding(vertical = 6.dp, horizontal = 4.dp)
-                    .let { if (borderColor != null) it.border(BorderStroke(1.dp, borderColor), RoundedCornerShape(4.dp)) else it }
-                Row(rowModifier, verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("$labelA — $labelB")
-                        if (rule.isHBond) Text(
-                            localized("氢键", "H-bond"),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.Gray,
-                        )
-                    }
-                    Text("%.3f–%.3f Å".format(rule.minAngstrom, rule.maxAngstrom), modifier = Modifier.padding(horizontal = 8.dp))
-                    IconButton(onClick = {
+                BondRuleRow(
+                    rule = rule,
+                    sites = sites,
+                    gatheredSiteInfo = gatheredSiteInfo,
+                    onEdit = { editingRule = rule },
+                    onDelete = {
                         onStructure(CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.RemoveBondRule(rule.key)))
-                    }) {
-                        Icon(Icons.Default.Delete, null)
-                    }
-                }
-                HorizontalDivider()
+                    },
+                )
             }
         }
     }
@@ -972,11 +873,252 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
         onDismiss = { addOpen = false; tab.pendingBondDrawRule = null },
     ) { siteA, siteB, min, max, extendAtoB, extendBtoA, isHBond ->
         tab.pendingBondDrawRule = null
+        // Per v0.8.x: reject H-bond rules whose two ends are both non-hydrogen — the
+        // dialog stays open so the user can pick another site pair.
+        if (!hbondEndsContainHydrogen(sites, siteA, siteB, isHBond)) {
+            onMessage(hbondMustIncludeHydrogenMessage)
+            return@BondRuleDialog
+        }
         runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extendAtoB, extendBtoA, isHBond))) }
             .onSuccess { onStructure(it); addOpen = false }.onFailure { onMessage(it.message ?: "Invalid bond rule") }
     }
     editingRule?.let { rule ->
         BondRuleDialog(sites, editingRule = rule, hbond = rule.isHBond, onDismiss = { editingRule = null }) { siteA, siteB, min, max, extendAtoB, extendBtoA, isHBond ->
+            if (!hbondEndsContainHydrogen(sites, siteA, siteB, isHBond)) {
+                onMessage(hbondMustIncludeHydrogenMessage)
+                return@BondRuleDialog
+            }
+            runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extendAtoB, extendBtoA, isHBond))) }
+                .onSuccess { onStructure(it); editingRule = null }.onFailure { onMessage(it.message ?: "Invalid bond rule") }
+        }
+    }
+}
+
+
+/** Per v0.5.2b: expand + grid once and reuse across all rules so MOF-scale cells don't freeze.
+ *  Shared by [BondEditor] and [HbondEditor]. */
+@Composable
+private fun visibleBondRules(tab: DocumentTab): List<BondRule> {
+    val bondGrid = remember(tab.structure) {
+        val atoms = SymmetryExpander.expand(tab.structure)
+        BondGrid(atoms, tab.structure, BondRuleMatching.estimateCellSize(tab.structure)) to atoms
+    }
+    return tab.bondConfiguration.rules.filter { rule ->
+        BondRuleMatching.hasMatchingBond(
+            rule,
+            tab.structure,
+            tab.bondConfiguration,
+            bondGrid.second,
+            bondGrid.first,
+        )
+    }.distinctBy { it.key } // Per v0.5.4b: bondRules can carry duplicate site-pair keys (e.g. a large
+    // cell whose ASU has repeated site ids, or a smart-ionic regen that re-emitted a pair). The
+    // renderer dedups via associateBy, but LazyColumn's key must be unique — collapse duplicates
+    // here so opening the rule list on a large cell no longer crashes with "Key was already used".
+}
+
+/** Per v0.8.x: shared rule list row for [BondEditor] and [HbondEditor]. Border precedence —
+ *  red (Σocc>1) > mixedColor; the hbond grey frame and "氢键" label are gone because each
+ *  list holds only one rule type. */
+@Composable
+private fun BondRuleRow(
+    rule: BondRule,
+    sites: List<Site>,
+    gatheredSiteInfo: Map<String, GatheredSiteInfo>,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
+    val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
+    // Per v0.8.2: border precedence — red (Σocc>1) > mixedColor.
+    val gatherA = gatheredSiteInfo[rule.siteA]
+    val gatherB = gatheredSiteInfo[rule.siteB]
+    val anyNormalized = (gatherA?.wasNormalized == true) || (gatherB?.wasNormalized == true)
+    val anyGathered = gatherA != null || gatherB != null
+    val borderColor = when {
+        anyNormalized -> Color.Red
+        anyGathered -> Color(0xFF808080) // placeholder mixedColor
+        else -> null
+    }
+    val rowModifier = Modifier.fillMaxWidth()
+        .clickable { onEdit() }
+        .padding(vertical = 6.dp, horizontal = 4.dp)
+        .let { if (borderColor != null) it.border(BorderStroke(1.dp, borderColor), RoundedCornerShape(4.dp)) else it }
+    Row(rowModifier, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("$labelA — $labelB")
+        }
+        Text("%.3f–%.3f Å".format(rule.minAngstrom, rule.maxAngstrom), modifier = Modifier.padding(horizontal = 8.dp))
+        IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, null) }
+    }
+    HorizontalDivider()
+}
+
+/** Per v0.8.x: an H-bond rule must have at least one hydrogen atom on either end. */
+private fun hbondEndsContainHydrogen(sites: List<Site>, siteA: String, siteB: String, isHBond: Boolean): Boolean {
+    if (!isHBond) return true
+    val aSymbol = sites.firstOrNull { it.id == siteA }?.species?.symbol
+    val bSymbol = sites.firstOrNull { it.id == siteB }?.species?.symbol
+    return aSymbol == "H" || bSymbol == "H"
+}
+
+/** Per v0.8.x: independent H-bond editor tab (EditorTab.HBONDS). New/Draw/Delete always
+ *  target the hbond rule type (tab.bondDrawTargetIsHbond = true); the angle threshold
+ *  slider sits next to an "自动" button that recomputes only the H-bond rules for the
+ *  current radius source, leaving the covalent rules untouched. */
+@Composable
+private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMessage: (String) -> Unit, onDismiss: () -> Unit, onPersistentMessage: (String?) -> Unit = {}) {
+    val sites = tab.structure.sites
+    if (sites.isEmpty()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("请先添加原子", "Add atoms first")) }; return }
+    var addOpen by remember { mutableStateOf(false) }
+    var editingRule by remember { mutableStateOf<BondRule?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var autoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val scope = rememberCoroutineScope()
+    val computingMessage = localized("计算中...", "Computing...")
+    val autoHint = localized("按当前模式重算氢键规则", "Recompute H-bond rules with the current mode")
+    val hbondMustIncludeHydrogenMessage = localized("氢键必须包含一个氢原子", "An H-bond must include a hydrogen atom")
+    val visibleRules = visibleBondRules(tab)
+    val sectionRules = visibleRules.filter { it.isHBond }
+
+    // Per v0.8.x: "自动" recomputes ONLY the H-bond rules (rebuildHbondRules keeps the
+    // normal rules verbatim) off the UI thread, showing a loading dialog while it runs.
+    fun autoRecompute() {
+        loading = true
+        autoJob = scope.launch(Dispatchers.Default) {
+            val outcome = runCatching {
+                CrystalEditor.rebuildHbondRules(
+                    tab.structure,
+                    tab.bondConfiguration,
+                    tab.lastRadiusSource,
+                    tab.bondEpsilon,
+                )
+            }
+            withContext(Dispatchers.Main) {
+                loading = false
+                autoJob = null
+                outcome.onSuccess { result -> onStructure(result) }
+                    .onFailure { error -> onMessage(error.message ?: "H-bond recompute failed") }
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
+        val drawHint = localized("点击成键的两个目标原子（氢键）", "Tap two atoms to bond (H-bond)")
+        val deleteHint = localized("点击要删除氢键的两个原子", "Tap two atoms to delete their H-bond")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                tab.bondDrawTargetIsHbond = true
+                addOpen = true
+            }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Text(localized("新建", "New")) }
+            OutlinedButton(onClick = {
+                tab.bondDrawTargetIsHbond = true
+                tab.bondDrawMode = BondDrawMode.DRAWING
+                tab.bondDrawFirstSiteId = null
+                tab.bondDrawFirstCartesian = null
+                tab.selectedAtomIds = emptyList()
+                onPersistentMessage(drawHint)
+                onDismiss()
+            }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Create, null); Text(localized("绘制", "Draw")) }
+            OutlinedButton(onClick = {
+                tab.bondDrawTargetIsHbond = true
+                tab.bondDrawMode = BondDrawMode.DELETING
+                tab.bondDrawFirstSiteId = null
+                tab.bondDrawFirstCartesian = null
+                tab.selectedAtomIds = emptyList()
+                onPersistentMessage(deleteHint)
+                onDismiss()
+            }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Text(localized("删除", "Delete")) }
+        }
+        // Per v0.8.x: angle threshold (display filter, 0–180°, default 110°) with the
+        // "自动" button to its right. The scene rebuilds on commit (tab.hbondAngleThreshold
+        // keys the scene-build effect in ViewerScreen), so dragging only updates the local
+        // slider value.
+        var sliderHbondThreshold by remember(tab.hbondAngleThreshold) { mutableFloatStateOf(tab.hbondAngleThreshold.toFloat().coerceIn(0f, 180f)) }
+        Text(
+            localized("角度阈值", "Angle threshold") + ": %.0f°".format(sliderHbondThreshold),
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Slider(
+                value = sliderHbondThreshold,
+                onValueChange = { v -> sliderHbondThreshold = v },
+                onValueChangeFinished = { tab.hbondAngleThreshold = sliderHbondThreshold.toDouble() },
+                valueRange = 0f..180f,
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = { autoRecompute() },
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            ) { Text(localized("自动", "Auto"), style = MaterialTheme.typography.labelSmall) }
+        }
+        Text(autoHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        // Per v0.8.2: compute co-located site groups for border coloring.
+        val gatheredSiteInfo = remember(tab.structure) { computeGatheredSiteInfo(sites, tab.renderConfiguration) }
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(sectionRules, key = { it.key }) { rule ->
+                BondRuleRow(
+                    rule = rule,
+                    sites = sites,
+                    gatheredSiteInfo = gatheredSiteInfo,
+                    onEdit = { editingRule = rule },
+                    onDelete = {
+                        onStructure(CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.RemoveBondRule(rule.key)))
+                    },
+                )
+            }
+        }
+    }
+    if (loading) {
+        BasicAlertDialog(
+            onDismissRequest = {
+                // Back button cancels the recompute job.
+                autoJob?.cancel()
+                loading = false
+                autoJob = null
+            },
+            // Per v0.8.36: loading dialogs dismiss only via the system back button,
+            // never by tapping outside.
+            properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
+        ) {
+            Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
+                Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    CircularProgressIndicator()
+                    Text(computingMessage)
+                }
+            }
+        }
+    }
+    // Per v0.7.1: auto-open the BondRuleDialog when a preset arrives from the draw flow.
+    LaunchedEffect(tab.pendingBondDrawRule) {
+        if (tab.pendingBondDrawRule != null) { addOpen = true }
+    }
+    // Per v0.8.x: everything in this editor is an H-bond — the dialog is always in hbond mode.
+    if (addOpen) BondRuleDialog(
+        sites,
+        editingRule = null,
+        preset = tab.pendingBondDrawRule,
+        hbond = true,
+        onDismiss = { addOpen = false; tab.pendingBondDrawRule = null },
+    ) { siteA, siteB, min, max, extendAtoB, extendBtoA, isHBond ->
+        tab.pendingBondDrawRule = null
+        // Per v0.8.x: reject rules whose two ends are both non-hydrogen — the dialog stays
+        // open so the user can pick another site pair.
+        if (!hbondEndsContainHydrogen(sites, siteA, siteB, isHBond)) {
+            onMessage(hbondMustIncludeHydrogenMessage)
+            return@BondRuleDialog
+        }
+        runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extendAtoB, extendBtoA, isHBond))) }
+            .onSuccess { onStructure(it); addOpen = false }.onFailure { onMessage(it.message ?: "Invalid bond rule") }
+    }
+    editingRule?.let { rule ->
+        BondRuleDialog(sites, editingRule = rule, hbond = true, onDismiss = { editingRule = null }) { siteA, siteB, min, max, extendAtoB, extendBtoA, isHBond ->
+            if (!hbondEndsContainHydrogen(sites, siteA, siteB, isHBond)) {
+                onMessage(hbondMustIncludeHydrogenMessage)
+                return@BondRuleDialog
+            }
             runCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetBondRule(BondRule(siteA, siteB, min, max, BondRuleSource.CUSTOM, extendAtoB, extendBtoA, isHBond))) }
                 .onSuccess { onStructure(it); editingRule = null }.onFailure { onMessage(it.message ?: "Invalid bond rule") }
         }
