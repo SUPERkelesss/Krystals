@@ -16,6 +16,7 @@ import com.krystals.renderer.core.style.ViewerAppearance
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class MoleculeExtendUreaAcceptanceTest {
@@ -85,9 +86,20 @@ class MoleculeExtendUreaAcceptanceTest {
             assertEquals(0, uncovered, "每个物理分子 8 原子球全显示")
         }
 
-        // 4) z≈0.026 处不应有孤立的包裹副本球(分子 B 的 H2 物理 z=1.028 被包裹到
-        //    z=0.028 的假象已消除 —— 正侧跨界包裹副本不渲染,由壳层在物理位置承载)。
-        val z026 = visAtoms.filter { ins ->
+        // 4) 全方向规则:每个与 [0,1]³ 相交的分子映像(按 t ∈ [ceil(-max), floor(1-min)]
+        //    独立计算,不限正负)的每个原子位置 ±0.05A 都有可见球;可见完整映像总数 = 8
+        //    (2 物理分子 × 4 映像),映像原子 64 全可见。z≈0.028 处允许有球(分子 B 的
+        //    H2 包裹 primary),但它必须属于一个完整映像(该映像 8 原子全有球)。
+        val images = molecules.flatMap { intersectingImages(it, structure) }
+        println("urea: images=${images.size} imageAtoms=${images.sumOf { it.size }}")
+        assertEquals(8, images.size, "与单胞相交的映像总数 = 8")
+        assertEquals(64, images.sumOf { it.size }, "映像原子总数 = 64")
+        val missingImageAtoms = images.flatten().count { (_, p) ->
+            visAtoms.none { distance(it.atom.cartesianCoordinate.toVec3(), p) < 0.05 }
+        }
+        println("urea: missingImageAtoms=$missingImageAtoms (0 = every intersecting image atom has a sphere)")
+        assertEquals(0, missingImageAtoms, "每个相交映像的每个原子位置都应有可见球")
+        val z028 = visAtoms.filter { ins ->
             val f = structure.lattice.toFractional(
                 CartesianCoordinate(
                     ins.atom.cartesianCoordinate.x,
@@ -96,10 +108,44 @@ class MoleculeExtendUreaAcceptanceTest {
                 ),
             )
             val zw = f.z - Math.floor(f.z)
-            zw in 0.02..0.03 && !ins.atom.isShell
+            zw in 0.02..0.03
         }
-        println("urea: in-cell spheres with wrapped z~0.026 = ${z026.size} (0 = no stray wrapped H copies)")
-        assertEquals(0, z026.size, "z~0.026 处不应有孤立的包裹副本球")
+        println("urea: visible spheres with wrapped z~0.028 = ${z028.size}")
+        for (ins in z028) {
+            val p = ins.atom.cartesianCoordinate.toVec3()
+            val img = images.firstOrNull { im -> im.any { (_, q) -> distance(q, p) < 0.05 } }
+            assertNotNull(img, "z~0.028 的球必须属于某个完整映像")
+            val uncovered = img.count { (_, q) ->
+                visAtoms.none { distance(it.atom.cartesianCoordinate.toVec3(), q) < 0.05 }
+            }
+            assertEquals(0, uncovered, "z~0.028 的球所在映像的 8 原子必须全有球")
+        }
+    }
+
+    /** 按新规则独立计算分子 m 与 [0,1]³ 显示区相交的全部周期映像(每映像 = 原子位置列表)。 */
+    private fun intersectingImages(
+        m: com.krystals.crystal.core.model.Molecule,
+        structure: com.krystals.crystal.core.model.CrystalStructure,
+    ): List<List<Pair<Int, Vec3>>> {
+        return connected(m).flatMap { comp ->
+            val fr = comp.map {
+                it.id to structure.lattice.toFractional(CartesianCoordinate(it.position.x, it.position.y, it.position.z))
+            }
+            val minX = fr.minOf { it.second.x }; val maxX = fr.maxOf { it.second.x }
+            val minY = fr.minOf { it.second.y }; val maxY = fr.maxOf { it.second.y }
+            val minZ = fr.minOf { it.second.z }; val maxZ = fr.maxOf { it.second.z }
+            val txRange = kotlin.math.ceil(-maxX + 1e-6).toInt()..kotlin.math.floor(1.0 - minX - 1e-6).toInt()
+            val tyRange = kotlin.math.ceil(-maxY + 1e-6).toInt()..kotlin.math.floor(1.0 - minY - 1e-6).toInt()
+            val tzRange = kotlin.math.ceil(-maxZ + 1e-6).toInt()..kotlin.math.floor(1.0 - minZ - 1e-6).toInt()
+            val result = mutableListOf<List<Pair<Int, Vec3>>>()
+            for (tx in txRange) for (ty in tyRange) for (tz in tzRange) {
+                result += fr.map { (id, f) ->
+                    val shifted = structure.lattice.toCartesian(FractionalCoordinate(f.x + tx, f.y + ty, f.z + tz))
+                    id to Vec3(shifted.x, shifted.y, shifted.z)
+                }
+            }
+            result
+        }
     }
 
     private fun connected(m: com.krystals.crystal.core.model.Molecule): List<List<com.krystals.crystal.core.model.MoleculeAtom>> {
