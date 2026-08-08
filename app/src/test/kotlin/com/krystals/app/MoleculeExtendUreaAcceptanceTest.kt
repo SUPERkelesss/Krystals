@@ -84,6 +84,22 @@ class MoleculeExtendUreaAcceptanceTest {
             println("urea: component atoms=${comp.size} uncovered=$uncovered")
             assertEquals(0, uncovered, "每个物理分子 8 原子球全显示")
         }
+
+        // 4) z≈0.026 处不应有孤立的包裹副本球(分子 B 的 H2 物理 z=1.028 被包裹到
+        //    z=0.028 的假象已消除 —— 正侧跨界包裹副本不渲染,由壳层在物理位置承载)。
+        val z026 = visAtoms.filter { ins ->
+            val f = structure.lattice.toFractional(
+                CartesianCoordinate(
+                    ins.atom.cartesianCoordinate.x,
+                    ins.atom.cartesianCoordinate.y,
+                    ins.atom.cartesianCoordinate.z,
+                ),
+            )
+            val zw = f.z - Math.floor(f.z)
+            zw in 0.02..0.03 && !ins.atom.isShell
+        }
+        println("urea: in-cell spheres with wrapped z~0.026 = ${z026.size} (0 = no stray wrapped H copies)")
+        assertEquals(0, z026.size, "z~0.026 处不应有孤立的包裹副本球")
     }
 
     private fun connected(m: com.krystals.crystal.core.model.Molecule): List<List<com.krystals.crystal.core.model.MoleculeAtom>> {
