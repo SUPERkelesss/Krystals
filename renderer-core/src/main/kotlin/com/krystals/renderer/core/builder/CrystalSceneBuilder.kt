@@ -19,6 +19,9 @@ import com.krystals.crystal.core.model.Molecule
 import com.krystals.crystal.core.model.MoleculeAtom
 import com.krystals.crystal.core.periodic.Int3
 import com.krystals.crystal.core.periodic.PeriodicBoundary
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.max
 import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
@@ -117,9 +120,13 @@ class CrystalSceneBuilder {
         val moleculeImageAtoms: List<List<Pair<Int, Vec3>>>
         // 分子拓扑邻居(原胞原子 id → 分子内邻居 id),用于键的分子归属判定。
         val moleculeNeighbors: List<Map<Int, Set<Int>>>
+        // 分子原子按 id 索引(补全映像的平移基点:原胞代表 → 分子内物理位置)。
+        val moleculeAtomById: HashMap<Int, MoleculeAtom>
         if (options.moleculeExtend) {
             val indexByAtomId = HashMap<Int, Int>()
             options.molecules.forEachIndexed { index, m -> m.atoms.forEach { indexByAtomId[it.id] = index } }
+            moleculeAtomById = HashMap()
+            options.molecules.forEach { m -> m.atoms.forEach { moleculeAtomById[it.id] = it } }
             val repAtoms = analysis.atoms.filter { !it.isShell && it.cellOffset == Int3(0, 0, 0) }
             val perMolSiteIds = Array(options.molecules.size) { HashSet<String>() }
             val repIndex = HashMap<Long, Int>()
@@ -132,10 +139,31 @@ class CrystalSceneBuilder {
             moleculeSiteIds = perMolSiteIds.map { it.toSet() }
             repBySiteId = repAtoms.groupBy { it.siteId }
             val images = options.molecules.map { m ->
-                // 只显示单胞内分子的物理位置(t=0 映像,含其跨胞延伸,如尿素上下底面的
-                // H 与 x∈[1,1.25] 的分子部分);相邻晶胞的周期映像(t≠0,如 x=1.5a 的
-                // C60/尿素)不在显示范围(0-1a)内,不显示。
-                m.atoms.map { it.id to it.position.toVec3() }.distinct()
+                // 分子原子物理位置(frac)与包围盒 → 与 [0,ex] 显示范围相交的周期映像
+                // 平移 t(每轴 ceil(-max)..floor(ex-min)):C60 角笼 (0,0,0) 的 t ∈ {0,1}³
+                // = 8 顶点映像,面心笼的 t_z ∈ {0,1} = 6 面心映像 —— 8 顶点 + 6 面心
+                // 共 14 个完整 C60 由动态原子/壳层补全。负侧平移(映像与显示范围不相交)
+                // 不生成。
+                val base = m.atoms.map { it.id to it.position.toVec3() }
+                val fr = base.map { (id, p) ->
+                    id to structure.lattice.toFractional(CartesianCoordinate(p.x, p.y, p.z))
+                }
+                val minX = fr.minOf { it.second.x }; val maxX = fr.maxOf { it.second.x }
+                val minY = fr.minOf { it.second.y }; val maxY = fr.maxOf { it.second.y }
+                val minZ = fr.minOf { it.second.z }; val maxZ = fr.maxOf { it.second.z }
+                val txRange = max(0, ceil(-maxX + 1e-6).toInt())..floor(displayEx.x - minX - 1e-6).toInt()
+                val tyRange = max(0, ceil(-maxY + 1e-6).toInt())..floor(displayEx.y - minY - 1e-6).toInt()
+                val tzRange = max(0, ceil(-maxZ + 1e-6).toInt())..floor(displayEx.z - minZ - 1e-6).toInt()
+                val result = mutableListOf<Pair<Int, Vec3>>()
+                for (tx in txRange) for (ty in tyRange) for (tz in tzRange) {
+                    for ((id, f) in fr) {
+                        val shifted = structure.lattice.toCartesian(
+                            FractionalCoordinate(f.x + tx, f.y + ty, f.z + tz),
+                        )
+                        result += id to Vec3(shifted.x, shifted.y, shifted.z)
+                    }
+                }
+                result.distinct()
             }
             moleculeImageAtoms = images
             moleculePositions = images.map { it.map { p -> p.second } }
@@ -164,6 +192,7 @@ class CrystalSceneBuilder {
             moleculePositions = emptyList()
             moleculeImageAtoms = emptyList()
             moleculeNeighbors = emptyList()
+            moleculeAtomById = HashMap()
         }
 
         /** 场景原子 → 原胞代表原子 id(分子拓扑节点)。 */
@@ -186,14 +215,21 @@ class CrystalSceneBuilder {
             return siteIds.isNotEmpty() && siteIds.all { it in options.hiddenSiteIds }
         }
 
+        /** 分子是否跨出 [0,ex] 显示范围边界(跨胞分子 → 其周期映像补全显示)。 */
+        fun moleculeCrossesCell(mol: Int): Boolean {
+            return moleculePositions[mol].any { p ->
+                val f = structure.lattice.toFractional(CartesianCoordinate(p.x, p.y, p.z))
+                f.x < -1e-6 || f.y < -1e-6 || f.z < -1e-6 ||
+                    f.x > displayEx.x + 1e-6 || f.y > displayEx.y + 1e-6 || f.z > displayEx.z + 1e-6
+            }
+        }
+
         fun atomVisible(atom: AtomImage): Boolean {
             return when {
                 atom.siteId in options.hiddenSiteIds -> false
                 !options.moleculeExtend -> !atom.isShell || atom.isBoundaryImage || atom.id in externallyVisible
                 // 分子展开:原胞 primary 与边界映像恒显 —— 分子在晶胞内的原子(含包裹
-                // 副本)始终可见,分子以原胞位置完整呈现。外部壳层原子不渲染球体:
-                // 同一原子已由包裹 primary 承载(双显消除);其坐标仍作为分子内键的
-                // 端点(跨胞键穿过边界绘制)。
+                // 副本)始终可见,分子以原胞位置完整呈现。
                 !atom.isShell || atom.isBoundaryImage -> true
                 // 非分子壳层:[0,ex] 闭区间内显示(顶面 frac=1 规则,5722d2e)。
                 moleculeIndexOf(atom) == null && atom.fractionalCoordinate.let { f ->
@@ -201,6 +237,34 @@ class CrystalSceneBuilder {
                         f.y in -1e-6..(displayEx.y + 1e-6) &&
                         f.z in -1e-6..(displayEx.z + 1e-6)
                 } -> true
+                // 跨胞分子的补全映像:分子跨出 [0,ex] 边界时,其向正侧(+x/+y/+z)的
+                // 周期映像完整显示 —— C60 角笼的 8 个顶点映像((0..1)³ 组合)+ 面心笼
+                // 的 6 个面心映像由此补全(8 顶点 + 6 面心 = 14 个完整 C60);负侧拷贝
+                // (如相邻分子向 -z 的重复映像)不显示。晶胞内的映像位置由 primary 承载。
+                atom.fractionalCoordinate.let { f ->
+                    (f.x < -1e-6 || f.x > displayEx.x + 1e-6 ||
+                        f.y < -1e-6 || f.y > displayEx.y + 1e-6 ||
+                        f.z < -1e-6 || f.z > displayEx.z + 1e-6) &&
+                        f.x in -1.0 - 1e-6..(displayEx.x + 1.0 + 1e-6) &&
+                        f.y in -1.0 - 1e-6..(displayEx.y + 1.0 + 1e-6) &&
+                        f.z in -1.0 - 1e-6..(displayEx.z + 1.0 + 1e-6)
+                } -> {
+                    val mol = moleculeIndexOf(atom) ?: return false
+                    if (moleculeFullyHidden(mol) || !moleculeCrossesCell(mol)) return false
+                    // 映像平移基点 = 该原子原胞代表在分子中的物理位置;仅补正侧平移。
+                    val rep = repBySiteId[atom.siteId]?.firstOrNull { isSameAtomPeriodicImage(it, atom) }
+                        ?: return false
+                    val ma = moleculeAtomById[rep.id.toInt()] ?: return false
+                    val base = structure.lattice.toFractional(CartesianCoordinate(ma.position.x, ma.position.y, ma.position.z))
+                    // 绝对 frac = 包裹 frac + cellOffset(壳层的平移在 cellOffset 里)。
+                    val f = atom.fractionalCoordinate
+                    val t = Vec3(
+                        f.x + atom.cellOffset.x - base.x,
+                        f.y + atom.cellOffset.y - base.y,
+                        f.z + atom.cellOffset.z - base.z,
+                    )
+                    t.x >= -1e-6 && t.y >= -1e-6 && t.z >= -1e-6
+                }
                 else -> false
             }
         }
@@ -538,8 +602,6 @@ class CrystalSceneBuilder {
             // isShell=true 使其可见性走分子归属)。覆盖分子与单胞相交的所有周期映像
             // (moleculeImageAtoms,含 ±1 晶胞平移),超出 BondDetector materialize 范围的
             // 分子部分(如尿素末端在 (2,0,0) 层)由此补全。
-            val moleculeAtomById = HashMap<Int, MoleculeAtom>()
-            options.molecules.forEach { m -> m.atoms.forEach { moleculeAtomById[it.id] = it } }
             val dynamicAtomsByRep = HashMap<Int, MutableList<AtomImage>>()  // MoleculeAtom.id → 动态原子
             val dynamicMolOf = HashMap<Int, Int>()                          // MoleculeAtom.id → 分子索引
             var nextDynId = -1L
@@ -548,14 +610,13 @@ class CrystalSceneBuilder {
                 for ((maId, pos) in images) {
                     if (sceneAtomAt(maId, pos) != null) continue
                     val ma = moleculeAtomById[maId] ?: continue
-                    // 动态原子的包裹 primary(同 rep、差整数晶胞的原胞原子)已渲染其球
-                    // —— 该原子在晶胞内由包裹 primary 呈现,动态坐标仅作跨胞键端点,
-                    // 不再渲染重复球;无包裹 primary 的真跨胞原子(超出 ±1 层)仍需球。
+                    // 动态球只渲染在显示范围扩展带 [-1, ex+1]³ 内(映像原子球:8 顶点 +
+                    // 6 面心等);超出范围的分子延伸(如 20.8 格的尿素末端)不渲染球,
+                    // 仅作键端点。
                     val posFrac = structure.lattice.toFractional(CartesianCoordinate(pos.x, pos.y, pos.z))
-                    val hasWrappedPrimary = sceneByRepId[maId]?.any { a ->
-                        !a.isShell && a.cellOffset == Int3(0, 0, 0) &&
-                            PeriodicBoundary.isIntegerTranslation(a.fractionalCoordinate - posFrac)
-                    } ?: false
+                    val inDisplayBand = posFrac.x in -1.0 - 1e-6..(displayEx.x + 1.0 + 1e-6) &&
+                        posFrac.y in -1.0 - 1e-6..(displayEx.y + 1.0 + 1e-6) &&
+                        posFrac.z in -1.0 - 1e-6..(displayEx.z + 1.0 + 1e-6)
                     val dyn = AtomImage(
                         id = nextDynId--,
                         siteId = ma.siteId,
@@ -575,7 +636,7 @@ class CrystalSceneBuilder {
                         atom = dyn,
                         radius = options.atomRadiusByElement[ma.species.symbol] ?: options.defaultAtomRadius,
                         material = atomMaterial(dyn),
-                        visible = ma.siteId !in options.hiddenSiteIds && !hasWrappedPrimary,
+                        visible = ma.siteId !in options.hiddenSiteIds && inDisplayBand,
                     )
                 }
             }

@@ -187,13 +187,14 @@ class CrystalSceneBuilderMoleculeTest {
         listOf(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 11L, 13L).forEach {
             assertTrue(scene.atomInstance(it).visible, "molecule atom $it should be visible")
         }
-        // 相邻分子的外部映像不显示;外部壳层原子不渲染球体(同一原子已由包裹 primary
-        // 承载,其坐标仅作跨胞键端点)。9 = O1 的 +y 映像;10 = Cl2 的 (1,0,0) 映像;
-        // 12 = 游离 X1 的 +y 映像。
-        listOf(9L, 10L, 12L).forEach {
-            assertFalse(scene.atomInstance(it).visible, "external shell atom $it should not render a sphere")
+        // 相邻分子的外部映像不显示(9 = O1 的 +y 映像,水分子不跨胞;12 = 游离 X1 的
+        // +y 映像,单原子不跨胞)。10 = Cl2 的物理位置(frac 1.95,分子跨 x=1 的正侧
+        // 延伸)→ 补全显示,氯分子完整跨胞呈现。
+        listOf(9L, 12L).forEach {
+            assertFalse(scene.atomInstance(it).visible, "foreign image $it should stay hidden")
         }
-        // 跨胞氯分子键 7-10 可见(以壳层坐标穿过 x=1 边界);同原子自像键 8-10 隐藏。
+        assertTrue(scene.atomInstance(10).visible, "Cl2's cross-cell part at frac 1.95 completes the molecule")
+        // 跨胞氯分子键 7-10 可见;同原子自像键 8-10 隐藏。
         assertTrue(scene.bondBetween(7, 10).visible, "cross-cell Cl2 molecule bond should be visible")
         assertFalse(scene.bondBetween(8, 10).visible, "same-atom self-image bond is not a molecule bond")
     }
@@ -221,10 +222,9 @@ class CrystalSceneBuilderMoleculeTest {
         listOf(1L, 2L, 3L, 9L).forEach {
             assertFalse(scene.atomInstance(it).visible, "hidden water-1 atom $it")
         }
-        // 水分子 2 与氯分子不受影响(氯分子包裹 primary 8 恒显;外部壳层 10 不渲染球)。
+        // 水分子 2 与氯分子不受影响(氯分子包裹 primary 8 恒显;跨胞部分 10 补全显示)。
         listOf(4L, 5L, 6L).forEach { assertTrue(scene.atomInstance(it).visible, "water-2 atom $it") }
-        listOf(7L, 8L).forEach { assertTrue(scene.atomInstance(it).visible, "Cl2 atom $it") }
-        assertFalse(scene.atomInstance(10).visible, "external shell 10 renders no sphere")
+        listOf(7L, 8L, 10L).forEach { assertTrue(scene.atomInstance(it).visible, "Cl2 atom $it") }
     }
 
     @Test
@@ -413,10 +413,9 @@ class CrystalSceneBuilderMoleculeTest {
             listOf(MoleculeBond(31, 32), MoleculeBond(32, 33), MoleculeBond(33, 34)),
         )
         val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(chain)), pBonds, atoms)
-        // B'(35) 是分子 t=0 映像的 B(位置 (4.4,2,2)):球体不渲染(外部壳层由包裹
-        // primary 32 承载),其坐标作为跨胞键端点。32(B@0.4)是原胞 primary → 恒显,
-        // 分子链以原胞位置完整呈现。
-        assertFalse(scene.atomInstance(35).visible, "external shell B' renders no sphere")
+        // B'(35) 是分子 t=0 映像的 B(物理位置 (4.4,2,2),frac 1.1 —— 链跨 x=1 的正侧
+        // 延伸)→ 补全显示,分子链完整跨胞呈现。32(B@0.4)是原胞 primary → 恒显。
+        assertTrue(scene.atomInstance(35).visible, "chain's cross-cell part B' at frac 1.1 completes the molecule")
         assertTrue(scene.atomInstance(32).visible, "in-cell primary 32 stays visible")
         // 动态原子仅 t=0 映像的 C(5.2)、D(6.0)(场景无);t=(-1,0,0) 映像不显示。
         val dynX = scene.atoms.filter { it.id.startsWith("molatom:") }.map { it.atom.cartesianCoordinate.x }.sorted()
@@ -552,18 +551,18 @@ class CrystalSceneBuilderMoleculeTest {
             listOf(MoleculeBond(51, 52)),
         )
         val scene = build(SceneBuildOptions(moleculeExtend = true, molecules = listOf(molA, molB)), pBonds, atoms)
-        // t=0 映像:全部显示(含 A 的跨胞 43 与 B 的跨胞 Y2@(2,2,-1) 动态原子)。
-        // 原胞 primary(42、52)无条件显示;外部壳层 43 不渲染球体,坐标作键端点。
-        listOf(41L, 42L, 51L, 52L).forEach {
+        // t=0 映像:全部显示(含 A 的跨胞 43 —— 分子跨 z=1 的正侧延伸补全,与 B 的
+        // 跨胞 Y2@(2,2,-1) 动态原子)。原胞 primary(42、52)恒显。
+        listOf(41L, 42L, 43L, 51L, 52L).forEach {
             assertTrue(scene.atomInstance(it).visible, "molecule atom $it should be visible")
         }
-        assertFalse(scene.atomInstance(43).visible, "external shell 43 renders no sphere (coords carry the cross-cell bond)")
         assertTrue(scene.bondBetween(41, 42).visible, "periodic Z1-Z2 bond")
         assertTrue(scene.bondBetween(41, 43).visible, "in-image Z1-Z2 bond")
         assertTrue(scene.bondBetween(51, 52).visible)
-        // 动态原子仅 B 的 Y2@(2,2,-1)(t=0 映像);t=(0,0,1) 映像(Y1@(2,2,5))不显示。
+        // 动态原子:t=0 映像的 Y2@(2,2,-1)(跨 z=0 近侧延伸)+ t=1 映像的 Y1@(2,2,6)
+        // (Y2'@0.75 落在晶胞内,映像 t=1 与显示范围相交 → 完整补全)。
         val dynY = scene.atoms.filter { it.id.startsWith("molatom:") }.map { it.atom.cartesianCoordinate.z }.sorted()
-        assertEquals(listOf(-1.0), dynY, "仅 t=0 映像的跨胞部分产生动态原子")
+        assertEquals(listOf(-1.0, 5.0), dynY, "t=0 近侧延伸与 t=1 相交映像产生动态原子")
     }
 
     @Test
