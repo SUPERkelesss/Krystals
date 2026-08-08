@@ -250,8 +250,34 @@ class CrystalSceneBuilder {
                 atom.siteId in options.hiddenSiteIds -> false
                 !options.moleculeExtend -> !atom.isShell || atom.isBoundaryImage || atom.id in externallyVisible
                 // 分子展开:原胞 primary 与边界映像恒显 —— 分子在晶胞内的原子(含包裹
-                // 副本)始终可见,分子以原胞位置完整呈现。
-                !atom.isShell || atom.isBoundaryImage -> true
+                // 副本)始终可见,分子以原胞位置完整呈现。例外:包裹副本 —— primary 的
+                // 物理位置(frac + cellOffset)不在其分子拓扑坐标上时,说明该原子被跨胞
+                // 包裹(如尿素分子 B 的 H2 物理 z=1.028 被包裹到 z=0.028),球不在此处
+                // 渲染(孤立球劈开分子),由分子映像/壳层在物理位置承载。
+                !atom.isShell || atom.isBoundaryImage -> {
+                    if (atom.isShell) true
+                    else {
+                        // 包裹副本判定:primary 实际位置(frac+cellOffset)与其分子拓扑
+                        // 位置(未包裹)不一致时,说明原子被跨胞包裹(如尿素分子 B 的
+                        // H2 物理 z=1.028 被包裹到 z=0.028)。仅当拓扑位置落在该 primary
+                        // 实际胞的正侧(> floor(phys)+1)时隐藏球 —— 正侧映像/壳层在
+                        // 物理位置承载,避免分子被劈出孤立球;负侧跨界(如分子 A 的 H2
+                        // 物理 z=-0.028 包裹到 z=0.972)无映像承载,保留包裹副本。
+                        val rep = repIdOf(atom) ?: return true
+                        val ma = moleculeAtomById[rep] ?: return true
+                        val topo = Vec3(ma.position.x, ma.position.y, ma.position.z)
+                        val topoFrac = structure.lattice.toFractional(CartesianCoordinate(topo.x, topo.y, topo.z))
+                        val phys = atom.fractionalCoordinate + atom.cellOffset
+                        val physCart = structure.lattice.toCartesian(phys).toVec3()
+                        if (distance(topo, physCart) < 1e-3) {
+                            true
+                        } else {
+                            !(topoFrac.x > Math.floor(phys.x) + 1 + 1e-6 ||
+                                topoFrac.y > Math.floor(phys.y) + 1 + 1e-6 ||
+                                topoFrac.z > Math.floor(phys.z) + 1 + 1e-6)
+                        }
+                    }
+                }
                 // 非分子壳层:[0,ex] 闭区间内显示(顶面 frac=1 规则,5722d2e)。
                 moleculeIndexOf(atom) == null && atom.fractionalCoordinate.let { f ->
                     f.x in -1e-6..(displayEx.x + 1e-6) &&
@@ -552,10 +578,9 @@ class CrystalSceneBuilder {
             val endPos = rawEnd - dir * endRadius
 
             val externalAllowed = when {
-                // 分子间氢键:不属于任何分子,不沿氢键展开分子;氢键显示跟随两端
-                // 原子可见性(各自分子开关 / hiddenSites),保证只显示可见原子之间的
-                // 合法氢键(键本身由 BondDetector 按距离/角度/per-H 规则生成)。
-                options.moleculeExtend -> atomVisible(start) && atomVisible(end)
+                // 分子模式不渲染氢键:分子间氢键不属于分子显示(只需延伸化学键/共价
+                // 拓扑)。非分子模式照旧渲染氢键(晶胞内分子间 N-H···O 等)。
+                options.moleculeExtend -> false
                 !start.isShell && !end.isShell -> true
                 // Same-atom periodic self-images are never rendered (see normal-bond pass).
                 isSameAtomPeriodicImage(start, end) -> false
