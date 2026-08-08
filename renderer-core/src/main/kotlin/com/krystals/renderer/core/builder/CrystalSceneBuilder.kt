@@ -277,12 +277,13 @@ class CrystalSceneBuilder {
                         ?: return false
                     val ma = moleculeAtomById[rep.id.toInt()] ?: return false
                     val base = structure.lattice.toFractional(CartesianCoordinate(ma.position.x, ma.position.y, ma.position.z))
-                    // 绝对 frac = 包裹 frac + cellOffset(壳层的平移在 cellOffset 里)。
+                    // 壳层 frac 是绝对坐标(getShellAtom: q.frac + off),primary 才是包裹值。
+                    // 不能再加 cellOffset(双重偏移会掩盖负向壳层,如 H2 的 (0,0,-1) 映像)。
                     val f = atom.fractionalCoordinate
                     val t = Vec3(
-                        f.x + atom.cellOffset.x - base.x,
-                        f.y + atom.cellOffset.y - base.y,
-                        f.z + atom.cellOffset.z - base.z,
+                        f.x - base.x,
+                        f.y - base.y,
+                        f.z - base.z,
                     )
                     t.x >= -1e-6 && t.y >= -1e-6 && t.z >= -1e-6
                 }
