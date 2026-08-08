@@ -268,28 +268,45 @@ object CrystalEditor {
         includeHbonds: Boolean = true,
     ): List<BondRule> {
         // Per v0.8.27: auto-compute-hbonds preference OFF → skip the whole H-bond pass.
+        // Per v0.8.x: hbond generation core lives in [hbondRulesFor]; the hard-coded 0.45
+        // epsilon here keeps the pre-v0.8.x behaviour of this path byte-identical.
         if (!includeHbonds) return rules
-        // Per v0.8.12: cheap gates BEFORE the Voronoi search — it is the dominant cost of this
-        // path and ran unconditionally, so H-free structures or structures without any acceptor
-        // element (O/N/F/S/P/Cl) paid a full periodic Voronoi pass for nothing.
-        // Per v0.8.16: the proton-partner set includes C (C–H donors); the H-bond ACCEPTOR set
-        // (what an H-bond points at) is unchanged — C is not a hydrogen-bond acceptor.
-        // Per v0.8.36: the gate tests the ACCEPTOR set, not the proton-partner set — an H-bond
-        // needs an acceptor, so a structure with C–H donors but no O/N/F/S/P/Cl can never form
-        // one and must skip the Voronoi pass entirely.
-        // Per v0.8.39: C is removed from the proton-partner set — C–H bonds are not H-bond
-        // donors any more (the acceptor set is untouched, C remains a non-acceptor).
+        return rules + hbondRulesFor(structure, atoms, rules, 0.45)
+    }
+
+    /** Per v0.8.x: bonding-path hbond detection core, shared by [bondingRulesWithHbonds]
+     *  (which passes its freshly generated normal rules) and [rebuildHbondRules] (which
+     *  passes the user's existing normal rules). Computes hbond rules for the given
+     *  [normalRules] WITHOUT touching them; returns an empty list when no H-bond can form.
+     *
+     *  Per v0.8.12: cheap gates BEFORE the distance scan — it is the dominant cost of this
+     *  path and ran unconditionally, so H-free structures or structures without any acceptor
+     *  element (O/N/F/S/P/Cl) paid a full periodic scan for nothing.
+     *  Per v0.8.16: the proton-partner set includes C (C–H donors); the H-bond ACCEPTOR set
+     *  (what an H-bond points at) is unchanged — C is not a hydrogen-bond acceptor.
+     *  Per v0.8.36: the gate tests the ACCEPTOR set, not the proton-partner set — an H-bond
+     *  needs an acceptor, so a structure with C–H donors but no O/N/F/S/P/Cl can never form
+     *  one and must skip the scan entirely.
+     *  Per v0.8.39: C is removed from the proton-partner set — C–H bonds are not H-bond
+     *  donors any more (the acceptor set is untouched, C remains a non-acceptor).
+     *
+     *  Per v0.8.36: H neighbours via periodic distance scan instead of a periodic Voronoi
+     *  pass. The proton scan and HbondChecking only look at atoms within covalent/hbond
+     *  windows (<= ~2.8 AA); any atom inside such a window is necessarily a Voronoi
+     *  neighbour of the H (min-image proximity), so the distance scan is equivalent for the
+     *  windows used here, at O(H atoms x N atoms) instead of building every cell. */
+    private fun hbondRulesFor(
+        structure: CrystalStructure,
+        atoms: List<com.krystals.crystal.core.model.AtomImage>,
+        normalRules: List<BondRule>,
+        epsilon: Double = 0.45,
+    ): List<BondRule> {
         val hbondAcceptorElements = setOf("O", "N", "F", "S", "P", "Cl")
         val hbondPartnerElements = hbondAcceptorElements
         val hasH = atoms.any { it.species.symbol == "H" }
         val hasAcceptor = atoms.any { it.species.symbol in hbondAcceptorElements }
-        if (!hasH || !hasAcceptor) return rules
+        if (!hasH || !hasAcceptor) return emptyList()
 
-        // Per v0.8.36: H neighbours via periodic distance scan instead of a periodic Voronoi
-        // pass. The proton scan and HbondChecking only look at atoms within covalent/hbond
-        // windows (<= ~2.8 AA); any atom inside such a window is necessarily a Voronoi
-        // neighbour of the H (min-image proximity), so the distance scan is equivalent for the
-        // windows used here, at O(H atoms x N atoms) instead of building every cell.
         val hydrogenAtoms = atoms.filter { it.species.symbol == "H" }
         val neighboursByAtomId = linkedMapOf<Long, MutableList<Pair<Long, Double>>>()
         val lattice = structure.lattice.matrix
@@ -308,7 +325,7 @@ object CrystalEditor {
         val covRadius = { sym: String -> PeriodicTable.radius(sym, RadiusSource.BONDING) }
         val atomById = atoms.associateBy { it.id }
 
-        // Find H atoms with exactly 1 Voronoi neighbour in {O,N,F,S,P,Cl} within covalent distance.
+        // Find H atoms with exactly 1 neighbour in {O,N,F,S,P,Cl} within covalent distance.
         val protonAtomIds = mutableSetOf<Long>()
         for (atom in atoms) {
             if (atom.species.symbol != "H") continue
@@ -316,18 +333,17 @@ object CrystalEditor {
             val covBondedAcceptors = neighbours.mapNotNull { (nId, dist) ->
                 val n = atomById[nId] ?: return@mapNotNull null
                 if (n.species.symbol !in hbondPartnerElements) return@mapNotNull null
-                val covMax = covRadius("H") + covRadius(n.species.symbol) + 0.45
+                val covMax = covRadius("H") + covRadius(n.species.symbol) + epsilon
                 if (dist <= covMax) n.species.symbol else null
             }.distinct()
             if (covBondedAcceptors.size == 1) protonAtomIds += atom.id
         }
         val protonSiteIds = protonAtomIds.mapNotNull { atomById[it]?.siteId }.toSet()
-        if (protonSiteIds.isEmpty()) return rules
+        if (protonSiteIds.isEmpty()) return emptyList()
 
-        val hbondRules = HbondChecking.hbondRules(
-            structure, atoms, neighboursByAtomId, protonSiteIds, rules,
+        return HbondChecking.hbondRules(
+            structure, atoms, neighboursByAtomId, protonSiteIds, normalRules,
         )
-        return rules + hbondRules
     }
 
     private fun bondingRules(structure: CrystalStructure, epsilon: Double = 0.45): List<BondRule> {
@@ -392,6 +408,39 @@ object CrystalEditor {
         }.sortedWith(bondRuleComparator(siteSpecies))
         val filteredRules = rules.filter { it.key !in bondConfiguration.disabledPairs }
         return EditResult(structure, bondConfiguration.copy(rules = filteredRules))
+    }
+
+    /** Per v0.8.x: recompute ONLY the H-bond rules for [source] — existing normal
+     *  (non-H-bond) rules are kept exactly as-is. The normal rules act as the covalent
+     *  window input for the bonding/vdW paths; the SMART_IONIC path runs the full
+     *  smart-ionic analysis and keeps only its H-bond rules (falling back to the original
+     *  configuration when the analysis fails, e.g. beyond the atom limit). Structures
+     *  without hydrogen return the configuration untouched. */
+    fun rebuildHbondRules(
+        structure: CrystalStructure,
+        bondConfiguration: BondConfiguration,
+        source: RadiusSource,
+        epsilon: Double = 0.45,
+    ): EditResult {
+        if (structure.sites.none { it.species.symbol == "H" }) {
+            return EditResult(structure, bondConfiguration)
+        }
+        val normalRules = bondConfiguration.rules.filter { !it.isHBond }
+        val atoms = SymmetryExpander.expand(structure)
+        val newHbondRules = when (source) {
+            RadiusSource.SMART_IONIC -> {
+                val smart = BondValence.smartIonicRules(
+                    structure, bondConfiguration, epsilon, atoms, includeHbonds = true,
+                )
+                if (!smart.success) return EditResult(structure, bondConfiguration)
+                smart.rules.filter { it.isHBond }
+            }
+            else -> hbondRulesFor(structure, atoms, normalRules, epsilon)
+        }
+        return EditResult(
+            structure,
+            bondConfiguration.copy(rules = normalRules + newHbondRules),
+        )
     }
 
     private fun transform(
