@@ -139,31 +139,52 @@ class CrystalSceneBuilder {
             moleculeSiteIds = perMolSiteIds.map { it.toSet() }
             repBySiteId = repAtoms.groupBy { it.siteId }
             val images = options.molecules.map { m ->
-                // 分子原子物理位置(frac)与包围盒 → 与 [0,ex] 显示范围相交的周期映像
-                // 平移 t(每轴 ceil(-max)..floor(ex-min)):C60 角笼 (0,0,0) 的 t ∈ {0,1}³
-                // = 8 顶点映像,面心笼的 t_z ∈ {0,1} = 6 面心映像 —— 8 顶点 + 6 面心
-                // 共 14 个完整 C60 由动态原子/壳层补全。负侧平移(映像与显示范围不相交)
-                // 不生成。
-                val base = m.atoms.map { it.id to it.position.toVec3() }
-                val fr = base.map { (id, p) ->
-                    id to structure.lattice.toFractional(CartesianCoordinate(p.x, p.y, p.z))
+                // 按连通分量(物理分子/笼)分组:合并条目(如 C60 的 240 原子 = 4 笼)必须
+                // 逐笼生成映像,否则 4 笼被捆成一个整体生成 8 个整体映像 → 4×8=32 个笼
+                // (用户只看到 8 顶点 + 6 面心 = 14 个)。
+                val atomById = m.atoms.associateBy { it.id }
+                val adj = HashMap<Int, MutableList<Int>>()
+                for (b in m.bonds) {
+                    adj.getOrPut(b.from) { mutableListOf() } += b.to
+                    adj.getOrPut(b.to) { mutableListOf() } += b.from
                 }
-                val minX = fr.minOf { it.second.x }; val maxX = fr.maxOf { it.second.x }
-                val minY = fr.minOf { it.second.y }; val maxY = fr.maxOf { it.second.y }
-                val minZ = fr.minOf { it.second.z }; val maxZ = fr.maxOf { it.second.z }
-                val txRange = max(0, ceil(-maxX + 1e-6).toInt())..floor(displayEx.x - minX - 1e-6).toInt()
-                val tyRange = max(0, ceil(-maxY + 1e-6).toInt())..floor(displayEx.y - minY - 1e-6).toInt()
-                val tzRange = max(0, ceil(-maxZ + 1e-6).toInt())..floor(displayEx.z - minZ - 1e-6).toInt()
-                val result = mutableListOf<Pair<Int, Vec3>>()
-                for (tx in txRange) for (ty in tyRange) for (tz in tzRange) {
-                    for ((id, f) in fr) {
-                        val shifted = structure.lattice.toCartesian(
-                            FractionalCoordinate(f.x + tx, f.y + ty, f.z + tz),
-                        )
-                        result += id to Vec3(shifted.x, shifted.y, shifted.z)
+                val visited = HashSet<Int>()
+                val components = mutableListOf<List<MoleculeAtom>>()
+                for (a in m.atoms) {
+                    if (!visited.add(a.id)) continue
+                    val comp = mutableListOf<MoleculeAtom>()
+                    val stack = ArrayDeque<Int>()
+                    stack.add(a.id)
+                    while (stack.isNotEmpty()) {
+                        val id = stack.removeLast()
+                        comp += atomById.getValue(id)
+                        for (n in adj[id].orEmpty()) if (visited.add(n)) stack.add(n)
                     }
+                    components += comp
                 }
-                result.distinct()
+                // 每个分量(物理笼)独立计算与 [0,ex] 显示范围相交的正侧周期映像:
+                // C60 角笼 → t ∈ {0,1}³ = 8 顶点映像;面心笼 → 单轴 t ∈ {0,1} = 6 面心映像。
+                components.flatMap { comp ->
+                    val fr = comp.map {
+                        it.id to structure.lattice.toFractional(CartesianCoordinate(it.position.x, it.position.y, it.position.z))
+                    }
+                    val minX = fr.minOf { it.second.x }; val maxX = fr.maxOf { it.second.x }
+                    val minY = fr.minOf { it.second.y }; val maxY = fr.maxOf { it.second.y }
+                    val minZ = fr.minOf { it.second.z }; val maxZ = fr.maxOf { it.second.z }
+                    val txRange = max(0, ceil(-maxX + 1e-6).toInt())..floor(displayEx.x - minX - 1e-6).toInt()
+                    val tyRange = max(0, ceil(-maxY + 1e-6).toInt())..floor(displayEx.y - minY - 1e-6).toInt()
+                    val tzRange = max(0, ceil(-maxZ + 1e-6).toInt())..floor(displayEx.z - minZ - 1e-6).toInt()
+                    val result = mutableListOf<Pair<Int, Vec3>>()
+                    for (tx in txRange) for (ty in tyRange) for (tz in tzRange) {
+                        for ((id, f) in fr) {
+                            val shifted = structure.lattice.toCartesian(
+                                FractionalCoordinate(f.x + tx, f.y + ty, f.z + tz),
+                            )
+                            result += id to Vec3(shifted.x, shifted.y, shifted.z)
+                        }
+                    }
+                    result
+                }.distinct()
             }
             moleculeImageAtoms = images
             moleculePositions = images.map { it.map { p -> p.second } }
