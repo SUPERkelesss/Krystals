@@ -97,9 +97,30 @@ class MoleculeExtendC60AcceptanceTest {
         println("C60: moleculeBonds=${molBonds.size} missingBonds=$missingBonds ${samples}")
         assertEquals(0, missingBonds, "每个分子键都应有可见场景键")
 
-        // 3) 分子球完整:全部原胞 primary 已含 4 笼全部原子(240),无重复球。
-        val moleculePositions = molAtoms.map { it.position.toVec3() }
-        println("C60: visibleAtomsTotal=${visAtoms.size} (4 cages = 240 spheres + boundary)")
+        // 3) 分子球完整:全部原胞 primary 已含 4 笼全部原子(240)。
+        println("C60: visibleAtomsTotal=${visAtoms.size}")
         assertTrue(visAtoms.size >= 240, "4 笼 240 个原子球应全部可见")
+
+        // 4) 8 顶点 + 6 面心 = 14 个完整 C60:每个位置的笼(半径 0.248a)至少 50 个原子球
+        //    (完整笼 = 60 球;0.35a 统计半径内笼球壳全包含,留 50 下限容差)。
+        val a = structure.lattice.a
+        val cornerCenters = listOf(
+            Vec3(0.0, 0.0, 0.0), Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0),
+            Vec3(1.0, 1.0, 0.0), Vec3(1.0, 0.0, 1.0), Vec3(0.0, 1.0, 1.0), Vec3(1.0, 1.0, 1.0),
+        )
+        val faceCenters = listOf(
+            Vec3(0.5, 0.5, 0.0), Vec3(0.5, 0.0, 0.5), Vec3(0.0, 0.5, 0.5),
+            Vec3(0.5, 0.5, 1.0), Vec3(0.5, 1.0, 0.5), Vec3(1.0, 0.5, 0.5),
+        )
+        fun cageCount(center: Vec3): Int {
+            val c = Vec3(center.x * a, center.y * a, center.z * a)
+            return visAtoms.count { distance(it.atom.cartesianCoordinate.toVec3(), c) < 0.35 * a }
+        }
+        val corners = cornerCenters.map { cageCount(it) }
+        val faces = faceCenters.map { cageCount(it) }
+        println("C60: corner cages (8 vertices) spheres=$corners")
+        println("C60: face cages (6 face centers) spheres=$faces")
+        assertTrue(corners.all { it >= 50 }, "8 个顶点位置都应有完整 C60(≥50 球), got $corners")
+        assertTrue(faces.all { it >= 50 }, "6 个面心位置都应有完整 C60(≥50 球), got $faces")
     }
 }
