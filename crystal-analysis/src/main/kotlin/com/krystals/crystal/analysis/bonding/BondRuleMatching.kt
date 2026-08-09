@@ -64,27 +64,22 @@ object BondRuleMatching {
         // its own periodic image (the common case when the ASU has only one atom of that site, e.g.
         // Cs in CsCl). The grid cannot represent "an atom to its own non-zero lattice translation",
         // so this path is handled directly with the minimum-image convention.
+        // Per v0.8.43 (issue #7): unified minimum-image pairing over all ordered pairs (i ≤ j).
+        // Distinct atoms (i < j) minimise over the 27 lattice offsets; an atom against its own
+        // periodic images (i == j) minimises over the 26 non-zero offsets. The former |off| length
+        // test is gone — it only covered pure lattice translations and missed symmetry-image pairs.
         if (rule.siteA == rule.siteB) {
             val offsets = structure.latticeOffsets
-            fun minImage(x: Vec3, y: Vec3): Double {
+            for (i in a.indices) for (j in i until a.size) {
+                val cx = a[i].cartesianCoordinate.toVec3()
+                val cy = a[j].cartesianCoordinate.toVec3()
                 var best = Double.POSITIVE_INFINITY
                 for (off in offsets) {
-                    val d = distance(x, y + off)
+                    if (i == j && off.lengthSquared() < 1e-18) continue
+                    val d = distance(cx, cy + off)
                     if (d < best) best = d
                 }
-                return best
-            }
-            for (i in a.indices) for (j in i + 1 until a.size) {
-                val d = minImage(a[i].cartesianCoordinate.toVec3(), a[j].cartesianCoordinate.toVec3())
-                if (d > 0.0 && d >= min && d <= max) return true
-            }
-            for (x in a) {
-                for (off in offsets) {
-                    if (off.lengthSquared() < 1e-18) continue
-                    val cartesian = x.cartesianCoordinate.toVec3()
-                    val d = distance(cartesian, cartesian + off)
-                    if (d >= min && d <= max) return true
-                }
+                if (best > 0.0 && best >= min && best <= max) return true
             }
             return false
         }

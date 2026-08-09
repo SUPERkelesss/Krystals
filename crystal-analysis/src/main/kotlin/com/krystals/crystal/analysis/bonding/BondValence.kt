@@ -2,6 +2,8 @@ package com.krystals.crystal.analysis.bonding
 
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.*
+import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.math.distance
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.core.model.Site
@@ -97,9 +99,21 @@ object BondValence {
 
         val rules = structure.sites.flatMapIndexed { i, siteA ->
             structure.sites.drop(i).mapNotNull { siteB ->
-                // Skip anion–anion pairs (O–O, O–F, …): no ionic bond between two anions.
-                if (analysis.siteValence[siteA.id]?.isAnion == true &&
-                    analysis.siteValence[siteB.id]?.isAnion == true) return@mapNotNull null
+                // Per v0.8.43 (issue #7): anion–anion pairs (O–O, S–S, …) have no ionic bond,
+                // but the blanket skip also dropped REAL bonded pairs — disulfide S–S in pyrite,
+                // peroxide O–O — bonds the renderer draws through its covalent auto fallback,
+                // leaving the rule window empty while the bond rendered. Skip only pairs without
+                // a covalent contact; bonded pairs get the covalent window (the same convention
+                // as BondDetector's auto fallback) instead of the wide Shannon-radius window.
+                val anionAnion = analysis.siteValence[siteA.id]?.isAnion == true &&
+                    analysis.siteValence[siteB.id]?.isAnion == true
+                if (anionAnion) {
+                    val covMax = PeriodicTable.covalentRadius(siteA.species.symbol) +
+                        PeriodicTable.covalentRadius(siteB.species.symbol) + epsilon
+                    if (!hasAnionAnionContact(siteA.id, siteB.id, atoms, structure, covMax)) return@mapNotNull null
+                    val (orderedA, orderedB) = orderedSites(siteA, siteB)
+                    return@mapNotNull BondRule(orderedA.id, orderedB.id, 0.1, covMax, BondRuleSource.CUSTOM)
+                }
                 val rA = analysis.siteValence[siteA.id]?.radius ?: PeriodicTable.radius(siteA.species.symbol, RadiusSource.BONDING)
                 val rB = analysis.siteValence[siteB.id]?.radius ?: PeriodicTable.radius(siteB.species.symbol, RadiusSource.BONDING)
                 // Per v0.6.5: order siteA/siteB — metal first, or larger atomic number first if same type.
@@ -122,6 +136,33 @@ object BondValence {
         } else emptyList()
 
         return SmartIonicResult(rules + hbondRules, success = true)
+    }
+
+    /** Per v0.8.43 (issue #7): true when any expanded pair of the two sites sits within
+     *  [maxDist] under the minimum-image convention — the renderer's covalent auto-fallback
+     *  threshold. Lets genuinely bonded anion–anion pairs (disulfide S–S in pyrite, peroxide
+     *  O–O) generate rules while keeping the ionic-model skip for non-bonded anions. */
+    private fun hasAnionAnionContact(
+        siteAId: String,
+        siteBId: String,
+        atoms: List<AtomImage>,
+        structure: CrystalStructure,
+        maxDist: Double,
+    ): Boolean {
+        val a = atoms.filter { it.siteId == siteAId }
+        val b = if (siteBId == siteAId) a else atoms.filter { it.siteId == siteBId }
+        val offsets = structure.latticeOffsets
+        for (x in a) for (y in b) {
+            if (x === y) continue
+            val cx = x.cartesianCoordinate.toVec3()
+            var best = Double.POSITIVE_INFINITY
+            for (off in offsets) {
+                val d = distance(cx, y.cartesianCoordinate.toVec3() + off)
+                if (d < best) best = d
+            }
+            if (best > 0.0 && best <= maxDist) return true
+        }
+        return false
     }
 
     /**
