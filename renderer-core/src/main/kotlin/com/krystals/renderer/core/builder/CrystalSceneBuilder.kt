@@ -182,9 +182,15 @@ class CrystalSceneBuilder {
                     // 全方向相交映像:映像 M+t 与 [0,ex] 显示区相交 ⟺ min+t ≤ ex 且
                     // max+t ≥ 0 → t ∈ [ceil(-max), floor(ex-min)],不限正负(低对称
                     // 晶胞的负侧钻入映像由此补全;C60 角笼/面心笼 t∈{0,1}³ 不变)。
-                    val txRange = ceil(-maxX + 1e-6).toInt()..floor(displayEx.x - minX - 1e-6).toInt()
-                    val tyRange = ceil(-maxY + 1e-6).toInt()..floor(displayEx.y - minY - 1e-6).toInt()
-                    val tzRange = ceil(-maxZ + 1e-6).toInt()..floor(displayEx.z - minZ - 1e-6).toInt()
+                    // 全方向相交映像:映像 M+t 与 [0,ex] 显示区相交 ⟺ min+t ≤ ex 且
+                    // max+t ≥ 0 → t ∈ [ceil(-max), floor(ex-min)],不限正负(低对称
+                    // 晶胞的负侧钻入映像由此补全;C60 角笼/面心笼 t∈{0,1}³ 不变)。
+                    // ε 取 +/− 对称方向:分量恰在 0 面(min=0)时 t=0 必须保留,
+                    // 恰在 ex 面(max=ex)时 t=0..1 必须保留 —— ceil(-max−ε) 对
+                    // max=0 得 0(旧式 +ε 会得 1 而清空 t 范围,I2 0 面分子整簇丢失)。
+                    val txRange = ceil(-maxX - 1e-6).toInt()..floor(displayEx.x - minX + 1e-6).toInt()
+                    val tyRange = ceil(-maxY - 1e-6).toInt()..floor(displayEx.y - minY + 1e-6).toInt()
+                    val tzRange = ceil(-maxZ - 1e-6).toInt()..floor(displayEx.z - minZ + 1e-6).toInt()
                     val result = mutableListOf<Pair<Int, Vec3>>()
                     for (tx in txRange) for (ty in tyRange) for (tz in tzRange) {
                         for ((id, f) in fr) {
@@ -717,6 +723,82 @@ class CrystalSceneBuilder {
                     for (n in moleculeNeighbors[mol][maId].orEmpty()) {
                         emitMoleculeBond(dyn, maId, n, aPos)
                     }
+                }
+            }
+
+            // Per v0.8.x (4.2): hbond 映像补全 —— 动态原子(本块合成的显示原子,不在
+            // BondNetwork 中)无法被 BondDetector 生成氢键,导致"晶胞外的两个可见原子
+            // 形成的氢键"不渲染。网络氢键模板的周期副本平移不改变 D–H···A 几何
+            // (键长/角度均为平移不变量),故对每个模板,在"可见供体 H 球"与"可见受体
+            // 球"中匹配:位置差与模板偏移 ℤ³ 同余(1e-4)且距离一致(±1e-2)→ 补发
+            // HbondInstance。两端球都可见才显示(决策 2:不悬空、不把未显示原子拉进来);
+            // 每 H 球取最短(与检测层 per-H 最短口径一致);角度沿用模板的显示过滤结果
+            // (平移不变,副本同角)。
+            if (options.showBonds && analysis.hbonds.isNotEmpty()) {
+                val visibleBallsBySite = HashMap<String, MutableList<Vec3>>()
+                objects.filterIsInstance<AtomInstance>().filter { it.visible }
+                    .forEach { visibleBallsBySite.getOrPut(it.atom.siteId) { mutableListOf() } += it.atom.cartesianCoordinate.toVec3() }
+                val occupiedHbondPairs = HashSet<Pair<Triple<Int, Int, Int>, Triple<Int, Int, Int>>>()
+                fun ballKey(p: Vec3) = Triple((p.x * 1000).toInt(), (p.y * 1000).toInt(), (p.z * 1000).toInt())
+                // 占位键用端点原子中心(而非主 pass 的球面锚定端点):分组原子的锚定
+                // 端与中心相差 ~0.35Å,直接按实例端点键会漏判 → 同一物理氢键被重复发射。
+                objects.filterIsInstance<HbondInstance>().forEach { inst ->
+                    val d = atomById[inst.hbond.donorId]?.cartesianCoordinate?.toVec3()
+                    val a = atomById[inst.hbond.acceptorId]?.cartesianCoordinate?.toVec3()
+                    if (d != null && a != null) occupiedHbondPairs += ballKey(d) to ballKey(a)
+                }
+                fun nearInt(v: Double) = kotlin.math.abs(v - kotlin.math.round(v)) < 1e-4
+                // H 球位置键 → (模板, 供体球位置, 受体球位置, 距离):跨模板去重,每 H 球取最短。
+                val bestCopyPerHBall = HashMap<Triple<Int, Int, Int>, Pair<HydrogenBond, Triple<Vec3, Vec3, Double>>>()
+                analysis.hbonds.forEach { hbond ->
+                    if (hbond.ruleKey in options.hiddenBondKeys) return@forEach
+                    val donor = atomById[hbond.donorId] ?: return@forEach
+                    val acceptor = atomById[hbond.acceptorId] ?: return@forEach
+                    val partners = covalentPartnersByAtom[donor.id].orEmpty()
+                    val angleOk = options.hbondAngleThreshold <= 0.0 ||
+                        hbondAngleDegrees(donor, acceptor, partners, structure.lattice.matrix)
+                            ?.let { it > options.hbondAngleThreshold } ?: true
+                    if (!angleOk) return@forEach
+                    val donorBalls = visibleBallsBySite[donor.siteId].orEmpty()
+                    val acceptorBalls = visibleBallsBySite[acceptor.siteId].orEmpty()
+                    if (donorBalls.isEmpty() || acceptorBalls.isEmpty()) return@forEach
+                    val shiftX = acceptor.fractionalCoordinate.x - donor.fractionalCoordinate.x
+                    val shiftY = acceptor.fractionalCoordinate.y - donor.fractionalCoordinate.y
+                    val shiftZ = acceptor.fractionalCoordinate.z - donor.fractionalCoordinate.z
+                    for (p in donorBalls) {
+                        val pFrac = structure.lattice.toFractional(CartesianCoordinate(p.x, p.y, p.z))
+                        var best: Triple<Vec3, Vec3, Double>? = null
+                        for (q in acceptorBalls) {
+                            val qFrac = structure.lattice.toFractional(CartesianCoordinate(q.x, q.y, q.z))
+                            if (!nearInt((qFrac.x - pFrac.x) - shiftX) ||
+                                !nearInt((qFrac.y - pFrac.y) - shiftY) ||
+                                !nearInt((qFrac.z - pFrac.z) - shiftZ)
+                            ) continue
+                            val d = distance(p, q)
+                            if (kotlin.math.abs(d - hbond.distance) > 1e-2) continue
+                            if (best == null || d < best.third) best = Triple(p, q, d)
+                        }
+                        val pk = ballKey(p)
+                        val existing = bestCopyPerHBall[pk]
+                        if (best != null && (existing == null || best.third < existing.second.third)) {
+                            bestCopyPerHBall[pk] = hbond to best
+                        }
+                    }
+                }
+                for ((pk, cand) in bestCopyPerHBall) {
+                    val (template, geo) = cand
+                    val (p, q, _) = geo
+                    val qk = ballKey(q)
+                    if (!occupiedHbondPairs.add(pk to qk)) continue
+                    objects += HbondInstance(
+                        id = "hbond-copy:${pk.first},${pk.second},${pk.third}:${qk.first},${qk.second},${qk.third}",
+                        hbond = template,
+                        start = p,
+                        end = q,
+                        radius = options.hbondRadius,
+                        material = HbondPattern.material(options.hbondOpacity.toFloat()),
+                        visible = true,
+                    )
                 }
             }
         }

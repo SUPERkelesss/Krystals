@@ -9,6 +9,7 @@ import com.krystals.crystal.analysis.model.Expansion
 import com.krystals.crystal.core.coordinate.CartesianCoordinate
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
+import com.krystals.crystal.core.math.Vec3
 import com.krystals.crystal.core.math.distance
 import com.krystals.crystal.core.model.AtomImage
 import com.krystals.crystal.core.model.CrystalStructure
@@ -411,9 +412,11 @@ class CrystalSceneBuilderMoleculeTest {
 
     @Test
     fun moleculeExtendShowsHbondWhenBothEndpointsVisible() {
-        // 分子间氢键(O1 与另一分子的 H3):两端分子都显示 → 两端球可见 → 氢键渲染
-        // (决策 2:两端球都可见才显示;分子展开不触发也不切断分子间氢键)。
-        val hbond = Bond(1, 5, 2.4, BondRule("O1", "H3", 1.5, 3.0, BondRuleSource.AUTO, isHBond = true))
+        // 分子间氢键(水1 的 H1 供体 → 水2 的 O2 受体):两端分子都显示 → 两端球可见 →
+        // 氢键渲染(决策 2:两端球都可见才显示;分子展开不触发也不切断分子间氢键)。
+        // 供体取真实 D–H···A 几何(H1 有共价伙伴 O1;∠O1–H1···O2 ≈ 119.5° > 110° 阈值)——
+        // v0.7.0 起自动氢键无共价供体即隐藏,故不能用无伙伴的合成供体。
+        val hbond = Bond(2, 4, 3.25, BondRule("H1", "O2", 1.5, 3.5, BondRuleSource.AUTO, isHBond = true))
             .toHydrogenBond(atoms.associateBy { it.id })
         val scene = build(
             SceneBuildOptions(moleculeExtend = true, molecules = molecules),
@@ -533,6 +536,70 @@ class CrystalSceneBuilderMoleculeTest {
     }
 
     @Test
+    fun moleculeExtendCompletesHbondPeriodicCopies() {
+        // 4.2 回归(2026-08-09):氢键模板的周期副本 —— 跨 z=1 面的 H1···O1 模板
+        // (供体 32@(2,2,4.0) → 受体 34@(2,2,2.0),d=2.0,∠D–H···O=180°)的包裹
+        // 副本 H1@(2,2,0.0)→O1@(2,2,2.0) 与模板偏移 ℤ³ 同余且键长一致,但不在
+        // 网络中(检测层不生成副本);按 (供体位点可见球, 受体位点可见球) 匹配模板
+        // 补发 HbondInstance(动态原子场景同一机制:动态球只是普通可见球)。
+        val atoms = listOf(
+            atom(31, "D1", "D", 0.5, 0.5, 0.1),                                      // (2,2,0.4) 原胞代表(包裹)
+            atom(41, "D1", "D", 0.5, 0.5, 1.1, offset = Int3(0, 0, 1), shell = true), // (2,2,4.4) 物理位置
+            atom(33, "H1", "H", 0.5, 0.5, 0.0),                                      // (2,2,0.0) 原胞代表(包裹)
+            atom(32, "H1", "H", 0.5, 0.5, 1.0, offset = Int3(0, 0, 1), shell = true, boundary = true), // (2,2,4.0)
+            atom(34, "O1", "O", 0.5, 0.5, 0.5),                                      // (2,2,2.0)
+            atom(35, "B1", "B", 0.5, 0.5, 0.4),                                      // (2,2,1.6)
+        )
+        val pBonds = listOf(
+            bond(41, 32, "D1", "H1"),
+            bond(34, 35, "O1", "B1"),
+        )
+        val hb = Bond(32, 34, 2.0, BondRule("H1", "O1", 1.5, 3.0, BondRuleSource.AUTO, isHBond = true))
+            .toHydrogenBond(atoms.associateBy { it.id })
+        val molA = Molecule(
+            "DH",
+            listOf(
+                MoleculeAtom(31, "D", Species("D"), CartesianCoordinate(2.0, 2.0, 4.4), siteId = "D1"),
+                MoleculeAtom(33, "H", Species("H"), CartesianCoordinate(2.0, 2.0, 4.0), siteId = "H1"),
+            ),
+            listOf(MoleculeBond(31, 33)),
+        )
+        val molB = Molecule(
+            "OB",
+            listOf(
+                MoleculeAtom(34, "O", Species("O"), CartesianCoordinate(2.0, 2.0, 2.0), siteId = "O1"),
+                MoleculeAtom(35, "B", Species("B"), CartesianCoordinate(2.0, 2.0, 1.6), siteId = "B1"),
+            ),
+            listOf(MoleculeBond(34, 35)),
+        )
+        val scene = build(
+            SceneBuildOptions(moleculeExtend = true, molecules = listOf(molA, molB)),
+            pBonds, atoms, listOf(hb),
+        )
+        // 所有映像位置都有场景原子承接(无动态原子);主 pass 1 条 + 补全副本 1 条。
+        assertTrue(scene.atoms.none { it.id.startsWith("molatom:") }, "all image positions carried by scene atoms")
+        val hbs = scene.hbonds.filter { it.visible }
+        assertEquals(2, hbs.size, "template hbond + periodic-copy hbond")
+        assertTrue(
+            hbs.any {
+                it.id.startsWith("hbond-copy:") &&
+                    distance(it.start, Vec3(2.0, 2.0, 0.0)) < 1e-6 &&
+                    distance(it.end, Vec3(2.0, 2.0, 2.0)) < 1e-6
+            },
+            "wrapped copy hbond (2,2,0.0)->(2,2,2.0) rendered",
+        )
+        // 副本两端都有可见球(决策 2:不悬空)。
+        assertTrue(
+            scene.atoms.any { it.visible && distance(it.atom.cartesianCoordinate.toVec3(), Vec3(2.0, 2.0, 0.0)) < 1e-6 },
+            "donor ball at (2,2,0.0) visible",
+        )
+        assertTrue(
+            scene.atoms.any { it.visible && distance(it.atom.cartesianCoordinate.toVec3(), Vec3(2.0, 2.0, 2.0)) < 1e-6 },
+            "acceptor ball at (2,2,2.0) visible",
+        )
+    }
+
+    @Test
     fun moleculeExtendShowsAtomsOnCellBoundaryFaces() {
         // [0,1] 闭区间:分子原子物理位置恰在 z=1 面(frac 1.0)的映像(场景边界原子 32)
         // 必须显示——边界属于单胞显示范围,不是 [0,1)。分子 X-W:X 原胞代表 frac 0.0
@@ -559,8 +626,20 @@ class CrystalSceneBuilderMoleculeTest {
         assertTrue(scene.atomInstance(32).visible, "atom on z=1 face (frac 1.0) must be shown (closed [0,1])")
         assertTrue(scene.atomInstance(34).visible)
         assertTrue(scene.bondBetween(32, 34).visible, "in-molecule bond crossing the z=1 face")
-        // 无动态原子:X@(2,2,4) 由场景边界原子 32 承载。
-        assertTrue(scene.atoms.none { it.id.startsWith("molatom:") })
+        // 全方向规则(2026-08-09):分子拓扑 X@frac1.0/W@frac0.75 → 相交映像 t∈{-1,0}。
+        // t=0 映像:X@(2,2,4) 由场景边界原子 32 承载;t=-1 映像:X@frac0.0 由场景
+        // primary 31 承载,W@(2,2,-1) 无场景原子 → 1 个动态原子,分子内键 31-动态W 补齐。
+        val dyns = scene.atoms.filter { it.id.startsWith("molatom:") }
+        assertEquals(1, dyns.size, "t=-1 image's W below the cell is a dynamic atom")
+        val dynW = dyns.single().atom
+        assertEquals(2.0, dynW.cartesianCoordinate.x, 1e-9)
+        assertEquals(2.0, dynW.cartesianCoordinate.y, 1e-9)
+        assertEquals(-1.0, dynW.cartesianCoordinate.z, 1e-9)
+        assertTrue(dyns.single().visible, "dynamic W of the t=-1 image is in display band")
+        assertTrue(
+            scene.bonds.any { it.visible && it.id.startsWith("molbond:") && kotlin.math.abs(distance(it.start, it.end) - 1.0) < 1e-9 },
+            "t=-1 image bond X@0 - W@-1 rendered",
+        )
     }
 
     @Test
