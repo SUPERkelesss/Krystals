@@ -469,7 +469,13 @@ fun KrystalsRoot(
                                 }
                                 BondRuleMode.SMART_IONIC -> {
                                     val smartIonic = kotlinx.coroutines.withTimeoutOrNull(15000L) {
-                                        runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = settingsValues.autoComputeHbonds) }.getOrNull()
+                                        runCatching {
+                                            BondValence.smartIonicRules(
+                                                structure, bondConfiguration, epsilon,
+                                                includeHbonds = settingsValues.autoComputeHbonds,
+                                                cancelCheck = { coroutineContext.isActive },
+                                            )
+                                        }.getOrNull()
                                     }
                                     CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)
                                 }
