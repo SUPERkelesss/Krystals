@@ -81,6 +81,7 @@ import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
 import com.krystals.crystal.core.math.ExpressionParser
+import com.krystals.crystal.core.math.Mat3
 import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
@@ -345,7 +346,11 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
 // Per v0.7.1: 3×3 matrix transform no longer affects expansion. The scaling is
 // handled by symmetry operations within the structure itself.
                 tab.isPrimitiveCell = false
-                tab.cellTransformed = true
+                // Per v0.8.43 (issue #6): hide the primitive/conventional conversion button
+                // only after a real EXPANSION (|det| > 1) — the original requirement
+                // "应用3×3矩阵扩胞后". det = 1 transforms (rotation / axis swap / inversion)
+                // keep the button, and a later expansion still sets it (never cleared here).
+                if (abs(Mat3.fromRows(rows).determinant()) > 1.0 + 1e-9) tab.cellTransformed = true
                 tab.savedConventionalStructure = null; tab.savedConventionalBondConfig = null
                 tab.savedPrimitiveStructure = null; tab.savedPrimitiveBondConfig = null
                 transformOpen = false
