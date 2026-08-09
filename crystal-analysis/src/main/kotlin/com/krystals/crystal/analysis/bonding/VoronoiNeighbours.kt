@@ -160,17 +160,34 @@ internal object VoronoiNeighbours {
         // Per v0.7.1: track the maximum vertex distance of the current cell. A candidate whose
         // distance exceeds 2× this value cannot intersect the cell (its bisector plane is beyond
         // the cell), so we can skip the expensive clipping computation.
+        //
+        // Per v0.7.2: maxVertexDist is non-increasing across clips — the norm is convex, so the
+        // bisector intersections with an old edge lie on that edge and their norm is bounded by
+        // the old vertices' norms; every clipped face keeps only old vertices plus such
+        // intersections. The cell is the convex hull of its vertices, inside the origin-centred
+        // ball of radius R = maxVertexDist; a candidate at distance d has its bisector plane at
+        // distance d/2 from the origin, which meets that ball iff d <= 2R. Candidates arrive in
+        // ascending distance order (candidates() sorts by distance), so once d > 2R holds for
+        // the latest R it holds for every later candidate with any smaller R — we can BREAK
+        // instead of scanning each far candidate's faces only to skip it.
+        var maxVertexDist = maxVertexDistance(faces)
         for (candidate in candidates) {
-            var maxVertexDist = 0.0
-            for (face in faces) for (v in face.vertices) {
-                val len = v.length()
-                if (len > maxVertexDist) maxVertexDist = len
-            }
-            if (candidate.distance > 2.0 * maxVertexDist + EPS) continue
+            if (candidate.distance > 2.0 * maxVertexDist + EPS) break
             faces = clip(faces, candidate)
             if (faces.isEmpty()) break
+            maxVertexDist = maxVertexDistance(faces)
         }
         return faces
+    }
+
+    /** Maximum norm of any vertex of the current cell; only ever shrinks under [clip]. */
+    private fun maxVertexDistance(faces: List<Face>): Double {
+        var max = 0.0
+        for (face in faces) for (v in face.vertices) {
+            val len = v.length()
+            if (len > max) max = len
+        }
+        return max
     }
 
     private fun clip(faces: List<Face>, candidate: Candidate): List<Face> {
