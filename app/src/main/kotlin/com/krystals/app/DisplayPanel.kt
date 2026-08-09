@@ -314,14 +314,17 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                 // Per v0.3.44: group sites by element. Each group is a collapsible header
                                 // (expand/collapse + group checkbox + element label + group color swatch +
                                 // count) followed by the per-site rows when expanded.
+                                // Per v0.8.43: groups default COLLAPSED (consistent with the BONDS tab).
                                 groupedSites.forEach { (element, groupSites) ->
                                     item(key = "A:hdr_$element") {
-                                        val expanded = collapsedGroups["A:$element"] != true
+                                        val expanded = collapsedGroups["A:$element"] == true
                                         val allGroupVisible = groupSites.all { it.id !in tab.visibility.hiddenSites }
                                         CollapsibleGroupHeader(
                                             title = "$element (${groupSites.size})",
                                             expanded = expanded,
-                                            onToggle = { collapsedGroups["A:$element"] = expanded },
+                                            // Default-collapsed toggle: store the inverted value so clicking
+                                            // flips the derived expanded state (see BONDS, v0.8.43).
+                                            onToggle = { collapsedGroups["A:$element"] = !expanded },
                                             checked = allGroupVisible,
                                             onCheckChange = { checked ->
                                                 tab.recordHistory()
@@ -341,7 +344,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                             )
                                         }
                                     }
-                                    if (collapsedGroups["A:$element"] != true) {
+                                    if (collapsedGroups["A:$element"] == true) {
                                         items(groupSites, key = { it.id }) { site ->
                                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 28.dp, top = 2.dp, bottom = 2.dp)) {
                                                 val visible = site.id !in tab.visibility.hiddenSites
@@ -613,14 +616,17 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                 item(key = "P:div1") { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
                                 // Per v0.3.44: polyhedra sites grouped by element, same collapse/group-toggle
                                 // pattern as ATOMS but without a color swatch.
+                                // Per v0.8.43: groups default COLLAPSED (consistent with the BONDS tab).
                                 groupedSites.forEach { (element, groupSites) ->
                                     item(key = "P:hdr_$element") {
-                                        val expanded = collapsedGroups["P:$element"] != true
+                                        val expanded = collapsedGroups["P:$element"] == true
                                         val allGroupEnabled = groupSites.all { it.id in tab.visibility.polyhedronSites }
                                         CollapsibleGroupHeader(
                                             title = "$element (${groupSites.size})",
                                             expanded = expanded,
-                                            onToggle = { collapsedGroups["P:$element"] = expanded },
+                                            // Default-collapsed toggle: store the inverted value so clicking
+                                            // flips the derived expanded state (see BONDS, v0.8.43).
+                                            onToggle = { collapsedGroups["P:$element"] = !expanded },
                                             checked = allGroupEnabled,
                                             onCheckChange = { checked ->
                                                 tab.recordHistory()
@@ -631,7 +637,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                             },
                                         ) { Spacer(Modifier.width(22.dp)) }
                                     }
-                                    if (collapsedGroups["P:$element"] != true) {
+                                    if (collapsedGroups["P:$element"] == true) {
                                         items(groupSites, key = { it.id }) { site ->
                                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 28.dp)) {
                                                 val enabled = site.id in tab.visibility.polyhedronSites
