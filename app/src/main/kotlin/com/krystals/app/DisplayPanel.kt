@@ -82,13 +82,14 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
     val allBondsVisible = tab.visibility.showBonds && tab.visibility.hiddenBondPairs.none { key -> normalRules.any { it.key == key } }
     val allHbondsVisible = tab.visibility.showBonds && tab.visibility.hiddenBondPairs.none { key -> hbondRules.any { it.key == key } }
     val allPolyhedraEnabled = siteIds.isNotEmpty() && siteIds.all { it in tab.visibility.polyhedronSites }
-    var selected by remember {
+    var selected by remember(tab.isMolecularCrystal) {
         mutableStateOf(
             // Per v0.8.27: restore this tab's last display sub-menu; a new tab
-            // (or never-opened) falls through to the first sub-menu (ATOMS).
+            // (or never-opened) falls back to MOLECULES when the 分子 sub-menu exists
+            // (molecular crystal, v0.8.43), else ATOMS.
             tab.rememberedDisplayTab?.let { remembered ->
                 runCatching { DisplayTab.valueOf(remembered) }.getOrNull()
-            } ?: DisplayTab.ATOMS
+            } ?: if (tab.isMolecularCrystal) DisplayTab.MOLECULES else DisplayTab.ATOMS
         )
     }
     // Per v0.8.1: if HBONDS tab is selected but no hbond rules exist anymore, fall back to BONDS.

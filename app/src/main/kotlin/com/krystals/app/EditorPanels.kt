@@ -917,9 +917,10 @@ private fun visibleBondRules(tab: DocumentTab): List<BondRule> {
     // here so opening the rule list on a large cell no longer crashes with "Key was already used".
 }
 
-/** Per v0.8.x: shared rule list row for [BondEditor] and [HbondEditor]. Border precedence —
- *  red (Σocc>1) > mixedColor; the hbond grey frame and "氢键" label are gone because each
- *  list holds only one rule type. */
+/** Per v0.8.x: shared rule list row for [BondEditor] and [HbondEditor]. Border — red
+ *  (Σocc>1) warning only; the gathered-atom grey placeholder border was removed per
+ *  v0.8.43, and the hbond grey frame + "氢键" label are gone because each list holds
+ *  only one rule type. */
 @Composable
 private fun BondRuleRow(
     rule: BondRule,
@@ -930,16 +931,12 @@ private fun BondRuleRow(
 ) {
     val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
     val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
-    // Per v0.8.2: border precedence — red (Σocc>1) > mixedColor.
+    // Per v0.8.43: gathered-atom rows no longer get a border; only the red Σocc>1
+    // (normalized) warning border remains.
     val gatherA = gatheredSiteInfo[rule.siteA]
     val gatherB = gatheredSiteInfo[rule.siteB]
     val anyNormalized = (gatherA?.wasNormalized == true) || (gatherB?.wasNormalized == true)
-    val anyGathered = gatherA != null || gatherB != null
-    val borderColor = when {
-        anyNormalized -> Color.Red
-        anyGathered -> Color(0xFF808080) // placeholder mixedColor
-        else -> null
-    }
+    val borderColor = if (anyNormalized) Color.Red else null
     val rowModifier = Modifier.fillMaxWidth()
         .clickable { onEdit() }
         .padding(vertical = 6.dp, horizontal = 4.dp)

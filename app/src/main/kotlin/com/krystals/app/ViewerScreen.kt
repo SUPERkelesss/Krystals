@@ -343,9 +343,13 @@ internal fun ViewerScreen(
                                 .associate { it.id.toInt() to it.siteId }
                             tab.molecules.map { m -> m.atoms.mapNotNull { cellAtomSiteByAtomId[it.id] }.toSet() }
                         } else emptyList()
-                        // 分子晶体默认启用"按分子展开"(仅在新打开/结构变更后分析时重置)。
+                        // 分子晶体默认启用"按分子展开"：仅新打开/结构变更(undo/redo、自动键规则)
+                        // 后分析时重置一次;编辑(含"扩展到晶胞外"全选)不再联动 moleculeExtend。
                         // Per v0.8.27: 由偏好设置"分子晶体默认按分子延伸"决定(默认 true)。
-                        tab.moleculeExtend = tab.isMolecularCrystal && settingsValues.defaultMoleculeExtend
+                        if (tab.moleculeExtendDefaultPending) {
+                            tab.moleculeExtend = tab.isMolecularCrystal && settingsValues.defaultMoleculeExtend
+                            tab.moleculeExtendDefaultPending = false
+                        }
                         tab.moleculeAnalysisPending = false
                     }
                     CrystalRenderSceneFactory.build(

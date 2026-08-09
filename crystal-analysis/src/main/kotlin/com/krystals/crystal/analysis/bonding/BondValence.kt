@@ -45,8 +45,9 @@ private fun orderedSites(siteA: Site, siteB: Site): Pair<Site, Site> {
  */
 object BondValence {
 
-    /** Above this expanded-atom count the default path skips smart-ionic and uses bonding radii. */
-    const val SMART_IONIC_ATOM_LIMIT: Int = 100
+    /** Above this expanded-atom count the default path skips smart-ionic and uses bonding radii.
+     *  Per v0.8.43: tripled from 100 (auto-detection scope + cap both ×3). */
+    const val SMART_IONIC_ATOM_LIMIT: Int = 300
 
     /** Outcome of a smart-ionic analysis. [rules] are the generated rules; [success] is false when
      *  the structure couldn't be analysed (caller should fall back to bonding radii). */

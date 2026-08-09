@@ -366,7 +366,8 @@ fun KrystalsRoot(
     }
 
     /**
-     * Per v0.5.2b: open-file bond computation with a 5 s smart-ionic timeout. Falls back to bonding
+     * Per v0.5.2b: open-file bond computation with a smart-ionic timeout (15 s per v0.8.43, was 5 s).
+     * Falls back to bonding
      * radii on timeout and surfaces the [smartIonicTimeoutMessage] snackbar.
      * Per v0.6.1: cooperative cancellation, fast size-guarded fallback, and bonding-radius rules
      * applied if the user cancels mid-computation so the Chemical Bonds panel is never empty.
@@ -393,14 +394,14 @@ fun KrystalsRoot(
                                 if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
                                     CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null, settingsValues.autoComputeHbonds)
                                 } else {
-                                    val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                                    val smartIonic = kotlinx.coroutines.withTimeoutOrNull(15000L) {
                                         runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = settingsValues.autoComputeHbonds) }.getOrNull()
                                     }
                                     CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)
                                 }
                             }
                             BondRuleMode.SMART_IONIC -> {
-                                val smartIonic = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                                val smartIonic = kotlinx.coroutines.withTimeoutOrNull(15000L) {
                                     runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = settingsValues.autoComputeHbonds) }.getOrNull()
                                 }
                                 CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)

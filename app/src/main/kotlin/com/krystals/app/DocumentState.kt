@@ -70,6 +70,7 @@ data class DocumentSnapshot(
         tab.savedPrimitiveBondConfig = savedPrimitiveBondConfig
         tab.structuralExpansion = structuralExpansion
         tab.moleculeAnalysisPending = true
+        tab.moleculeExtendDefaultPending = true
     }
     companion object {
         fun capture(tab: DocumentTab) = DocumentSnapshot(
@@ -164,6 +165,9 @@ class DocumentTab(
     // 按分子展开:仅分子晶体有效,分子晶体默认启用;启用时"扩展到晶胞外"规则失效(UI 灰显)。
     var moleculeExtend by mutableStateOf(false)
     var moleculeAnalysisPending by mutableStateOf(true)
+    // Per v0.8.43: 分子展开默认值是否待应用——仅新打开/结构变更(undo/redo、自动键规则)后置位;
+    // 编辑路径(updateAnalysis、绘制/删除键)不置位,故"扩展到晶胞外"全选等编辑不再自动触发"按分子展开"。
+    var moleculeExtendDefaultPending by mutableStateOf(true)
     // Per v0.7.1: when non-null, EditorPanel opens on this tab ("atoms", "bonds", etc.)
     var pendingEditorTab by mutableStateOf<String?>(null)
     // Per v0.8.27: last sub-menu the user opened in the EDITOR panel for THIS tab.
@@ -267,6 +271,7 @@ class KrystalsViewModel : ViewModel() {
         tab.bondConfiguration = result.bondConfiguration
         tab.dirty = true
         tab.moleculeAnalysisPending = true
+        tab.moleculeExtendDefaultPending = true
     }
 
     fun createNew() {
