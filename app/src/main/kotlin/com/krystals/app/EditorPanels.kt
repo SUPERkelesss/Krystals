@@ -964,7 +964,7 @@ private fun hbondEndsContainHydrogen(sites: List<Site>, siteA: String, siteB: St
 
 /** Per v0.8.x: independent H-bond editor tab (EditorTab.HBONDS). New/Draw/Delete always
  *  target the hbond rule type (tab.bondDrawTargetIsHbond = true); the angle threshold
- *  slider sits next to an "自动" button that recomputes only the H-bond rules for the
+ *  slider sits next to a "计算" button (settings icon) that recomputes only the H-bond rules for the
  *  current radius source, leaving the covalent rules untouched. */
 @Composable
 private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMessage: (String) -> Unit, onDismiss: () -> Unit, onPersistentMessage: (String?) -> Unit = {}) {
@@ -981,7 +981,7 @@ private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
     val visibleRules = visibleBondRules(tab)
     val sectionRules = visibleRules.filter { it.isHBond }
 
-    // Per v0.8.x: "自动" recomputes ONLY the H-bond rules (rebuildHbondRules keeps the
+    // Per v0.8.x: the "计算" button recomputes ONLY the H-bond rules (rebuildHbondRules keeps the
     // normal rules verbatim) off the UI thread, showing a loading dialog while it runs.
     fun autoRecompute() {
         loading = true
@@ -1031,7 +1031,7 @@ private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
             }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Text(localized("删除", "Delete")) }
         }
         // Per v0.8.x: angle threshold (display filter, 0–180°, default 110°) with the
-        // "自动" button to its right. The scene rebuilds on commit (tab.hbondAngleThreshold
+        // "计算" button to its right. The scene rebuilds on commit (tab.hbondAngleThreshold
         // keys the scene-build effect in ViewerScreen), so dragging only updates the local
         // slider value.
         var sliderHbondThreshold by remember(tab.hbondAngleThreshold) { mutableFloatStateOf(tab.hbondAngleThreshold.toFloat().coerceIn(0f, 180f)) }
@@ -1051,7 +1051,10 @@ private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
             Button(
                 onClick = { autoRecompute() },
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-            ) { Text(localized("自动", "Auto"), style = MaterialTheme.typography.labelSmall) }
+            ) {
+                Icon(Icons.Default.Settings, null, modifier = Modifier.size(14.dp))
+                Text(localized("计算", "Compute"), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(start = 4.dp))
+            }
         }
         Text(autoHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider(Modifier.padding(vertical = 8.dp))

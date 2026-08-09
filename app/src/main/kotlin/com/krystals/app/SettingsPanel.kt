@@ -80,7 +80,7 @@ fun SettingsPanel(
     val bondRuleLabels = listOf(
         // Per v0.8.36: vdW-radius option removed.
         localized("自动", "Auto"), localized("智能离子", "Ionic"),
-        localized("共价半径", "Bonding"),
+        localized("键合半径", "Bonding"),
     )
     val extendLabels = listOf(localized("全部", "All"), localized("仅金属", "Metals"), localized("从不", "Never"))
     // Per v0.8.36: shortened option labels.
