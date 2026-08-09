@@ -92,6 +92,37 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+
+// Per v0.8.43 (issue #11): the open pipeline (CIF parse / symmetry expansion / scene build)
+// runs on its own small pool — a limited view of Dispatchers.Default — so a large cell's
+// heavy bond computation (smartIonic 15s + Voronoi fallback) can no longer starve
+// subsequent opens. 2 concurrent slots are enough for user-paced opens.
+internal val openDispatcher = Dispatchers.Default.limitedParallelism(2)
+
+// Per v0.8.43 (issue #11): heavy bond computations are globally limited to one in flight —
+// the second queues (Semaphore.acquire suspends, never blocking the main thread or the open
+// pipeline). App-wide single instance: KrystalsRoot is the only consumer.
+private val bondComputeGate = Semaphore(1)
+
+/** Per v0.8.43 (issue #11): an in-flight bond computation tracked for cancel-all (overlay
+ *  dialog) and stale-abandon (a new file opened). [tabId] is null for the edit path, whose
+ *  jobs are never stale-abandoned (a cancelled edit would leave the tab half-applied). */
+private data class ActiveComputation(
+    val job: kotlinx.coroutines.Job,
+    val tabId: String?,
+    val startedAt: Long,
+)
+
+/** Per v0.8.43 (issue #11): cancellation cause for computations abandoned because a new file
+ *  was opened — the catch distinguishes it from a user cancel so the v0.6.1 fallback
+ *  (bonding-radius rules on user cancel) is NOT triggered for abandoned work. */
+private class StaleComputationCancelled : kotlin.coroutines.cancellation.CancellationException()
+
+/** Per v0.8.43 (issue #11): a computation younger than this is never stale-abandoned — batch
+ *  open (issue #5) calls doOpenParsed within milliseconds, so its young computations survive. */
+private const val STALE_COMPUTE_CANCEL_GRACE_MS = 2_000L
 
 private data class PendingOpen(val uri: Uri, val name: String, val text: String, val candidates: List<Int>, val document: com.krystals.crystal.io.CifDocument)
 
@@ -224,7 +255,7 @@ fun KrystalsRoot(
     val computingCountState = remember { mutableIntStateOf(0) }
     var computingCount by computingCountState
     val computingTabIds = remember { mutableStateListOf<String>() }
-    val computationJobsState = remember { mutableStateOf<List<kotlinx.coroutines.Job>>(emptyList()) }
+    val computationJobsState = remember { mutableStateOf<List<ActiveComputation>>(emptyList()) }
     var computationJobs by computationJobsState
     val voronoiWarningOpenState = remember { mutableStateOf(false) }
     var voronoiWarningOpen by voronoiWarningOpenState
@@ -352,6 +383,7 @@ fun KrystalsRoot(
             }
         }
         computingCount++
+        val editStart = System.currentTimeMillis()
         var job: kotlinx.coroutines.Job? = null
         job = scope.launch {
             val result = try {
@@ -362,7 +394,7 @@ fun KrystalsRoot(
                 Result.failure(e)
             } finally {
                 computingCount--
-                job?.let { computationJobs -= it }
+                job?.let { j -> computationJobs -= ActiveComputation(j, tabId = null, startedAt = editStart) }
             }
             result.getOrNull()?.let { editResult ->
                 viewModel.current?.let { viewModel.updateAnalysis(it, editResult) }
@@ -372,7 +404,7 @@ fun KrystalsRoot(
                 else if (error !is kotlin.coroutines.cancellation.CancellationException) showMessage(error.message ?: "Operation failed")
             }
         }
-        computationJobs += job
+        computationJobs += ActiveComputation(job, tabId = null, startedAt = editStart)
     }
 
     /**
@@ -398,53 +430,67 @@ fun KrystalsRoot(
         debugLog(CIF_OPEN_TAG) { "BondCompute: tab ${targetTab.id} enqueued (${computingTabIds.size} in flight)" }
         computingTabIds += targetTab.id
         computingCount++
+        val computeStart = System.currentTimeMillis()
         var job: kotlinx.coroutines.Job? = null
         job = scope.launch {
             val result = try {
                 Result.success(
-                    withContext(Dispatchers.Default) {
-                        // Per v0.8.36: expandedSize comes from the open path (openParsed already
-                        // expanded for the large-cell check) — re-expanding here doubled the
-                        // expansion cost on big cells.
-                        // Per v0.8.26: dispatch by user-selected bond-rule mode.
-                        when (settingsValues.bondRuleMode) {
-                            BondRuleMode.AUTO -> {
-                                if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
-                                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null, settingsValues.autoComputeHbonds)
-                                } else {
+                    // Per v0.8.43 (issue #11): heavy bond computations are globally limited to
+                    // one in flight — the next one queues here (suspension on the caller's
+                    // dispatcher, never blocking the main thread or the open pipeline).
+                    bondComputeGate.withPermit {
+                        withContext(Dispatchers.Default) {
+                            // Per v0.8.36: expandedSize comes from the open path (openParsed already
+                            // expanded for the large-cell check) — re-expanding here doubled the
+                            // expansion cost on big cells.
+                            // Per v0.8.26: dispatch by user-selected bond-rule mode.
+                            when (settingsValues.bondRuleMode) {
+                                BondRuleMode.AUTO -> {
+                                    if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
+                                        CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null, settingsValues.autoComputeHbonds)
+                                    } else {
+                                        val smartIonic = kotlinx.coroutines.withTimeoutOrNull(15000L) {
+                                            runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = settingsValues.autoComputeHbonds) }.getOrNull()
+                                        }
+                                        CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)
+                                    }
+                                }
+                                BondRuleMode.SMART_IONIC -> {
                                     val smartIonic = kotlinx.coroutines.withTimeoutOrNull(15000L) {
                                         runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = settingsValues.autoComputeHbonds) }.getOrNull()
                                     }
                                     CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)
                                 }
+                                BondRuleMode.BONDING -> CrystalEditor.rebuildBondRules(structure, bondConfiguration, RadiusSource.BONDING, epsilon, settingsValues.autoComputeHbonds)
                             }
-                            BondRuleMode.SMART_IONIC -> {
-                                val smartIonic = kotlinx.coroutines.withTimeoutOrNull(15000L) {
-                                    runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = settingsValues.autoComputeHbonds) }.getOrNull()
-                                }
-                                CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)
-                            }
-                            BondRuleMode.BONDING -> CrystalEditor.rebuildBondRules(structure, bondConfiguration, RadiusSource.BONDING, epsilon, settingsValues.autoComputeHbonds)
                         }
                     }
                 )
             } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
-                val fallback = if (targetTab in viewModel.tabs) {
-                    CrystalEditor.rebuildBondRules(
-                        targetTab.structure,
-                        targetTab.bondConfiguration,
-                        RadiusSource.BONDING,
-                        targetTab.bondEpsilon,
-                        settingsValues.autoComputeHbonds,
-                    )
-                } else null
-                fallback?.let { Result.success(it) } ?: Result.failure(ce)
+                // Per v0.8.43 (issue #11): an abandoned computation (a new file was opened)
+                // must NOT run the v0.6.1 fallback — its result is no longer needed and the
+                // fallback would re-occupy the pool. The user-facing cancel (overlay dialog)
+                // keeps the v0.6.1 fallback (bonding-radius rules so the panel is never empty).
+                if (ce is StaleComputationCancelled) {
+                    Result.failure(ce)
+                } else {
+                    val fallback = if (targetTab in viewModel.tabs) {
+                        CrystalEditor.rebuildBondRules(
+                            targetTab.structure,
+                            targetTab.bondConfiguration,
+                            RadiusSource.BONDING,
+                            targetTab.bondEpsilon,
+                            settingsValues.autoComputeHbonds,
+                        )
+                    } else null
+                    fallback?.let { Result.success(it) } ?: Result.failure(ce)
+                }
             } catch (e: Throwable) {
                 Result.failure(e)
             } finally {
                 computingTabIds.remove(targetTab.id)
                 computingCount--
-                job?.let { computationJobs -= it }
+                job?.let { j -> computationJobs -= ActiveComputation(j, targetTab.id, computeStart) }
             }
             result.onSuccess { editResult ->
                 // Per v0.8.35: apply the user's default cross-cell bond-extension preference to
@@ -476,13 +522,13 @@ fun KrystalsRoot(
                 }
                 if (CrystalEditor.SMART_IONIC_TIMEOUT in extended.warnings) showMessage(smartIonicTimeoutMessage)
                 if (targetTab in viewModel.tabs) viewModel.updateAnalysis(targetTab, extended)
-                debugLog(CIF_OPEN_TAG) { "OpenCIF 6/6: bond rules computed (${extended.bondConfiguration.rules.size} rules, ${extended.bondConfiguration.rules.count { it.isHBond }} hbonds, mode ${settingsValues.bondRuleMode})" }
+                debugLog(CIF_OPEN_TAG) { "OpenCIF 6/6: bond rules computed (${extended.bondConfiguration.rules.size} rules, ${extended.bondConfiguration.rules.count { it.isHBond }} hbonds, mode ${settingsValues.bondRuleMode}) [compute +${System.currentTimeMillis() - computeStart}ms]" }
             }.onFailure { error ->
                 if (error is VoronoiSearchLimitExceededException) voronoiWarningOpen = true
                 else if (error !is kotlin.coroutines.cancellation.CancellationException) showMessage(error.message ?: "Operation failed")
             }
         }
-        computationJobs += job
+        computationJobs += ActiveComputation(job, targetTab.id, computeStart)
     }
 
 
@@ -502,6 +548,17 @@ fun KrystalsRoot(
     fun doOpenParsed(parsed: ParsedStructure, name: String, uri: Uri?, expandedEstimate: Int) {
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
+        // Per v0.8.43 (issue #11): opening a new file abandons in-flight bond computations of
+        // other tabs — the user moved on, the Default-pool work is no longer needed, and the
+        // pool is freed immediately. Two guards: (1) only open-path computations (tabId !=
+        // null); (2) a grace window keeps batch open (issue #5) intact — its doOpenParsed
+        // calls run within milliseconds of each other, so their young computations survive.
+        val now = System.currentTimeMillis()
+        computationJobs.forEach { c ->
+            if (c.tabId != null && c.tabId != tab.id && c.job.isActive && now - c.startedAt > STALE_COMPUTE_CANCEL_GRACE_MS) {
+                c.job.cancel(StaleComputationCancelled())
+            }
+        }
         debugLog(CIF_OPEN_TAG) { "OpenCIF 5/6: tab ready ($name)" }
         // Per v0.8.26: apply user preference defaults for the new tab.
         tab.visibility = tab.visibility.copy(showBonds = settingsValues.defaultShowBonds)
@@ -539,8 +596,12 @@ fun KrystalsRoot(
     fun openParsed(parsed: ParsedStructure, name: String, uri: Uri?) {
         // Per v0.6.3: move SymmetryExpander.expand() off the main thread — it was the bottleneck
         // that made opening a CIF freeze the UI before the viewer appeared.
+        // Per v0.8.43 (issue #11): the open pipeline runs on openDispatcher (its own small pool),
+        // isolated from heavy bond computations on Dispatchers.Default.
         scope.launch {
-            val expandedEstimate = withContext(Dispatchers.Default) { SymmetryExpander.expand(parsed.structure).size }
+            val expandStart = System.currentTimeMillis()
+            val expandedEstimate = withContext(openDispatcher) { SymmetryExpander.expand(parsed.structure).size }
+            debugLog(CIF_OPEN_TAG) { "OpenPhase: expand +${System.currentTimeMillis() - expandStart}ms ($expandedEstimate atoms)" }
             debugLog(CIF_OPEN_TAG) { "OpenCIF 4/6: symmetry expansion done ($expandedEstimate atoms)" }
             if (expandedEstimate > LARGE_CELL_WARN_THRESHOLD) {
                 pendingLargeOpen = PendingLargeOpen(parsed, name, uri, expandedEstimate)
@@ -570,8 +631,11 @@ fun KrystalsRoot(
             if (pending != null) {
                 if (pending.candidates.size == 1) {
                     // Per v0.6.4: parseStructure can be heavy (resolves space groups, creates
-                    // symmetry operations) — run on Dispatchers.Default to avoid blocking the UI.
-                    val parsed = withContext(Dispatchers.Default) { CifCodec.parseStructure(pending.text, pending.candidates.first(), autoConvertConventional = settingsValues.autoConvertCell) }
+                    // symmetry operations) — run off the UI thread to avoid blocking.
+                    // Per v0.8.43 (issue #11): open pipeline runs on openDispatcher.
+                    val parseStart = System.currentTimeMillis()
+                    val parsed = withContext(openDispatcher) { CifCodec.parseStructure(pending.text, pending.candidates.first(), autoConvertConventional = settingsValues.autoConvertCell) }
+                    debugLog(CIF_OPEN_TAG) { "OpenPhase: parse +${System.currentTimeMillis() - parseStart}ms (${parsed.structure.sites.size} sites)" }
                     debugLog(CIF_OPEN_TAG) { "OpenCIF 3/6: structure parsed (${parsed.structure.sites.size} sites, sg ${parsed.structure.spaceGroup.symbol})" }
                     openParsed(parsed, pending.name, pending.uri)
                 } else pendingOpen = pending
@@ -602,7 +666,7 @@ fun KrystalsRoot(
                     val contentWithComments = CifComments.inject(content, tab.comments)
                     withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, contentWithComments) }
                     tab.uri = uri; tab.isNew = false; tab.dirty = false; tab.savedName = tab.name
-                    tab.parsed = withContext(Dispatchers.Default) { CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell) }
+                    tab.parsed = withContext(openDispatcher) { CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell) }
                 }.onSuccess {
                     showMessage("Saved ${tab.name}")
                 }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
@@ -628,7 +692,7 @@ fun KrystalsRoot(
                 // Per v0.7.0: inject user comments into CIF before writing.
                 val contentWithComments = CifComments.inject(content, tab.comments)
                 withContext(Dispatchers.IO) { FileRepository.write(activity.contentResolver, uri, contentWithComments) }
-                tab.parsed = withContext(Dispatchers.Default) { CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell) }
+                tab.parsed = withContext(openDispatcher) { CifCodec.parseStructure(contentWithComments, tab.parsed.blockIndex, autoConvertConventional = settingsValues.autoConvertCell) }
                 tab.dirty = false
             }.onSuccess { showMessage("Saved ${tab.name}"); afterSave() }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Save failed") }
         }
@@ -1004,7 +1068,7 @@ fun KrystalsRoot(
 @Composable
 private fun KrystalsRootDialogs(
     computingCountState: MutableState<Int>,
-    computationJobsState: MutableState<List<kotlinx.coroutines.Job>>,
+    computationJobsState: MutableState<List<ActiveComputation>>,
     voronoiWarningOpenState: MutableState<Boolean>,
     cifWarningOpenState: MutableState<Boolean>,
     pendingOpenState: MutableState<PendingOpen?>,
@@ -1069,7 +1133,7 @@ private fun KrystalsRootDialogs(
     if (computingCount > 0) {
         androidx.compose.material3.BasicAlertDialog(
             onDismissRequest = {
-                computationJobs.forEach { it.cancel() }
+                computationJobs.forEach { it.job.cancel() }
                 // Per v0.7.1: undo the modification that triggered the computation.
                 viewModel.current?.undo()
             },
@@ -1114,11 +1178,14 @@ private fun KrystalsRootDialogs(
             title = { Text(localized("选择结构", "Select structure")) },
             text = { Column { pending.candidates.forEach { index -> TextButton(onClick = {
                 // Per v0.8.39: parseStructure is heavy — run off the UI thread (matches loadUri).
+                // Per v0.8.43 (issue #11): open pipeline runs on openDispatcher.
                 scope.launch {
-                    val parsed = withContext(Dispatchers.Default) {
+                    val parseStart = System.currentTimeMillis()
+                    val parsed = withContext(openDispatcher) {
                         runCatching { CifCodec.parseStructure(pending.text, index, autoConvertConventional = true) }
                     }
                     parsed.onSuccess {
+                        debugLog(CIF_OPEN_TAG) { "OpenPhase: parse +${System.currentTimeMillis() - parseStart}ms (${it.structure.sites.size} sites)" }
                         debugLog(CIF_OPEN_TAG) { "OpenCIF 3/6: structure parsed (${it.structure.sites.size} sites, sg ${it.structure.spaceGroup.symbol})" }
                         pendingOpen = null; openParsed(it, pending.name, pending.uri)
                     }
