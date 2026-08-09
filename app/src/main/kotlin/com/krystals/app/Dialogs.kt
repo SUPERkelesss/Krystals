@@ -200,6 +200,54 @@ internal fun MpPremiumDialog(onDismiss: () -> Unit, onSponsor: () -> Unit) {
 }
 
 
+/**
+ * Per v0.8.44: restored sponsor dialog (the "投喂" cat-feeding message with three actions).
+ * The v0.6.5 unified link-confirmation dialog replaced this window; the sponsor button and the
+ * launch-count prompt now open it again instead of jumping straight to the browser link.
+ */
+@Composable
+internal fun SponsorDialog(
+    onDismiss: () -> Unit,
+    launchCount: Int = 0,
+    onSponsor: () -> Unit = {},
+    onAlreadySponsored: () -> Unit = {},
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(localized("赞助 Krystals", "Sponsor Krystals")) },
+        text = {
+            Column {
+                Text(
+                    if (launchCount > 0) localized(
+                        "Krystals 已经为您启动了 $launchCount 次啦！如果想要支持开发，请多多赞助作者 kelesss 哦！",
+                        "Krystals has been launched $launchCount times! If you'd like to support development, please sponsor kelesss!",
+                    )
+                    else localized(
+                        "支付一点大米让kelesss猫猫努力工作的说……ο(=•ω＜=)ρ⌒☆",
+                        "Toss a little money to keep kelesss working hard…ο(=•ω＜=)ρ⌒☆",
+                    )
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    localized(
+                        "· 赞助后可永久关闭赞助提醒，并可以接入materials project检索。未赞助不影响绝大部分功能的使用。",
+                        "· Sponsoring permanently dismisses this prompt and unlocks Materials Project search. Not sponsoring does not affect most features.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+        confirmButton = {
+            Row {
+                TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) }
+                TextButton(onClick = onAlreadySponsored) { Text(localized("我已赞助", "I've sponsored!")) }
+                TextButton(onClick = onDismiss) { Text(localized("狠心拒绝", "Maybe later")) }
+            }
+        },
+    )
+}
+
+
 @Composable
 internal fun MpCautionDialog(preferences: SharedPreferences, onDismiss: () -> Unit, onContinue: () -> Unit) {
     var dontShow by remember { mutableStateOf(false) }

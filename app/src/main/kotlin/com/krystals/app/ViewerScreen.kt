@@ -122,7 +122,6 @@ import com.krystals.crystal.analysis.bonding.isMolecularCrystal
 import com.krystals.crystal.analysis.bonding.toMolecules
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.core.periodic.Int3
-import com.krystals.crystal.io.CifCodec
 import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.state.InteractionReducer
 import com.krystals.interaction.state.ViewerCommand
@@ -138,7 +137,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.io.File
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -161,6 +159,8 @@ internal fun ViewerScreen(
     onOpen: () -> Unit,
     onOpenPreset: () -> Unit,
     onSaveToPreset: () -> Unit,
+    // Per v0.8.44: share goes through the file-name rename dialog (handled in KrystalsRoot).
+    onShare: (DocumentTab) -> Unit,
     onNew: () -> Unit,
     onOnlineSource: () -> Unit,
     onExport: (Bitmap) -> Unit,
@@ -192,7 +192,6 @@ internal fun ViewerScreen(
     val exportingMessage = localized("导出图片中...", "Exporting image...")
     // Per v0.6.3: pre-resolve composable values for use in non-composable onClick lambdas.
     val shareLabel = localized("分享到…", "Share to…")
-    val shareContext = LocalContext.current
     var activeFilamentRenderer by remember { mutableStateOf<FilamentRenderer?>(null) }
     val filamentErrorMessage = localized(
         "Filament 渲染引擎初始化失败",
@@ -434,30 +433,8 @@ internal fun ViewerScreen(
                     DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = { menuOpen = false; onSaveToPreset() })
                     DropdownMenuItem(text = { Text(shareLabel) }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
                         menuOpen = false
-                        scope.launch {
-                            runCatching {
-                                val cifContent = CifCodec.write(
-                                    tab.parsed,
-                                    tab.structure,
-                                    tab.bondConfiguration,
-                                    tab.renderConfiguration.toCifDisplayMetadata(),
-                                )
-                                withContext(Dispatchers.IO) {
-                                    val tempFile = File(shareContext.cacheDir, "${tab.name.ensureCifExtension()}")
-                                    tempFile.writeText(cifContent, Charsets.UTF_8)
-                                    val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                        type = "text/plain"
-                                        putExtra(android.content.Intent.EXTRA_STREAM, androidx.core.content.FileProvider.getUriForFile(shareContext, "${shareContext.packageName}.fileprovider", tempFile))
-                                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                    }
-                                    val chooserIntent = android.content.Intent.createChooser(shareIntent, shareLabel)
-                                    chooserIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    shareContext.startActivity(chooserIntent)
-                                }
-                            }.onFailure { error ->
-                                if (error !is CancellationException) onMessage(error.message ?: "Share failed")
-                            }
-                        }
+                        // Per v0.8.44: share first confirms the file name (rename window like save).
+                        onShare(tab)
                     })
                     DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
                         menuOpen = false

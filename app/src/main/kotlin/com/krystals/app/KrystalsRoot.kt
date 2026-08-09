@@ -85,6 +85,7 @@ import com.krystals.crystal.data.PeriodicTableData
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.ParsedStructure
 import com.krystals.renderer.core.style.ViewerAppearance
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -284,6 +285,11 @@ fun KrystalsRoot(
     var saveNameEdited by remember { mutableStateOf(false) }
     // Per v0.8.36: target user group for save-to-preset (default 我的预设).
     var saveNameGroup by remember { mutableStateOf(PresetRepository.MY_PRESETS_GROUP) }
+    // Per v0.8.44: share confirms the file name in the same rename window as save first.
+    var shareNameOpen by remember { mutableStateOf(false) }
+    var shareNameTab by remember { mutableStateOf<DocumentTab?>(null) }
+    var shareNameDraft by remember { mutableStateOf("") }
+    var shareNameEdited by remember { mutableStateOf(false) }
     var sponsorLaunchCount by remember { mutableIntStateOf(0) }
     var aboutOpen by remember { mutableStateOf(false) }
     // Per v0.6.5: automatic update check on startup.
@@ -355,6 +361,8 @@ fun KrystalsRoot(
         "周期 Voronoi 搜索范围过大，继续计算可能耗尽内存。请调整晶胞参数或改用键合半径。",
         "The periodic Voronoi search is too large and may exhaust memory. Adjust the cell or use bonding radii.",
     )
+    // Per v0.8.44: pre-resolved chooser title for the share flow (localized() is @Composable).
+    val shareLabel = localized("分享到…", "Share to…")
 
     // Per v0.5.3b: when an opened cell expands to more than [LARGE_CELL_WARN_THRESHOLD] atoms the
     // user is warned before the (possibly degraded) scene is built. Resolved once; reused below.
@@ -755,6 +763,40 @@ fun KrystalsRoot(
         }
     }
 
+    /**
+     * Per v0.8.44: confirm button of the share name dialog — writes the CIF to a cache temp
+     * file under the confirmed name and fires the system share chooser (moved from ViewerScreen).
+     */
+    fun confirmShareName() {
+        val tab = shareNameTab ?: return
+        val finalName = shareNameDraft.trim().ifEmpty { tab.name.removeSuffix(".cif") }.ensureCifExtension()
+        shareNameOpen = false
+        scope.launch {
+            runCatching {
+                val cifContent = CifCodec.write(
+                    tab.parsed,
+                    tab.structure,
+                    tab.bondConfiguration,
+                    tab.renderConfiguration.toCifDisplayMetadata(),
+                )
+                withContext(Dispatchers.IO) {
+                    val tempFile = File(activity.cacheDir, finalName)
+                    tempFile.writeText(cifContent, Charsets.UTF_8)
+                    val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(android.content.Intent.EXTRA_STREAM, androidx.core.content.FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", tempFile))
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    val chooserIntent = android.content.Intent.createChooser(shareIntent, shareLabel)
+                    chooserIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    activity.startActivity(chooserIntent)
+                }
+            }.onFailure { error ->
+                if (error !is CancellationException) showMessage(error.message ?: "Share failed")
+            }
+        }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val bitmap = pendingExportBitmap
         pendingExportBitmap = null
@@ -837,7 +879,7 @@ fun KrystalsRoot(
                         onOnlineSource = { onlineSourceOpen = true },
                         themeMode = themeMode, onTheme = ::applyTheme, language = language,
                         onLanguage = ::applyLanguage,
-                        onHelp = { linkConfirmUrl = "https://www.kelesss.art/refs/software/krystals.html" }, onAbout = { aboutOpen = true }, onSponsor = { linkConfirmUrl = "https://ifdian.net/a/krystals/plan" }, onFeedback = { linkConfirmUrl = "https://github.com/SUPERkelesss/Krystals/issues" }, onExit = ::requestExit,
+                        onHelp = { linkConfirmUrl = "https://www.kelesss.art/refs/software/krystals.html" }, onAbout = { aboutOpen = true }, onSponsor = { sponsorOpen = true }, onFeedback = { linkConfirmUrl = "https://github.com/SUPERkelesss/Krystals/issues" }, onExit = ::requestExit,
                     )
                 } else {
                     ViewerScreen(
@@ -873,6 +915,13 @@ fun KrystalsRoot(
                             saveNameGroup = PresetRepository.MY_PRESETS_GROUP
                             saveNameOpen = true
                         },
+                        onShare = { tab ->
+                            // Per v0.8.44: share confirms the file name in the same rename window as save.
+                            shareNameTab = tab
+                            shareNameDraft = tab.name.removeSuffix(".cif")
+                            shareNameEdited = false
+                            shareNameOpen = true
+                        },
                         onNew = viewModel::createNew,
                         onOnlineSource = { onlineSourceOpen = true },
                         onExport = ::requestExport,
@@ -906,7 +955,7 @@ fun KrystalsRoot(
                         onMessage = ::showMessage,
                         onHelp = { linkConfirmUrl = "https://www.kelesss.art/refs/software/krystals.html" },
                         onAbout = { aboutOpen = true },
-                        onSponsor = { linkConfirmUrl = "https://ifdian.net/a/krystals/plan" },
+                        onSponsor = { sponsorOpen = true },
                         onFeedback = { linkConfirmUrl = "https://github.com/SUPERkelesss/Krystals/issues" },
                         onRunBondComputation = ::runWithBondComputation,
                         onApplyAppearance = ::applyViewerAppearance,
@@ -941,6 +990,7 @@ fun KrystalsRoot(
             mpSearchOpenState = mpSearchOpenState,
             codSearchOpenState = codSearchOpenState,
             sponsorOpenState = sponsorOpenState,
+            sponsorLaunchCount = sponsorLaunchCount,
             autoConvertCell = settingsValues.autoConvertCell,
             viewModel = viewModel,
             activity = activity,
@@ -1091,6 +1141,41 @@ fun KrystalsRoot(
             dismissButton = { TextButton(onClick = { saveNameOpen = false }) { Text(cancelLabel) } },
         )
     }
+    // Per v0.8.44: share file-name dialog — same rename window as save (name + .cif suffix),
+    // confirm starts the share chooser with the chosen name.
+    if (shareNameOpen) {
+        val shareNameTitle = localized("确认文件名", "Confirm file name")
+        val shareConfirmLabel = localized("分享", "Share")
+        val cancelLabel = localized("取消", "Cancel")
+        AlertDialog(
+            onDismissRequest = { shareNameOpen = false },
+            title = { Text(shareNameTitle) },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = shareNameDraft,
+                        onValueChange = { new ->
+                            // The first keystroke replaces the grey placeholder name.
+                            if (!shareNameEdited && new.isNotEmpty()) {
+                                shareNameDraft = new
+                                shareNameEdited = true
+                            } else {
+                                shareNameDraft = new.filter { c -> c != '/' && c != '\\' && c != ':' }
+                                if (new.isNotEmpty()) shareNameEdited = true
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        textStyle = if (shareNameEdited) MaterialTheme.typography.bodyLarge
+                        else MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
+                    )
+                    Text(".cif", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+                }
+            },
+            confirmButton = { TextButton(onClick = ::confirmShareName) { Text(shareConfirmLabel) } },
+            dismissButton = { TextButton(onClick = { shareNameOpen = false }) { Text(cancelLabel) } },
+        )
+    }
     }
     }
 }
@@ -1127,6 +1212,7 @@ private fun KrystalsRootDialogs(
     mpSearchOpenState: MutableState<Boolean>,
     codSearchOpenState: MutableState<Boolean>,
     sponsorOpenState: MutableState<Boolean>,
+    sponsorLaunchCount: Int,
     autoConvertCell: Boolean,
     viewModel: KrystalsViewModel,
     activity: MainActivity,
@@ -1318,6 +1404,15 @@ private fun KrystalsRootDialogs(
             },
         )
     }
+    // Per v0.8.44: sponsor button + launch-count prompt open the sponsor dialog (the "投喂"
+    // cat-feeding message with three actions); "我要赞助！" opens the ifdian page, "我已赞助"
+    // goes to the activation-code dialog. Replaces the unified link-confirm for the sponsor flow.
+    if (sponsorOpen) SponsorDialog(
+        onDismiss = { sponsorOpen = false },
+        launchCount = sponsorLaunchCount,
+        onSponsor = { sponsorOpen = false; openUrl("https://ifdian.net/a/krystals/plan") },
+        onAlreadySponsored = { sponsorOpen = false; activationOpen = true },
+    )
     // Per v0.6.5: version update dialog.
     val msgStartDownload = localized("开始下载新版本...", "Starting download...")
     val msgDownloadFail = localized("下载失败", "Download failed")
