@@ -282,6 +282,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             // is resumed even when the readback callback never fires (GPU hang / renderer
             // death), which previously suspended the export coroutine forever.
             val completed = AtomicBoolean(false)
+            val readbackCompleted = AtomicBoolean(false)
             var timeout: Runnable? = null
             fun resumeOnce(value: Bitmap?) {
                 if (completed.compareAndSet(false, true)) {
@@ -289,11 +290,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                     continuation.resume(value)
                 }
             }
-            timeout = Runnable {
-                android.util.Log.w("FilamentExport", "Pixel readback timed out after ${EXPORT_TIMEOUT_MS}ms")
-                resumeOnce(null)
-            }
-            mainHandler.postDelayed(timeout!!, EXPORT_TIMEOUT_MS)
             onMain {
                 var exportSwapChain: SwapChain? = null
                 var frameBegun = false
@@ -310,6 +306,13 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                         exportSwapChain = null
                     }
                 }
+                timeout = Runnable {
+                    android.util.Log.w("FilamentExport", "Pixel readback timed out after ${EXPORT_TIMEOUT_MS}ms")
+                    if (!closed.get()) runCatching { restoreView() }
+                    destroyExportSwapChain()
+                    resumeOnce(null)
+                }
+                mainHandler.postDelayed(timeout!!, EXPORT_TIMEOUT_MS)
                 try {
                     // A readable headless SwapChain follows Filament's normal frame lifecycle. This is
                     // more portable than renderStandaloneView + an attached texture RenderTarget.
@@ -331,14 +334,14 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                                 destroyExportSwapChain()
                                 return@setCallback
                             }
+                            readbackCompleted.set(true)
+                            restoreView()
+                            destroyExportSwapChain()
+                            requestFrames(1)
                             Thread {
                                 try {
                                     pixels.rewind()
                                     val argb = rgbaBytesToArgb(pixels, actualWidth * actualHeight)
-                                    mainHandler.post {
-                                        destroyExportSwapChain()
-                                        if (!closed.get()) requestFrames(1)
-                                    }
                                     // Bitmap creation on the background thread. Annotations (axes,
                                     // measurements, inspection panels, selection rings) are composed by
                                     // the app layer via ExportOverlay so the export matches the viewer.
@@ -361,16 +364,34 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                             }.start()
                     }
                 }
-                    val chain = checkNotNull(exportSwapChain)
-                    check(renderer.beginFrame(chain, Engine.getSteadyClockTimeNano())) {
-                        "Filament declined the offscreen export frame"
+                    var readbackIssued = false
+                    fun pumpExportFrame() {
+                        if (completed.get() || readbackCompleted.get() || closed.get()) return
+                        try {
+                            val chain = checkNotNull(exportSwapChain)
+                            if (renderer.beginFrame(chain, Engine.getSteadyClockTimeNano())) {
+                                frameBegun = true
+                                renderer.render(view)
+                                if (!readbackIssued) {
+                                    renderer.readPixels(0, 0, actualWidth, actualHeight, descriptor)
+                                    readbackIssued = true
+                                }
+                                renderer.endFrame()
+                                frameBegun = false
+                            }
+                            if (!completed.get() && !readbackCompleted.get()) {
+                                mainHandler.postDelayed(::pumpExportFrame, 16L)
+                            }
+                        } catch (t: Throwable) {
+                            if (frameBegun) runCatching { renderer.endFrame() }
+                            frameBegun = false
+                            if (!closed.get()) runCatching { restoreView() }
+                            destroyExportSwapChain()
+                            android.util.Log.w("FilamentExport", "Offscreen export frame failed", t)
+                            resumeOnce(null)
+                        }
                     }
-                    frameBegun = true
-                    renderer.render(view)
-                    renderer.readPixels(0, 0, actualWidth, actualHeight, descriptor)
-                    renderer.endFrame()
-                    frameBegun = false
-                    restoreView()
+                    pumpExportFrame()
                 } catch (t: Throwable) {
                     if (frameBegun) runCatching { renderer.endFrame() }
                     if (!closed.get()) runCatching { restoreView() }
