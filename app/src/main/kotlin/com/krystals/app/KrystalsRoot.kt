@@ -89,6 +89,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -450,14 +451,31 @@ fun KrystalsRoot(
                                         CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null, settingsValues.autoComputeHbonds)
                                     } else {
                                         val smartIonic = kotlinx.coroutines.withTimeoutOrNull(15000L) {
-                                            runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = settingsValues.autoComputeHbonds) }.getOrNull()
+                                            runCatching {
+                                                BondValence.smartIonicRules(
+                                                    structure, bondConfiguration, epsilon,
+                                                    includeHbonds = settingsValues.autoComputeHbonds,
+                                                    // Key: after the timeout the coroutine is cancelled, so isActive
+                                                    // turns false and the Voronoi loop throws VoronoiAbortedException
+                                                    // within ~64 candidates — runCatching turns it into null, the
+                                                    // timeout actually fires on CPU-bound work, and the caller falls
+                                                    // back to bonding rules with the timeout snackbar.
+                                                    cancelCheck = { coroutineContext.isActive },
+                                                )
+                                            }.getOrNull()
                                         }
                                         CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)
                                     }
                                 }
                                 BondRuleMode.SMART_IONIC -> {
                                     val smartIonic = kotlinx.coroutines.withTimeoutOrNull(15000L) {
-                                        runCatching { BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = settingsValues.autoComputeHbonds) }.getOrNull()
+                                        runCatching {
+                                            BondValence.smartIonicRules(
+                                                structure, bondConfiguration, epsilon,
+                                                includeHbonds = settingsValues.autoComputeHbonds,
+                                                cancelCheck = { coroutineContext.isActive },
+                                            )
+                                        }.getOrNull()
                                     }
                                     CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)
                                 }

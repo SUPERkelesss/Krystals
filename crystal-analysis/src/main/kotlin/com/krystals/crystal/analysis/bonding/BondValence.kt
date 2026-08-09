@@ -79,19 +79,24 @@ object BondValence {
         bondConfiguration: BondConfiguration,
         epsilon: Double = 0.45,
         includeHbonds: Boolean = true,
-    ): SmartIonicResult = smartIonicRules(structure, bondConfiguration, epsilon, SymmetryExpander.expand(structure), includeHbonds)
+        cancelCheck: (() -> Boolean)? = null,
+    ): SmartIonicResult = smartIonicRules(structure, bondConfiguration, epsilon, SymmetryExpander.expand(structure), includeHbonds, cancelCheck)
 
     /** Internal overload that reuses pre-expanded atoms so callers that expanded for a size guard
-     *  (e.g. CrystalEditor.smartOrBondingRules) don't expand the same structure a second time. */
+     *  (e.g. CrystalEditor.smartOrBondingRules) don't expand the same structure a second time.
+     *  [cancelCheck] is polled by the periodic Voronoi search so a caller-side timeout can abort
+     *  this CPU-bound computation; a rejected check throws [VoronoiAbortedException], which is
+     *  deliberately NOT caught here so it propagates to the caller. */
     internal fun smartIonicRules(
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,
         epsilon: Double,
         atoms: List<AtomImage>,
         includeHbonds: Boolean = true,
+        cancelCheck: (() -> Boolean)? = null,
     ): SmartIonicResult {
         val analysis = try {
-            analyze(atoms, structure)
+            analyze(atoms, structure, cancelCheck)
         } catch (_: VoronoiSearchLimitExceededException) {
             return SmartIonicResult(emptyList(), success = false)
         }
@@ -249,12 +254,12 @@ object BondValence {
         analyze(SymmetryExpander.expand(structure), structure)
 
     /** Analysis over pre-expanded atoms so callers that already expanded (e.g. for a size guard)
-     *  don't expand the same structure twice. */
-    private fun analyze(atoms: List<AtomImage>, structure: CrystalStructure): Analysis? {
+     *  don't expand the same structure twice. [cancelCheck] is forwarded to the Voronoi search. */
+    private fun analyze(atoms: List<AtomImage>, structure: CrystalStructure, cancelCheck: (() -> Boolean)? = null): Analysis? {
         if (atoms.size < 2) return null
         val atomById = atoms.associateBy { it.id }
         val atomsBySiteId = atoms.groupBy { it.siteId }
-        val neighbours = VoronoiNeighbours.find(structure, atoms)
+        val neighbours = VoronoiNeighbours.find(structure, atoms, cancelCheck)
         if (neighbours.isEmpty()) return null
 
         val neighboursByAtomId = HashMap<Long, MutableList<Pair<Long, Double>>>()
