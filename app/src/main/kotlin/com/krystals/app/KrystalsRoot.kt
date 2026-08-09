@@ -54,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
@@ -216,10 +217,15 @@ fun KrystalsRoot(
     // below) owns their reads — toggling one of these dialogs no longer recomposes the KrystalsRoot
     // scaffold. States only ever set by KrystalsRoot internals (pendingSaveTabId, pendingExportBitmap,
     // helpOpen, sponsorLaunchCount, aboutOpen, updateChecking) stay as plain delegated booleans.
-    val computingState = remember { mutableStateOf(false) }
-    var computing by computingState
-    val computationJobState = remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    var computationJob by computationJobState
+    // Per v0.8.43 (issue #5): batch open computes every tab's bond rules concurrently.
+    // computingCount drives the "Computing..." overlay (a single Boolean gate previously
+    // skipped every computation after the first during batch open — only tab 1 got rules);
+    // computingTabIds dedups per tab; computationJobs holds in-flight jobs for cancel-all.
+    val computingCountState = remember { mutableIntStateOf(0) }
+    var computingCount by computingCountState
+    val computingTabIds = remember { mutableStateListOf<String>() }
+    val computationJobsState = remember { mutableStateOf<List<kotlinx.coroutines.Job>>(emptyList()) }
+    var computationJobs by computationJobsState
     val voronoiWarningOpenState = remember { mutableStateOf(false) }
     var voronoiWarningOpen by voronoiWarningOpenState
     val cifWarningOpenState = remember { mutableStateOf(false) }
@@ -332,7 +338,9 @@ fun KrystalsRoot(
      * silently, e.g. on validation failure where the caller already reported the error).
      */
     fun runWithBondComputation(block: suspend () -> EditResult?, skipLargeCheck: Boolean = false) {
-        if (computing) return
+        // Per v0.8.43 (issue #5): the edit path keeps its global single-flight gate (an edit
+        // during any computation is skipped) — now expressed via the computation count.
+        if (computingCount > 0) return
         if (!skipLargeCheck) {
             val tab = viewModel.current
             if (tab != null) {
@@ -343,8 +351,9 @@ fun KrystalsRoot(
                 }
             }
         }
-        computing = true
-        computationJob = scope.launch {
+        computingCount++
+        var job: kotlinx.coroutines.Job? = null
+        job = scope.launch {
             val result = try {
                 Result.success(withContext(Dispatchers.Default) { block() })
             } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
@@ -352,8 +361,8 @@ fun KrystalsRoot(
             } catch (e: Throwable) {
                 Result.failure(e)
             } finally {
-                computing = false
-                computationJob = null
+                computingCount--
+                job?.let { computationJobs -= it }
             }
             result.getOrNull()?.let { editResult ->
                 viewModel.current?.let { viewModel.updateAnalysis(it, editResult) }
@@ -363,6 +372,7 @@ fun KrystalsRoot(
                 else if (error !is kotlin.coroutines.cancellation.CancellationException) showMessage(error.message ?: "Operation failed")
             }
         }
+        computationJobs += job
     }
 
     /**
@@ -378,10 +388,18 @@ fun KrystalsRoot(
         epsilon: Double,
         expandedSize: Int,
     ) {
-        if (computing) return
+        // Per v0.8.43 (issue #5): per-tab dedup + concurrent computation. The old global
+        // `if (computing) return` made batch open silently skip every bond computation after
+        // the first — only the first tab ever received rules (PresetLibrary.openSelected loops
+        // doOpenParsed sequentially, and each call hit the global busy gate). Same tab already
+        // computing → skip (the original single-flight semantics, per tab).
         val targetTab = viewModel.current ?: return
-        computing = true
-        computationJob = scope.launch {
+        if (targetTab.id in computingTabIds) return
+        debugLog(CIF_OPEN_TAG) { "BondCompute: tab ${targetTab.id} enqueued (${computingTabIds.size} in flight)" }
+        computingTabIds += targetTab.id
+        computingCount++
+        var job: kotlinx.coroutines.Job? = null
+        job = scope.launch {
             val result = try {
                 Result.success(
                     withContext(Dispatchers.Default) {
@@ -424,8 +442,9 @@ fun KrystalsRoot(
             } catch (e: Throwable) {
                 Result.failure(e)
             } finally {
-                computing = false
-                computationJob = null
+                computingTabIds.remove(targetTab.id)
+                computingCount--
+                job?.let { computationJobs -= it }
             }
             result.onSuccess { editResult ->
                 // Per v0.8.35: apply the user's default cross-cell bond-extension preference to
@@ -463,6 +482,7 @@ fun KrystalsRoot(
                 else if (error !is kotlin.coroutines.cancellation.CancellationException) showMessage(error.message ?: "Operation failed")
             }
         }
+        computationJobs += job
     }
 
 
@@ -797,8 +817,8 @@ fun KrystalsRoot(
 
         // Dialogs live inside KrystalsTheme so they pick up the correct color scheme (dark/light).
         KrystalsRootDialogs(
-            computingState = computingState,
-            computationJobState = computationJobState,
+            computingCountState = computingCountState,
+            computationJobsState = computationJobsState,
             voronoiWarningOpenState = voronoiWarningOpenState,
             cifWarningOpenState = cifWarningOpenState,
             pendingOpenState = pendingOpenState,
@@ -983,8 +1003,8 @@ fun KrystalsRoot(
 
 @Composable
 private fun KrystalsRootDialogs(
-    computingState: MutableState<Boolean>,
-    computationJobState: MutableState<kotlinx.coroutines.Job?>,
+    computingCountState: MutableState<Int>,
+    computationJobsState: MutableState<List<kotlinx.coroutines.Job>>,
     voronoiWarningOpenState: MutableState<Boolean>,
     cifWarningOpenState: MutableState<Boolean>,
     pendingOpenState: MutableState<PendingOpen?>,
@@ -1020,8 +1040,8 @@ private fun KrystalsRootDialogs(
     voronoiWarningMessage: String,
 ) {
     val scope = rememberCoroutineScope()
-    var computing by computingState
-    var computationJob by computationJobState
+    var computingCount by computingCountState
+    var computationJobs by computationJobsState
     var voronoiWarningOpen by voronoiWarningOpenState
     var cifWarningOpen by cifWarningOpenState
     var pendingOpen by pendingOpenState
@@ -1043,12 +1063,13 @@ private fun KrystalsRootDialogs(
     var codSearchOpen by codSearchOpenState
     var sponsorOpen by sponsorOpenState
 
-    if (computing) {
+    // Per v0.8.43 (issue #5): the overlay shows while ANY computation runs and stays until all
+    // finish (batch open may run several concurrently). Cancelling cancels every in-flight job;
+    // their finallys unwind computingCount/computingTabIds.
+    if (computingCount > 0) {
         androidx.compose.material3.BasicAlertDialog(
             onDismissRequest = {
-                computationJob?.cancel()
-                computing = false
-                computationJob = null
+                computationJobs.forEach { it.cancel() }
                 // Per v0.7.1: undo the modification that triggered the computation.
                 viewModel.current?.undo()
             },
