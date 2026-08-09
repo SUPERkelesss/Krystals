@@ -398,10 +398,19 @@ internal fun ViewerScreen(
     // Per v0.6.4: moved to produceState + Dispatchers.Default because SymmetryExpander.expand()
     // (called inside bondValenceSums) blocks the main thread for structures with many symmetry
     // operations (e.g. Fm-3m = 192 ops), causing 576-frame skips when opening CIF files.
-    val bondValenceBySiteState = produceState<Map<String, Double>>(emptyMap(), tab.structure, tab.bondConfiguration, tab.bondEpsilon) {
-        value = withContext(Dispatchers.Default) {
-            BondValence.bondValenceSums(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
-        }
+    // Per v0.7.2: lazy — only run the full periodic-Voronoi BVS pass when the user has selected
+    // an atom (atom-info window visible); empty map otherwise. Previously every open (and every
+    // bondConfiguration change) computed BVS concurrently with the background smart-ionic pass,
+    // doubling the Voronoi CPU load during file open.
+    val bondValenceBySiteState = produceState<Map<String, Double>>(
+        emptyMap(),
+        tab.structure, tab.bondConfiguration, tab.bondEpsilon, tab.selectedAtomIds.isNotEmpty(),
+    ) {
+        value = if (tab.selectedAtomIds.isNotEmpty()) {
+            withContext(Dispatchers.Default) {
+                BondValence.bondValenceSums(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
+            }
+        } else emptyMap()
     }
     val bondValenceBySite = bondValenceBySiteState.value
 
