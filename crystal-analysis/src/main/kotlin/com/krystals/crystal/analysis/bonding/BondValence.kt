@@ -80,7 +80,8 @@ object BondValence {
         epsilon: Double = 0.45,
         includeHbonds: Boolean = true,
         cancelCheck: (() -> Boolean)? = null,
-    ): SmartIonicResult = smartIonicRules(structure, bondConfiguration, epsilon, SymmetryExpander.expand(structure), includeHbonds, cancelCheck)
+        angleThreshold: Double = 110.0,
+    ): SmartIonicResult = smartIonicRules(structure, bondConfiguration, epsilon, SymmetryExpander.expand(structure), includeHbonds, cancelCheck, angleThreshold)
 
     /** Internal overload that reuses pre-expanded atoms so callers that expanded for a size guard
      *  (e.g. CrystalEditor.smartOrBondingRules) don't expand the same structure a second time.
@@ -94,6 +95,7 @@ object BondValence {
         atoms: List<AtomImage>,
         includeHbonds: Boolean = true,
         cancelCheck: (() -> Boolean)? = null,
+        angleThreshold: Double = 110.0,
     ): SmartIonicResult {
         val analysis = try {
             analyze(atoms, structure, cancelCheck)
@@ -136,7 +138,7 @@ object BondValence {
             .toSet()
         val hbondRules = if (includeHbonds) {
             HbondChecking.hbondRules(
-                structure, atoms, analysis.neighboursByAtomId, protonSiteIds, rules,
+                structure, atoms, analysis.neighboursByAtomId, protonSiteIds, rules, angleThreshold,
             )
         } else emptyList()
 
