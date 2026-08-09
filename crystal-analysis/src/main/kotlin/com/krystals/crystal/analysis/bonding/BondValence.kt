@@ -184,16 +184,20 @@ object BondValence {
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,
         epsilon: Double = 0.45,
+        cancelCheck: (() -> Boolean)? = null,
     ): Map<String, Double> {
         // Per v0.5.2b: large cells would make this synchronous BVS computation (called from a
         // remember() in the viewer) stall the UI. Skip it above the smart-ionic atom limit; the
         // atom-info window then simply omits "s = X.XX" for those structures.
         // Expand once and reuse the atoms for both the size guard and the analysis (previously the
         // guard expanded again inside analyze()).
+        // Per v0.8.45: [cancelCheck] is polled by the periodic Voronoi search so a caller-side
+        // coroutine cancellation can abort this CPU-bound pass; a rejected check throws
+        // [VoronoiAbortedException], deliberately NOT caught here so it propagates to the caller.
         val atoms = SymmetryExpander.expand(structure)
         if (atoms.size > SMART_IONIC_ATOM_LIMIT) return emptyMap()
         val analysis = try {
-            analyze(atoms, structure)
+            analyze(atoms, structure, cancelCheck)
         } catch (_: VoronoiSearchLimitExceededException) {
             return emptyMap()
         } ?: return emptyMap()

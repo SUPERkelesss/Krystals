@@ -387,10 +387,11 @@ object CrystalEditor {
         source: RadiusSource,
         epsilon: Double = 0.45,
         includeHbonds: Boolean = true,
+        cancelCheck: (() -> Boolean)? = null,
     ): EditResult {
         // Per v0.8.7: all-non-metal structures skip smartIonic entirely.
         if (source == RadiusSource.SMART_IONIC && !isAllNonMetals(structure)) {
-            val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = includeHbonds)
+            val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = includeHbonds, cancelCheck = cancelCheck)
             if (result.success) {
                 val filtered = result.rules.filter { it.key !in bondConfiguration.disabledPairs }
                 return EditResult(structure, bondConfiguration.copy(rules = filtered))
@@ -439,6 +440,7 @@ object CrystalEditor {
         bondConfiguration: BondConfiguration,
         source: RadiusSource,
         epsilon: Double = 0.45,
+        cancelCheck: (() -> Boolean)? = null,
     ): EditResult {
         if (structure.sites.none { it.species.symbol == "H" }) {
             return EditResult(structure, bondConfiguration)
@@ -448,7 +450,7 @@ object CrystalEditor {
         val newHbondRules = when (source) {
             RadiusSource.SMART_IONIC -> {
                 val smart = BondValence.smartIonicRules(
-                    structure, bondConfiguration, epsilon, atoms, includeHbonds = true,
+                    structure, bondConfiguration, epsilon, atoms, includeHbonds = true, cancelCheck = cancelCheck,
                 )
                 if (!smart.success) return EditResult(structure, bondConfiguration)
                 smart.rules.filter { it.isHBond }
