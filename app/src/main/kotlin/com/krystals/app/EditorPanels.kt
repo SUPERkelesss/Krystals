@@ -255,7 +255,9 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
         }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("应用晶胞", "Apply cell")) }
         // Per v0.8.1: swapped order — primitive/conventional conversion comes before 3×3 transform.
         val centering = BravaisLatticeData.centeringFromSymbol(tab.structure.spaceGroup.symbol)
-        if (centering != BravaisLatticeData.CenteringType.PRIMITIVE) {
+        // Per v0.8.43 (issue #6): after any 3×3 transform the conversion button is hidden —
+        // converting a custom-transformed cell would discard the transform's intent.
+        if (centering != BravaisLatticeData.CenteringType.PRIMITIVE && !tab.cellTransformed) {
             OutlinedButton(
                 onClick = {
                     tab.recordHistory()
@@ -343,6 +345,7 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
 // Per v0.7.1: 3×3 matrix transform no longer affects expansion. The scaling is
 // handled by symmetry operations within the structure itself.
                 tab.isPrimitiveCell = false
+                tab.cellTransformed = true
                 tab.savedConventionalStructure = null; tab.savedConventionalBondConfig = null
                 tab.savedPrimitiveStructure = null; tab.savedPrimitiveBondConfig = null
                 transformOpen = false

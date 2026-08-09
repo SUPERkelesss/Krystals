@@ -496,8 +496,11 @@ Vec3(0.0, 0.0, sz.toDouble()),
 // P = R * S (Mat3 stores by columns, so R*S scales R's columns)
 val P = Mat3(R.a * sx.toDouble(), R.b * sy.toDouble(), R.c * sz.toDouble())
 val Pinv = P.inverse()
-val tVec = Pinv * translation.toVec3()
-// Sites: x' = P^(-1) * x + P^(-1) * t  (full transform, including scaling)
+// Per v0.8.43 (issue #6): T is added DIRECTLY — the dialog formula R' = XR + T and the
+// fallback path (x' = P⁻¹x + T) both treat it as a translation in the new coordinate
+// system. Premultiplying by P⁻¹ scaled it (2×2×1 expansion + T=(0.5,0,0) moved 0.25).
+val tVec = translation.toVec3()
+// Sites: x' = P^(-1) * x + t  (full transform, including scaling)
 val newSites = structure.sites.map { site ->
 site.copy(
 fractionalCoordinate = FractionalCoordinate.fromVec3(

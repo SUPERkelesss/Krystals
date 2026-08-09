@@ -480,4 +480,39 @@ class AnalysisTest {
         assertTrue(network.bonds.isEmpty(), "hbonds must be separated from normal bonds")
     }
 
+    @Test fun uniqueLabelAutoNumbersSameElementSites() {
+        // Per user spec: new-atom labels follow the X, X2, X3... scheme.
+        val sites = listOf(
+            Site("a", "Ga", Species("Ga"), FractionalCoordinate.ZERO),
+            Site("b", "Ga", Species("Ga"), FractionalCoordinate(0.5, 0.5, 0.5)),
+            Site("c", "Ga2", Species("Ga"), FractionalCoordinate(0.25, 0.25, 0.25)),
+            Site("d", "O1", Species("O"), FractionalCoordinate(0.1, 0.1, 0.1)),
+        )
+        assertEquals("Ga", CrystalEditor.uniqueLabel("Ga", emptyList()), "first site of an element keeps the bare symbol")
+        assertEquals("Ga3", CrystalEditor.uniqueLabel("Ga", sites), "occupied labels step up through the numeric suffix")
+        assertEquals("Si", CrystalEditor.uniqueLabel("Si", sites), "unused element stays bare")
+        assertEquals("O", CrystalEditor.uniqueLabel("O", sites), "a CIF-style O1 does not occupy the bare O label")
+        assertEquals("O12", CrystalEditor.uniqueLabel("O1", sites), "the numeric suffix is appended to the taken base")
+    }
+
+    @Test fun transformTranslationIsNotPremultiplied() {
+        // Per v0.8.43 (issue #6): the transform dialog formula is R' = XR + T — the translation
+        // is added DIRECTLY in the new coordinate system, matching the fallback path. The
+        // decomposable path used to premultiply it by P⁻¹, so a 2×2×1 expansion + T=(0.5,0,0)
+        // moved atoms by only (0.25,0,0).
+        val structure = csCl().first // Cs at (0,0,0), Cl at (0.5,0.5,0.5)
+        val result = CrystalEditor.apply(
+            structure,
+            BondConfiguration(),
+            EditCommand.Transform(
+                listOf(listOf(2, 0, 0), listOf(0, 2, 0), listOf(0, 0, 1)),
+                FractionalCoordinate(0.5, 0.0, 0.0),
+            ),
+        )
+        val cs = result.structure.sites.first { it.id == "Cs" }
+        // x' = P⁻¹x + T with x=0 gives T = (0.5, 0, 0); the buggy Pinv*T gave (0.25, 0, 0).
+        assertEquals(0.5, cs.fractionalCoordinate.x, 1e-6, "translation must apply directly (no Pinv premultiply)")
+        assertEquals(0.0, cs.fractionalCoordinate.y, 1e-6)
+        assertEquals(0.0, cs.fractionalCoordinate.z, 1e-6)
+    }
 }

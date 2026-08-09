@@ -56,6 +56,7 @@ data class DocumentSnapshot(
     val savedPrimitiveStructure: CrystalStructure?,
     val savedPrimitiveBondConfig: BondConfiguration?,
     val structuralExpansion: Boolean,
+    val cellTransformed: Boolean,
 ) {
     fun restore(tab: DocumentTab) {
         tab.structure = structure; tab.bondConfiguration = bondConfiguration; tab.renderConfiguration = renderConfiguration
@@ -69,6 +70,7 @@ data class DocumentSnapshot(
         tab.savedPrimitiveStructure = savedPrimitiveStructure
         tab.savedPrimitiveBondConfig = savedPrimitiveBondConfig
         tab.structuralExpansion = structuralExpansion
+        tab.cellTransformed = cellTransformed
         tab.moleculeAnalysisPending = true
         tab.moleculeExtendDefaultPending = true
     }
@@ -81,6 +83,7 @@ data class DocumentSnapshot(
             tab.savedConventionalStructure, tab.savedConventionalBondConfig,
             tab.savedPrimitiveStructure, tab.savedPrimitiveBondConfig,
             tab.structuralExpansion,
+            tab.cellTransformed,
         )
     }
 }
@@ -154,6 +157,10 @@ class DocumentTab(
 // not a display-only supercell. Controls whether SINGLE_CELL frame mode shows the
 // entire supercell frame or just one cell.
     var structuralExpansion by mutableStateOf(false)
+    // Per v0.8.43 (issue #6): true after any 3×3 matrix transform — hides the
+    // primitive/conventional conversion button (conversion after a custom transform
+    // would discard the transform's intent). Snapshot-integrated so undo restores it.
+    var cellTransformed by mutableStateOf(false)
     // 分子晶体分析(惰性):打开晶体、键网络就绪后检查一次 isMolecularCrystal;
     // 为 true 则 parse 出分子列表(与原子/键并列),供后续分子相关接口使用。
     // 结构/键规则变更(编辑、undo/redo、自动键规则)后置回待计算,下次场景构建重算。
