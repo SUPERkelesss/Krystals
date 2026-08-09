@@ -20,8 +20,8 @@ object ExportOverlay {
         state: InteractionState,
         includeAxes: Boolean,
         includeMeasurements: Boolean,
+        bondValenceBySite: Map<String, Double> = emptyMap(),
     ) {
-        if (!includeAxes && !includeMeasurements) return
         val canvas = Canvas(bitmap)
         val w = bitmap.width
         val h = bitmap.height

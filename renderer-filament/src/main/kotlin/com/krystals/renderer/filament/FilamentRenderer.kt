@@ -65,6 +65,22 @@ internal data class RendererPerformanceSnapshot(
 )
 
 /** Single owner for Filament engine, surface, scene, resources and frame scheduling. */
+/** Export render size per quality tier. LOW = live viewport (viewer-like image),
+ *  HIGH = 2x supersample capped at 2560 (per v0.8.43, issue #9: 4096² + MSAA4 OOM'd
+ *  low-end GPUs; 2560²×4 ≈ 25MB CPU bitmap, ~200MB MSAA4 GPU texture — acceptable). */
+fun exportRenderSize(viewportWidth: Int, viewportHeight: Int, high: Boolean): Pair<Int, Int> {
+    val floor = 512
+    if (!high) return viewportWidth.coerceIn(floor, 4096) to viewportHeight.coerceIn(floor, 4096)
+    val w = (viewportWidth * 2).coerceIn(floor, 2560)
+    val h = (viewportHeight * 2).coerceIn(floor, 2560)
+    return w to h
+}
+
+/** Per v0.8.43 (issue #9): hard timeout for one offscreen pixel readback. If the Filament
+ *  readPixels callback never fires (GPU hang / renderer death), the export coroutine
+ *  resumes with null instead of suspending forever. */
+private const val EXPORT_TIMEOUT_MS = 12_000L
+
 class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.FrameCallback {
     private val appContext = context.applicationContext
     private val closed = AtomicBoolean(false)
@@ -226,27 +242,37 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         return pickingRenderer.pick(x, y)
     }
 
-    override suspend fun renderToBitmap(width: Int, height: Int, useMsaa: Boolean): Bitmap? {
+    override suspend fun renderToBitmap(width: Int, height: Int, msaaSamples: Int): Bitmap? {
         // Per v0.6.3: when width/height are 0, use the live viewport dimensions so the
         // exported image matches the on-screen size at the same resolution.
         val actualWidth = if (width <= 0) interaction.session.viewportWidth.coerceIn(512, 4096) else width
         val actualHeight = if (height <= 0) interaction.session.viewportHeight.coerceIn(512, 4096) else height
         require(actualWidth in 512..4096 && actualHeight in 512..4096) { "export size must be between 512 and 4096" }
+        require(msaaSamples == 1 || msaaSamples == 4) { "msaaSamples must be 1 or 4" }
         if (closed.get() || submittedScene == null) return null
         return suspendCoroutine { continuation ->
+            // Per v0.8.43 (issue #9): every resume goes through this flag — a double resume
+            // would throw IllegalStateException. The 12 s timeout also guarantees the caller
+            // is resumed even when the readback callback never fires (GPU hang / renderer
+            // death), which previously suspended the export coroutine forever.
+            val completed = AtomicBoolean(false)
+            fun resumeOnce(value: Bitmap?) {
+                if (completed.compareAndSet(false, true)) continuation.resume(value)
+            }
+            val timeout = Runnable { resumeOnce(null) }
+            mainHandler.postDelayed(timeout, EXPORT_TIMEOUT_MS)
             onMain {
                 runCatching {
-                    // Secret: when useMsaa is true, re-enable the MSAA+FXAA path that produces
-                    // a corrupted (blue-noise) image. This is the "broken export" easter egg.
-                    if (useMsaa) {
-                        view.setSampleCount(4)
-                        view.setPostProcessingEnabled(true)
-                        view.setAntiAliasing(View.AntiAliasing.FXAA)
-                    }
+                    // Offscreen target. The MSAA sample count lives on the color/depth
+                    // textures themselves (Texture.Builder.samples) so the FBO is complete —
+                    // the old export path set view.setSampleCount(4) on samples=1 textures,
+                    // which produced a corrupted blue-noise image.
                     val color = Texture.Builder().width(actualWidth).height(actualHeight).levels(1)
+                        .samples(msaaSamples)
                         .sampler(Texture.Sampler.SAMPLER_2D).format(Texture.InternalFormat.RGBA8)
                         .usage(Texture.Usage.COLOR_ATTACHMENT or Texture.Usage.BLIT_SRC).build(engine)
                     val depth = Texture.Builder().width(actualWidth).height(actualHeight).levels(1)
+                        .samples(msaaSamples)
                         .sampler(Texture.Sampler.SAMPLER_2D).format(Texture.InternalFormat.DEPTH24)
                         .usage(Texture.Usage.DEPTH_ATTACHMENT).build(engine)
                     val target = RenderTarget.Builder()
@@ -257,10 +283,11 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                     val previousViewport = view.viewport
                     view.renderTarget = target
                     view.viewport = Viewport(0, 0, actualWidth, actualHeight)
+                    if (msaaSamples > 1) view.setSampleCount(msaaSamples)
                     updateCamera(actualWidth, actualHeight)
                     renderer.renderStandaloneView(view)
                     val pixels = ByteBuffer.allocateDirect(actualWidth * actualHeight * 4).order(ByteOrder.nativeOrder())
-                    // Per v0.6.3: move pixel processing + composeOverlay to a background thread
+                    // Per v0.6.3: move pixel processing + overlay compositing to a background thread
                     // to prevent blocking the main thread (which caused "Skipped 76 frames!").
                     val descriptor = Texture.PixelBufferDescriptor(pixels, Texture.Format.RGBA, Texture.Type.UBYTE).apply {
                         setCallback(mainHandler) {
@@ -280,14 +307,15 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                                     }
                                     // Restore view on the main thread (Filament requires it).
                                     mainHandler.post {
-                                        // Per v0.8.32: the engine may have been closed while the pixel
-                                        // readback was in flight (e.g. the appearance preview dialog was
-                                        // dismissed) — never touch a destroyed view. Skip the restore.
+                                        // Per v0.8.32/v0.8.43: the engine may have been closed while the
+                                        // pixel readback was in flight (e.g. the panel was dismissed) —
+                                        // never touch a destroyed view or engine. Skip the restore and
+                                        // the resource destroys (the engine teardown frees them).
                                         if (closed.get()) return@post
                                         view.renderTarget = previousTarget
                                         view.viewport = previousViewport
                                         updateCamera(previousViewport.width, previousViewport.height)
-                                        if (useMsaa) {
+                                        if (msaaSamples > 1) {
                                             view.setSampleCount(1)
                                             view.setPostProcessingEnabled(false)
                                             view.setAntiAliasing(View.AntiAliasing.NONE)
@@ -297,26 +325,32 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                                         engine.destroyTexture(color)
                                         requestFrames(1)
                                     }
-                                    // Bitmap creation + overlay compositing on background thread.
-                                    val sourceBitmap = Bitmap.createBitmap(argb, actualWidth, actualHeight, Bitmap.Config.ARGB_8888)
-                                    val bitmap = sourceBitmap.copy(Bitmap.Config.ARGB_8888, true)
-                                    sourceBitmap.recycle()
-                                    composeOverlay(bitmap)
-                                    mainHandler.post { continuation.resume(bitmap) }
-                                } catch (e: Exception) {
-                                    mainHandler.post { continuation.resume(null) }
+                                    // Bitmap creation on the background thread. Annotations (axes,
+                                    // measurements, inspection panels, selection rings) are composed by
+                                    // the app layer via ExportOverlay so the export matches the viewer.
+                                    // Per v0.8.43 (issue #9): createBitmap(IntArray, ...) returns a MUTABLE
+                                    // bitmap — the copy() + recycle() chain was a second 64MB (4096²)
+                                    // allocation that doubled the peak; the overlay now draws directly
+                                    // on this single bitmap.
+                                    val bitmap = Bitmap.createBitmap(argb, actualWidth, actualHeight, Bitmap.Config.ARGB_8888)
+                                    mainHandler.post { resumeOnce(bitmap) }
+                                } catch (t: Throwable) {
+                                    mainHandler.post { resumeOnce(null) }
+                                } finally {
+                                    // Double insurance: any path (including Error) resumes the caller.
+                                    mainHandler.post { resumeOnce(null) }
                                 }
                             }.start()
                         }
                     }
                     renderer.readPixels(target, 0, 0, actualWidth, actualHeight, descriptor)
                 }.onFailure {
-                    if (useMsaa) {
+                    if (msaaSamples > 1) {
                         view.setSampleCount(1)
                         view.setPostProcessingEnabled(false)
                         view.setAntiAliasing(View.AntiAliasing.NONE)
                     }
-                    continuation.resume(null)
+                    resumeOnce(null)
                 }
             }
         }
@@ -338,8 +372,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         if (closed.get()) return
         val chain = swapChain ?: return
         if (!frameBudget.hasPending) return
-        // Per v0.8.11: update billboard transforms every frame with live camera + roll.
-        gpuInstances.updateBillboardTransforms(lastCameraPosition, lastCameraUp)
         if (renderer.beginFrame(chain, frameTimeNanos)) {
             renderer.render(view)
             renderer.endFrame()

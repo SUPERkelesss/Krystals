@@ -131,6 +131,7 @@ import com.krystals.renderer.core.style.RenderPalette
 import com.krystals.renderer.core.style.ViewerAppearance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.filament.FilamentRenderer
+import com.krystals.renderer.filament.exportRenderSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -452,31 +453,52 @@ internal fun ViewerScreen(
                             exporting = true
                             exportJob = scope.launch {
                                 try {
+                                    debugLog(EXPORT_IMAGE_TAG) { "ExportImage 1/4: export started (${scene.atoms.size} atoms, ${scene.bonds.size} bonds)" }
                                     val renderer = activeFilamentRenderer
-                                    // Per v0.8.26: export quality — HIGH = full res, LOW = half res.
+                                    // Per v0.8.26→v0.9.0: export quality — HIGH renders at 2x
+                                    // supersample with MSAA 4x, LOW renders at the live viewport
+                                    // size (viewer-like image) without MSAA.
                                     val useHigh = settingsValues.exportQuality == ExportQuality.HIGH
                                     val bitmap = if (renderer != null) {
-                                        runCatching { renderer.submit(scene); renderer.renderToBitmap() }.getOrNull()?.let {
-                                            if (useHigh) it else it.scale(it.width / 2, it.height / 2)
-                                        }
+                                        runCatching {
+                                            renderer.submit(scene)
+                                            if (useHigh) {
+                                                val (w, h) = exportRenderSize(
+                                                    tab.interactionState.session.viewportWidth,
+                                                    tab.interactionState.session.viewportHeight,
+                                                    high = true,
+                                                )
+                                                renderer.renderToBitmap(w, h, msaaSamples = 4)
+                                            } else {
+                                                renderer.renderToBitmap()
+                                            }
+                                        }.getOrNull()
                                     } else null
                                     if (bitmap == null) {
+                                        warnLog(EXPORT_IMAGE_TAG) { "ExportImage: render failed, no bitmap" }
                                         onMessage("Unable to export current crystal")
                                     } else {
-                                        val finalBitmap = if (settingsValues.exportShowAxes || settingsValues.exportShowMeasurements) {
-                                            bitmap.copy(android.graphics.Bitmap.Config.ARGB_8888, true).also { out ->
-                                                ExportOverlay.apply(
-                                                    bitmap = out,
-                                                    scene = scene,
-                                                    state = tab.interactionState,
-                                                    includeAxes = settingsValues.exportShowAxes,
-                                                    includeMeasurements = settingsValues.exportShowMeasurements,
-                                                )
-                                            }
-                                        } else bitmap
-                                        onExport(finalBitmap)
+                                        debugLog(EXPORT_IMAGE_TAG) { "ExportImage 2/4: render done (${bitmap.width}x${bitmap.height})" }
+                                        // Per v0.8.43 (issue #9): the readback bitmap is already mutable —
+                                        // draw the overlay directly on it instead of copy()ing a third
+                                        // 64MB (4096²) bitmap on the main thread.
+                                        if (settingsValues.exportShowAxes || settingsValues.exportShowMeasurements) {
+                                            ExportOverlay.apply(
+                                                bitmap = bitmap,
+                                                scene = scene,
+                                                state = tab.interactionState,
+                                                includeAxes = settingsValues.exportShowAxes,
+                                                includeMeasurements = settingsValues.exportShowMeasurements,
+                                                bondValenceBySite = bondValenceBySite,
+                                            )
+                                            debugLog(EXPORT_IMAGE_TAG) { "ExportImage 3/4: overlay applied (axes=${settingsValues.exportShowAxes}, measurements=${settingsValues.exportShowMeasurements})" }
+                                        }
+                                        onExport(bitmap)
                                     }
-                                } catch (error: Exception) {
+                                } catch (error: Throwable) {
+                                    // Per v0.8.43 (issue #9): catch Throwable (was Exception) — an
+                                    // OutOfMemoryError during export used to crash the process instead
+                                    // of degrading to the failure message.
                                     if (error !is CancellationException) onMessage(error.message ?: "Export failed")
                                 } finally {
                                     exporting = false

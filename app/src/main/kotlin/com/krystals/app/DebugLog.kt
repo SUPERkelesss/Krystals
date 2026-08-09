@@ -17,3 +17,6 @@ inline fun warnLog(tag: String, throwable: Throwable? = null, message: () -> Str
         else android.util.Log.w(tag, message())
     }
 }
+
+/** Log tag for image export — step-completion trace while a scene image is being exported. */
+const val EXPORT_IMAGE_TAG = "ExportImage"

@@ -206,4 +206,16 @@ class FilamentCompatibilityTest {
         assertTrue(b in 1..16, "blue must rise slightly toward gray, got $b")
         assertTrue(g > 0 && b > 0, "fully saturated red must gain a little chroma of gray")
     }
+
+    @Test
+    fun `export render size follows quality tier`() {
+        // LOW: same size as the live viewport (viewer-like image).
+        assertEquals(1080 to 2200, exportRenderSize(1080, 2200, high = false))
+        // LOW floors at 512.
+        assertEquals(512 to 512, exportRenderSize(300, 300, high = false))
+        // HIGH: 2x supersample.
+        assertEquals(2160 to 2560, exportRenderSize(1080, 2200, high = true))
+        // Per v0.8.43 (issue #9): HIGH caps at 2560 (was 4096) so low-end GPUs don't OOM.
+        assertEquals(2560 to 2560, exportRenderSize(4096, 4096, high = true))
+    }
 }
