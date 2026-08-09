@@ -1000,6 +1000,10 @@ private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
     // Per v0.8.x: the "计算" button recomputes ONLY the H-bond rules (rebuildHbondRules keeps the
     // normal rules verbatim) off the UI thread, showing a loading dialog while it runs.
     fun autoRecompute() {
+        // Per v0.8.x: cancel the in-flight recompute before starting a new one — the old
+        // CPU-bound job was merely dereferenced and kept running, so rapid "计算" presses
+        // piled up unreleasable Voronoi computations.
+        autoJob?.cancel()
         loading = true
         autoJob = scope.launch(Dispatchers.Default) {
             val outcome = runCatching {
@@ -1008,13 +1012,21 @@ private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
                     tab.bondConfiguration,
                     tab.lastRadiusSource,
                     tab.bondEpsilon,
+                    angleThreshold = tab.hbondAngleThreshold,
+                    cancelCheck = { coroutineContext.isActive },
                 )
             }
             withContext(Dispatchers.Main) {
                 loading = false
                 autoJob = null
                 outcome.onSuccess { result -> onStructure(result) }
-                    .onFailure { error -> onMessage(error.message ?: "H-bond recompute failed") }
+                    .onFailure { error ->
+                        // Per v0.8.x: a recompute cancelled by the back button or a newer
+                        // recompute surfaces as VoronoiAbortedException — swallow it silently.
+                        if (error is VoronoiAbortedException) {
+                            // Silently ignored: cancelled by the back button or a newer recompute.
+                        } else onMessage(error.message ?: "H-bond recompute failed")
+                    }
             }
         }
     }
