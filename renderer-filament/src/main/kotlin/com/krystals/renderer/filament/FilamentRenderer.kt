@@ -345,11 +345,12 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                                     // Bitmap creation on the background thread. Annotations (axes,
                                     // measurements, inspection panels, selection rings) are composed by
                                     // the app layer via ExportOverlay so the export matches the viewer.
-                                    // Per v0.8.43 (issue #9): createBitmap(IntArray, ...) returns a MUTABLE
-                                    // bitmap — the copy() + recycle() chain was a second 64MB (4096²)
-                                    // allocation that doubled the peak; the overlay now draws directly
-                                    // on this single bitmap.
-                                    val bitmap = Bitmap.createBitmap(argb, actualWidth, actualHeight, Bitmap.Config.ARGB_8888)
+                                    // The IntArray overload returns an immutable bitmap on Android.
+                                    // ExportOverlay draws with Canvas, so allocate mutable storage and
+                                    // copy the readback into it without creating another bitmap.
+                                    val bitmap = Bitmap.createBitmap(actualWidth, actualHeight, Bitmap.Config.ARGB_8888)
+                                    check(bitmap.isMutable) { "export bitmap must be mutable" }
+                                    bitmap.setPixels(argb, 0, actualWidth, 0, 0, actualWidth, actualHeight)
                                     mainHandler.post { resumeOnce(bitmap) }
                                 } catch (t: Throwable) {
                                     mainHandler.post {
