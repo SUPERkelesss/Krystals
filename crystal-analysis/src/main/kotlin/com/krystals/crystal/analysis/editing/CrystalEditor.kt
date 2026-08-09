@@ -318,6 +318,7 @@ object CrystalEditor {
         atoms: List<com.krystals.crystal.core.model.AtomImage>,
         normalRules: List<BondRule>,
         epsilon: Double = 0.45,
+        angleThreshold: Double = 110.0,
     ): List<BondRule> {
         val hbondAcceptorElements = setOf("O", "N", "F", "S", "P", "Cl")
         val hbondPartnerElements = hbondAcceptorElements
@@ -360,7 +361,7 @@ object CrystalEditor {
         if (protonSiteIds.isEmpty()) return emptyList()
 
         return HbondChecking.hbondRules(
-            structure, atoms, neighboursByAtomId, protonSiteIds, normalRules,
+            structure, atoms, neighboursByAtomId, protonSiteIds, normalRules, angleThreshold,
         )
     }
 
@@ -432,14 +433,18 @@ object CrystalEditor {
     /** Per v0.8.x: recompute ONLY the H-bond rules for [source] — existing normal
      *  (non-H-bond) rules are kept exactly as-is. The normal rules act as the covalent
      *  window input for the bonding/vdW paths; the SMART_IONIC path runs the full
-     *  smart-ionic analysis and keeps only its H-bond rules (falling back to the original
-     *  configuration when the analysis fails, e.g. beyond the atom limit). Structures
-     *  without hydrogen return the configuration untouched. */
+     *  smart-ionic analysis and keeps only its H-bond rules. When that analysis fails
+     *  (no cation-anion bvparm pair — pure organic/metal-free structures — or beyond
+     *  the atom limit), [angleThreshold] gates the hbond candidate angle in both paths.
+     *  [angleThreshold] is forwarded to [HbondChecking.hbondRules] so the UI's angle
+     *  slider (detection = display) controls the rule layer. Structures without
+     *  hydrogen return the configuration untouched. */
     fun rebuildHbondRules(
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,
         source: RadiusSource,
         epsilon: Double = 0.45,
+        angleThreshold: Double = 110.0,
         cancelCheck: (() -> Boolean)? = null,
     ): EditResult {
         if (structure.sites.none { it.species.symbol == "H" }) {
@@ -450,12 +455,20 @@ object CrystalEditor {
         val newHbondRules = when (source) {
             RadiusSource.SMART_IONIC -> {
                 val smart = BondValence.smartIonicRules(
-                    structure, bondConfiguration, epsilon, atoms, includeHbonds = true, cancelCheck = cancelCheck,
+                    structure, bondConfiguration, epsilon, atoms,
+                    includeHbonds = true, cancelCheck = cancelCheck, angleThreshold = angleThreshold,
                 )
-                if (!smart.success) return EditResult(structure, bondConfiguration)
-                smart.rules.filter { it.isHBond }
+                // Per v0.8.x: a failed smart-ionic analysis (no cation-anion bvparm pair, e.g.
+                // pure organic / metal-free structures) falls back to the bonding hbond path so
+                // "计算" still produces hbond rules — previously the configuration was returned
+                // unchanged and the hbond rule list stayed empty.
+                if (!smart.success) {
+                    hbondRulesFor(structure, atoms, normalRules, epsilon, angleThreshold)
+                } else {
+                    smart.rules.filter { it.isHBond }
+                }
             }
-            else -> hbondRulesFor(structure, atoms, normalRules, epsilon)
+            else -> hbondRulesFor(structure, atoms, normalRules, epsilon, angleThreshold)
         }
         return EditResult(
             structure,

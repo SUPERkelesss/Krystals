@@ -333,7 +333,10 @@ internal fun ViewerScreen(
                 // Per v0.8.43 (issue #11): the open pipeline (network build + scene build) runs
                 // on openDispatcher — its own small pool, isolated from heavy bond computations.
                 withContext(openDispatcher) {
-                    val analysis = BondDetector.buildNetwork(tab.structure, tab.bondConfiguration, tab.expansion)
+                    val analysis = BondDetector.buildNetwork(
+                        tab.structure, tab.bondConfiguration, tab.expansion,
+                        hbondAngleThreshold = tab.hbondAngleThreshold,
+                    )
                     // 分子晶体分析(打开晶体、原子与键加载完毕后):检查一次 isMolecularCrystal,
                     // 为 false 走固定流程;为 true 则 parse 得到分子列表(与原子/键并列储存),
                     // 供后续分子接口使用。惰性:仅首次(或结构变更后)计算一次,复用本次键网络。

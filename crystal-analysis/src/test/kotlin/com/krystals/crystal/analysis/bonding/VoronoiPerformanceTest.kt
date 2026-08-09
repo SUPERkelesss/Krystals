@@ -83,9 +83,10 @@ class VoronoiPerformanceTest {
         val bondConfiguration = BondConfiguration(emptyList())
         var checks = 0
         val thrown = runCatching {
-            BondValence.smartIonicRules(structure, bondConfiguration, 0.45, includeHbonds = false) {
-                checks++; checks > 64
-            }
+            BondValence.smartIonicRules(
+                structure, bondConfiguration, 0.45, includeHbonds = false,
+                cancelCheck = { checks++; checks > 64 },
+            )
         }.exceptionOrNull()
         assertTrue(thrown is VoronoiAbortedException, "smartIonicRules 应透传取消异常,实际: $thrown")
     }

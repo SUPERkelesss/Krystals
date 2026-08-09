@@ -63,7 +63,8 @@ object BondDetector {
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,
         expansion: Expansion = Expansion(),
-    ): BondNetwork = buildNetworkGridded(structure, bondConfiguration, expansion)
+        hbondAngleThreshold: Double = 110.0,
+    ): BondNetwork = buildNetworkGridded(structure, bondConfiguration, expansion, hbondAngleThreshold)
 
     /**
      * Per v0.5.3b (Phase 2): gridded scene build. Materialises only the primary region plus the
@@ -82,6 +83,7 @@ object BondDetector {
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,
         expansion: Expansion = Expansion(),
+        hbondAngleThreshold: Double = 110.0,
     ): BondNetwork {
         val base = SymmetryExpander.expand(structure)
         require(base.size.toLong() * expansion.multiplier <= MAX_RENDERED_ATOMS) {
@@ -335,7 +337,9 @@ object BondDetector {
 
         // Per v0.8.5: post-filter hbond bonds — rule-level one-hbond-per-proton is per-SITE,
         // but BondDetector materialises a bond for EVERY atom pair inside the window. Re-apply
-        // the per-ATOM constraints: angle X-H-Y > 110° and keep only the shortest hbond per H.
+        // the per-ATOM constraints: angle X-H-Y > hbondAngleThreshold (parameterized per
+        // v0.8.x so the UI angle slider controls detection AND display) and keep only the
+        // shortest hbond per H.
         if (result.any { it.rule.isHBond }) {
             val allAtomsById = (primaryAtoms + boundaryImages + shellAtoms).associateBy { it.id }
             // Build covalent-partner lookup from normal (non-hbond) bonds.
@@ -369,7 +373,7 @@ object BondDetector {
                     val toX = periodicDisplacement(hPos, xPos, lattice)
                     partners.any { y ->
                         val toY = periodicDisplacement(hPos, y.cartesianCoordinate.toVec3(), lattice)
-                        angleDegrees(toX, com.krystals.crystal.core.math.Vec3(0.0, 0.0, 0.0), toY) > 110.0
+                        angleDegrees(toX, com.krystals.crystal.core.math.Vec3(0.0, 0.0, 0.0), toY) > hbondAngleThreshold
                     }
                 }
                 if (ok) anglePassed += b
@@ -506,6 +510,7 @@ object BondDetector {
         atoms: List<AtomImage>,
         bondConfiguration: BondConfiguration,
         lattice: Lattice,
+        hbondAngleThreshold: Double = 110.0,
     ): List<Bond> {
         if (atoms.size < 2) return emptyList()
         val custom = bondConfiguration.rules.associateBy { it.key }
