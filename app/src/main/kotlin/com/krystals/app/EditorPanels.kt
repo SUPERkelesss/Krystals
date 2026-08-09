@@ -76,6 +76,7 @@ import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.bonding.BondRuleMatching
 import com.krystals.crystal.analysis.bonding.BondValence
+import com.krystals.crystal.analysis.bonding.VoronoiAbortedException
 import com.krystals.crystal.analysis.bonding.VoronoiSearchLimitExceededException
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
@@ -90,6 +91,7 @@ import com.krystals.renderer.core.style.RenderPalette
 import kotlin.math.max
 import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.setValue
@@ -695,6 +697,10 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
             return
         }
         previousEpsilon = tab.bondEpsilon
+        // Per v0.8.45: cancel the in-flight rebuild before starting a new one — previously the
+        // old CPU-bound job was merely dereferenced and kept running, so rapid epsilon changes
+        // piled up unreleasable Voronoi computations and froze the UI.
+        rebuildJob?.cancel()
         loading = true
         rebuildJob = scope.launch(Dispatchers.Default) {
             val outcome = runCatching {
@@ -703,6 +709,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
                     tab.bondConfiguration,
                     source,
                     epsilon,
+                    cancelCheck = { coroutineContext.isActive },
                 )
             }
             withContext(Dispatchers.Main) {
@@ -714,7 +721,11 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
                     if (CrystalEditor.SMART_IONIC_UNAVAILABLE in result.warnings) onMessage(unavailableMessage)
                     onStructure(result)
                 }.onFailure { error ->
-                    if (error is VoronoiSearchLimitExceededException) voronoiWarningOpen = true
+                    // Per v0.8.45: a rebuild cancelled by the back button or a newer rebuild
+                    // surfaces as VoronoiAbortedException — swallow it silently.
+                    if (error is VoronoiAbortedException) {
+                        // Silently ignored: cancelled by the back button or a newer rebuild.
+                    } else if (error is VoronoiSearchLimitExceededException) voronoiWarningOpen = true
                     else onMessage(error.message ?: "Bond calculation failed")
                 }
             }

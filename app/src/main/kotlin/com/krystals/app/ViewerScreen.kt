@@ -118,6 +118,7 @@ import com.krystals.crystal.analysis.bonding.BondDetector
 import com.krystals.crystal.analysis.bonding.BondRule
 import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.bonding.BondValence
+import com.krystals.crystal.analysis.bonding.VoronoiAbortedException
 import com.krystals.crystal.analysis.bonding.isMolecularCrystal
 import com.krystals.crystal.analysis.bonding.toMolecules
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
@@ -134,6 +135,7 @@ import com.krystals.renderer.filament.exportRenderSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -403,11 +405,21 @@ internal fun ViewerScreen(
     // doubling the Voronoi CPU load during file open.
     val bondValenceBySiteState = produceState<Map<String, Double>>(
         emptyMap(),
-        tab.structure, tab.bondConfiguration, tab.bondEpsilon, tab.selectedAtomIds.isNotEmpty(),
+        // Per v0.8.45: bondEpsilon is deliberately NOT a key — bondValenceSums never uses it, so
+        // epsilon-slider changes previously restarted (and piled up) the full periodic-Voronoi
+        // BVS pass, leaving the old CPU-bound producers running to completion after cancellation.
+        tab.structure, tab.bondConfiguration, tab.selectedAtomIds.isNotEmpty(),
     ) {
         value = if (tab.selectedAtomIds.isNotEmpty()) {
             withContext(Dispatchers.Default) {
-                BondValence.bondValenceSums(tab.structure, tab.bondConfiguration, tab.bondEpsilon)
+                // Per v0.8.45: cancelCheck aborts the Voronoi search when this producer is
+                // restarted/cancelled; VoronoiAbortedException is swallowed (empty map) while
+                // CancellationException keeps propagating to produceState.
+                try {
+                    BondValence.bondValenceSums(tab.structure, tab.bondConfiguration, cancelCheck = { coroutineContext.isActive })
+                } catch (_: VoronoiAbortedException) {
+                    emptyMap()
+                }
             }
         } else emptyMap()
     }
