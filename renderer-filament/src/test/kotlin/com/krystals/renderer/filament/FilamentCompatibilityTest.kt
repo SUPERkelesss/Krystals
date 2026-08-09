@@ -5,11 +5,26 @@ import com.krystals.renderer.core.style.WorldLight
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class FilamentCompatibilityTest {
+    @Test
+    fun `rgba readback converts channels in bulk`() {
+        val pixels = ByteBuffer.allocateDirect(8).order(ByteOrder.nativeOrder()).apply {
+            put(byteArrayOf(0x11, 0x22, 0x33, 0x44, 0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte(), 0xDD.toByte()))
+            rewind()
+        }
+
+        assertEquals(
+            listOf(0x44112233, 0xDDAABBCC.toInt()),
+            rgbaBytesToArgb(pixels, 2).toList(),
+        )
+    }
+
     @Test
     fun `depth cue thresholds use legacy visible depth scale`() {
         val (near, far) = depthCueViewRange(

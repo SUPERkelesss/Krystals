@@ -19,7 +19,6 @@ import com.google.android.filament.EntityManager
 import com.google.android.filament.Filament
 import com.google.android.filament.IndirectLight
 import com.google.android.filament.LightManager
-import com.google.android.filament.RenderTarget
 import com.google.android.filament.Renderer
 import com.google.android.filament.Scene
 import com.google.android.filament.SwapChain
@@ -76,6 +75,29 @@ fun exportRenderSize(viewportWidth: Int, viewportHeight: Int, high: Boolean): Pa
     val edgeScale = 2560.0 / maxOf(sourceWidth, sourceHeight).toDouble()
     val scale = minOf(desiredScale, edgeScale)
     return maxOf(1, (sourceWidth * scale).toInt()) to maxOf(1, (sourceHeight * scale).toInt())
+}
+
+internal fun rgbaBytesToArgb(pixels: ByteBuffer, pixelCount: Int): IntArray {
+    require(pixelCount >= 0 && pixels.remaining() >= pixelCount * 4)
+    val argb = IntArray(pixelCount)
+    if (pixels.order() == ByteOrder.LITTLE_ENDIAN) {
+        pixels.asIntBuffer().get(argb)
+        for (index in argb.indices) {
+            val rgba = argb[index]
+            argb[index] = (rgba and 0xFF00FF00.toInt()) or
+                ((rgba and 0x000000FF) shl 16) or
+                ((rgba and 0x00FF0000) ushr 16)
+        }
+    } else {
+        for (index in argb.indices) {
+            val red = pixels.get().toInt() and 0xFF
+            val green = pixels.get().toInt() and 0xFF
+            val blue = pixels.get().toInt() and 0xFF
+            val alpha = pixels.get().toInt() and 0xFF
+            argb[index] = (alpha shl 24) or (red shl 16) or (green shl 8) or blue
+        }
+    }
+    return argb
 }
 
 /** Per v0.8.43 (issue #9): hard timeout for one offscreen pixel readback. If the Filament
@@ -260,64 +282,62 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             // is resumed even when the readback callback never fires (GPU hang / renderer
             // death), which previously suspended the export coroutine forever.
             val completed = AtomicBoolean(false)
+            var timeout: Runnable? = null
             fun resumeOnce(value: Bitmap?) {
-                if (completed.compareAndSet(false, true)) continuation.resume(value)
+                if (completed.compareAndSet(false, true)) {
+                    timeout?.let(mainHandler::removeCallbacks)
+                    continuation.resume(value)
+                }
             }
-            val timeout = Runnable { resumeOnce(null) }
-            mainHandler.postDelayed(timeout, EXPORT_TIMEOUT_MS)
+            timeout = Runnable {
+                android.util.Log.w("FilamentExport", "Pixel readback timed out after ${EXPORT_TIMEOUT_MS}ms")
+                resumeOnce(null)
+            }
+            mainHandler.postDelayed(timeout!!, EXPORT_TIMEOUT_MS)
             onMain {
-                runCatching {
-                    // Single-sample offscreen target. Supersampled dimensions provide high-quality
-                    // antialiasing without the native-driver instability of multisampled readback.
-                    val color = Texture.Builder().width(actualWidth).height(actualHeight).levels(1)
-                        .sampler(Texture.Sampler.SAMPLER_2D).format(Texture.InternalFormat.RGBA8)
-                        .usage(Texture.Usage.COLOR_ATTACHMENT or Texture.Usage.BLIT_SRC).build(engine)
-                    val depth = Texture.Builder().width(actualWidth).height(actualHeight).levels(1)
-                        .sampler(Texture.Sampler.SAMPLER_2D).format(Texture.InternalFormat.DEPTH24)
-                        .usage(Texture.Usage.DEPTH_ATTACHMENT).build(engine)
-                    val target = RenderTarget.Builder()
-                        .texture(RenderTarget.AttachmentPoint.COLOR, color)
-                        .texture(RenderTarget.AttachmentPoint.DEPTH, depth)
-                        .build(engine)
-                    val previousTarget = view.renderTarget
-                    val previousViewport = view.viewport
-                    view.renderTarget = target
+                var exportSwapChain: SwapChain? = null
+                var frameBegun = false
+                val previousTarget = view.renderTarget
+                val previousViewport = view.viewport
+                fun restoreView() {
+                    view.renderTarget = previousTarget
+                    view.viewport = previousViewport
+                    updateCamera(previousViewport.width, previousViewport.height)
+                }
+                fun destroyExportSwapChain() {
+                    exportSwapChain?.let {
+                        if (!closed.get()) engine.destroySwapChain(it)
+                        exportSwapChain = null
+                    }
+                }
+                try {
+                    // A readable headless SwapChain follows Filament's normal frame lifecycle. This is
+                    // more portable than renderStandaloneView + an attached texture RenderTarget.
+                    exportSwapChain = engine.createSwapChain(
+                        actualWidth,
+                        actualHeight,
+                        SwapChainFlags.CONFIG_READABLE,
+                    )
+                    view.renderTarget = null
                     view.viewport = Viewport(0, 0, actualWidth, actualHeight)
                     updateCamera(actualWidth, actualHeight)
-                    renderer.renderStandaloneView(view)
                     val pixels = ByteBuffer.allocateDirect(actualWidth * actualHeight * 4).order(ByteOrder.nativeOrder())
                     // Per v0.6.3: move pixel processing + overlay compositing to a background thread
                     // to prevent blocking the main thread (which caused "Skipped 76 frames!").
                     val descriptor = Texture.PixelBufferDescriptor(pixels, Texture.Format.RGBA, Texture.Type.UBYTE).apply {
                         setCallback(mainHandler) {
+                            timeout?.let(mainHandler::removeCallbacks)
+                            if (completed.get()) {
+                                destroyExportSwapChain()
+                                return@setCallback
+                            }
                             Thread {
                                 try {
-                                    val argb = IntArray(actualWidth * actualHeight)
                                     pixels.rewind()
-                                    for (sourceY in 0 until actualHeight) {
-                                        val destinationY = sourceY
-                                        for (xIndex in 0 until actualWidth) {
-                                            val r = pixels.get().toInt() and 0xFF
-                                            val g = pixels.get().toInt() and 0xFF
-                                            val b = pixels.get().toInt() and 0xFF
-                                            val a = pixels.get().toInt() and 0xFF
-                                            argb[destinationY * actualWidth + xIndex] = (a shl 24) or (r shl 16) or (g shl 8) or b
-                                        }
-                                    }
-                                    // Restore view on the main thread (Filament requires it).
+                                    val argb = rgbaBytesToArgb(pixels, actualWidth * actualHeight)
                                     mainHandler.post {
-                                        // Per v0.8.32/v0.8.43: the engine may have been closed while the
-                                        // pixel readback was in flight (e.g. the panel was dismissed) —
-                                        // never touch a destroyed view or engine. Skip the restore and
-                                        // the resource destroys (the engine teardown frees them).
-                                        if (closed.get()) return@post
-                                        view.renderTarget = previousTarget
-                                        view.viewport = previousViewport
-                                        updateCamera(previousViewport.width, previousViewport.height)
-                                        engine.destroyRenderTarget(target)
-                                        engine.destroyTexture(depth)
-                                        engine.destroyTexture(color)
-                                        requestFrames(1)
+                                        destroyExportSwapChain()
+                                        if (!closed.get()) requestFrames(1)
                                     }
                                     // Bitmap creation on the background thread. Annotations (axes,
                                     // measurements, inspection panels, selection rings) are composed by
@@ -329,16 +349,33 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                                     val bitmap = Bitmap.createBitmap(argb, actualWidth, actualHeight, Bitmap.Config.ARGB_8888)
                                     mainHandler.post { resumeOnce(bitmap) }
                                 } catch (t: Throwable) {
-                                    mainHandler.post { resumeOnce(null) }
+                                    mainHandler.post {
+                                        android.util.Log.w("FilamentExport", "Creating export bitmap failed", t)
+                                        destroyExportSwapChain()
+                                        resumeOnce(null)
+                                    }
                                 } finally {
                                     // Double insurance: any path (including Error) resumes the caller.
                                     mainHandler.post { resumeOnce(null) }
                                 }
                             }.start()
-                        }
                     }
-                    renderer.readPixels(target, 0, 0, actualWidth, actualHeight, descriptor)
-                }.onFailure {
+                }
+                    val chain = checkNotNull(exportSwapChain)
+                    check(renderer.beginFrame(chain, Engine.getSteadyClockTimeNano())) {
+                        "Filament declined the offscreen export frame"
+                    }
+                    frameBegun = true
+                    renderer.render(view)
+                    renderer.readPixels(0, 0, actualWidth, actualHeight, descriptor)
+                    renderer.endFrame()
+                    frameBegun = false
+                    restoreView()
+                } catch (t: Throwable) {
+                    if (frameBegun) runCatching { renderer.endFrame() }
+                    if (!closed.get()) runCatching { restoreView() }
+                    destroyExportSwapChain()
+                    android.util.Log.w("FilamentExport", "Offscreen export failed", t)
                     resumeOnce(null)
                 }
             }
