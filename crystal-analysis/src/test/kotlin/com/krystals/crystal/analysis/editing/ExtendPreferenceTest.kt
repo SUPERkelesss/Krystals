@@ -9,13 +9,14 @@ import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
  * v0.8.35: opening a file applies the user's default cross-cell bond-extension preference to
- * every generated rule. ALL → both directions extend; METALS_ONLY → only the metal atom's
- * direction extends; NEVER → nothing extends.
+ * every generated rule. ALL → both directions extend; METALS_ONLY → only the metal side of a
+ * metal-nonmetal bond extends (v0.8.43: metal-metal bonds never extend); NEVER → nothing.
  */
 class ExtendPreferenceTest {
 
@@ -73,5 +74,32 @@ class ExtendPreferenceTest {
         val out = CrystalEditor.applyExtendPreference(fStructure, fRules, CrystalEditor.ExtendBondDefaultMode.METALS_ONLY)
         assertFalse(out.single().extendAtoB, "non-metal A must not extend")
         assertFalse(out.single().extendBtoA, "non-metal B must not extend")
+    }
+
+    @Test
+    fun metalsOnlyMetalMetalBondExtendsNothing() {
+        // Cs-Cs rule (both metals, v0.8.43): metal-metal bonds are out of the METALS_ONLY
+        // scope — neither direction extends (previously both extended).
+        val mmRules = listOf(BondRule("Cs", "Cs", 0.1, 4.0))
+        val out = CrystalEditor.applyExtendPreference(structure, mmRules, CrystalEditor.ExtendBondDefaultMode.METALS_ONLY)
+        assertFalse(out.single().extendAtoB, "metal-metal A→B must not extend")
+        assertFalse(out.single().extendBtoA, "metal-metal B→A must not extend")
+    }
+
+    @Test
+    fun metalNonmetalMetalIdsScopesToMetalNonmetalBonds() {
+        // Cs participates in a Cs-Cl (M-NM) bond and a Cs-Cs (M-M) bond — only the M-NM metal
+        // id is in scope for polyhedra/extension.
+        val rules = listOf(
+            BondRule("Cs", "Cl", 0.1, 4.0),
+            BondRule("Cs", "Cs", 0.1, 4.0),
+        )
+        assertEquals(setOf("Cs"), CrystalEditor.metalNonmetalMetalIds(structure, rules))
+    }
+
+    @Test
+    fun metalNonmetalMetalIdsEmptyForMetalMetalOnly() {
+        val out = CrystalEditor.metalNonmetalMetalIds(structure, listOf(BondRule("Cs", "Cs", 0.1, 4.0)))
+        assertTrue(out.isEmpty(), "pure metal-metal bonding yields no polyhedra/extension scope")
     }
 }

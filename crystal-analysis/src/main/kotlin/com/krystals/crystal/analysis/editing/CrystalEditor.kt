@@ -158,8 +158,9 @@ object CrystalEditor {
     enum class ExtendBondDefaultMode { ALL, METALS_ONLY, NEVER }
 
     /** Per v0.8.35: set every rule's extendAtoB/extendBtoA per the user's default-extension
-     *  preference: ALL → both directions always extend; METALS_ONLY → only the direction whose
-     *  inside atom is a metal extends; NEVER → no direction extends. */
+     *  preference: ALL → both directions always extend; NEVER → no direction extends.
+     *  Per v0.8.43: METALS_ONLY → for metal-nonmetal bonds only the metal side extends;
+     *  metal-metal bonds do not extend at all. */
     fun applyExtendPreference(
         structure: CrystalStructure,
         rules: List<BondRule>,
@@ -169,10 +170,27 @@ object CrystalEditor {
             ExtendBondDefaultMode.ALL -> rule.copy(extendAtoB = true, extendBtoA = true)
             ExtendBondDefaultMode.NEVER -> rule.copy(extendAtoB = false, extendBtoA = false)
             ExtendBondDefaultMode.METALS_ONLY -> rule.copy(
-                extendAtoB = PeriodicTableData.isMetal(siteSymbolOf(structure, rule.siteA)),
-                extendBtoA = PeriodicTableData.isMetal(siteSymbolOf(structure, rule.siteB)),
+                // Only a metal whose bond partner is a NON-metal extends (M-NM: metal side;
+                // M-M: neither side; NM-NM: neither side).
+                extendAtoB = PeriodicTableData.isMetal(siteSymbolOf(structure, rule.siteA)) && !PeriodicTableData.isMetal(siteSymbolOf(structure, rule.siteB)),
+                extendBtoA = PeriodicTableData.isMetal(siteSymbolOf(structure, rule.siteB)) && !PeriodicTableData.isMetal(siteSymbolOf(structure, rule.siteA)),
             )
         }
+    }
+
+    /** Per v0.8.43: the metal site ids that participate in at least one metal-NONmetal bond
+     *  rule — the METALS_ONLY scope for the polyhedra default and bond extension. Metal-metal
+     *  bonds are excluded, so a metal bonded only to other metals yields no ids here. */
+    fun metalNonmetalMetalIds(structure: CrystalStructure, rules: List<BondRule>): Set<String> {
+        val metalBySite = structure.sites.associate { it.id to PeriodicTableData.isMetal(it.species.symbol) }
+        return rules
+            .filter { rule ->
+                (metalBySite[rule.siteA] ?: false) != (metalBySite[rule.siteB] ?: false)
+            }
+            .flatMap { rule ->
+                if (metalBySite[rule.siteA] == true) listOf(rule.siteA) else listOf(rule.siteB)
+            }
+            .toSet()
     }
 
     private fun siteSymbolOf(structure: CrystalStructure, siteId: String): String =

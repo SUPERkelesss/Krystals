@@ -520,6 +520,14 @@ fun KrystalsRoot(
                         )
                     }
                 }
+                // Per v0.8.43: the METALS_ONLY polyhedra default now has the regenerated rules —
+                // refine the per-site default set from doOpenParsed to exactly the metals in
+                // metal-nonmetal bonds (metal-metal bonds excluded).
+                if (settingsValues.defaultPolyhedra == PolyhedraDefault.METALS_ONLY && targetTab in viewModel.tabs) {
+                    targetTab.visibility = targetTab.visibility.copy(
+                        polyhedronSites = CrystalEditor.metalNonmetalMetalIds(extended.structure, extended.bondConfiguration.rules),
+                    )
+                }
                 if (CrystalEditor.SMART_IONIC_TIMEOUT in extended.warnings) showMessage(smartIonicTimeoutMessage)
                 if (targetTab in viewModel.tabs) viewModel.updateAnalysis(targetTab, extended)
                 debugLog(CIF_OPEN_TAG) { "OpenCIF 6/6: bond rules computed (${extended.bondConfiguration.rules.size} rules, ${extended.bondConfiguration.rules.count { it.isHBond }} hbonds, mode ${settingsValues.bondRuleMode}) [compute +${System.currentTimeMillis() - computeStart}ms]" }
@@ -569,10 +577,14 @@ fun KrystalsRoot(
             ExtendBondsDefault.NEVER -> false
         }
         // Default polyhedra visibility.
+        // Per v0.8.43: METALS_ONLY shows polyhedra only for metals that participate in a
+        // metal-NONmetal bond (metal-metal bonds excluded) — computed from the carried CIF
+        // rules here; refined against the regenerated rules in openWithBondComputation's
+        // onSuccess once they exist.
         val siteIds = parsed.structure.sites.map { it.id }.toSet()
         tab.visibility = tab.visibility.copy(polyhedronSites = when (settingsValues.defaultPolyhedra) {
             PolyhedraDefault.ALL -> siteIds
-            PolyhedraDefault.METALS_ONLY -> parsed.structure.sites.filter { PeriodicTableData.isMetal(it.species.symbol) }.map { it.id }.toSet()
+            PolyhedraDefault.METALS_ONLY -> CrystalEditor.metalNonmetalMetalIds(parsed.structure, parsed.bondConfiguration.rules)
             PolyhedraDefault.NEVER -> emptySet()
         })
         // Per v0.7.0: extract user comments from CIF source.
