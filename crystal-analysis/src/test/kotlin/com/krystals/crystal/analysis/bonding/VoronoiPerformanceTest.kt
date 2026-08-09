@@ -62,4 +62,31 @@ class VoronoiPerformanceTest {
         println("smartIonic rules: ${result.rules}")
         assertEquals(7, result.rules.size, "与 logcat 的 7 rules 对齐")
     }
+
+    @Test
+    fun voronoiHonoursCancellationCheck() {
+        val structure = pyrochlore()
+        val atoms = SymmetryExpander.expand(structure)
+        var checks = 0
+        val start = System.nanoTime()
+        val thrown = runCatching {
+            VoronoiNeighbours.find(structure, atoms) { checks++; checks > 64 }
+        }.exceptionOrNull()
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+        assertTrue(thrown is VoronoiAbortedException, "应抛 VoronoiAbortedException,实际: $thrown")
+        assertTrue(elapsedMs < 1_000, "取消后应在 1s 内返回,实际 ${elapsedMs}ms")
+    }
+
+    @Test
+    fun smartIonicRulesPropagatesCancellation() {
+        val structure = pyrochlore()
+        val bondConfiguration = BondConfiguration(emptyList())
+        var checks = 0
+        val thrown = runCatching {
+            BondValence.smartIonicRules(structure, bondConfiguration, 0.45, includeHbonds = false) {
+                checks++; checks > 64
+            }
+        }.exceptionOrNull()
+        assertTrue(thrown is VoronoiAbortedException, "smartIonicRules 应透传取消异常,实际: $thrown")
+    }
 }

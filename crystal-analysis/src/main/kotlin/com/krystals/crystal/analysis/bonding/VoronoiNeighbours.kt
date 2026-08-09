@@ -18,6 +18,9 @@ class VoronoiSearchLimitExceededException(
         "($estimatedCandidatesPerCenter candidates per center; shell=$shellX,$shellY,$shellZ)",
 )
 
+/** Periodic Voronoi search aborted by the caller's cooperative cancellation check. */
+class VoronoiAbortedException : IllegalStateException("Periodic Voronoi search aborted by cancellation check")
+
 /** Periodic 3D Voronoi neighbours, represented once per undirected periodic atom pair. */
 internal object VoronoiNeighbours {
     private const val EPS = 1e-8
@@ -53,7 +56,11 @@ internal object VoronoiNeighbours {
      * numbers: a Cs site in CsCl, for example, has eight Cl neighbours even though all eight images
      * refer to the same expanded atom id.
      */
-    fun find(structure: CrystalStructure, atoms: List<AtomImage>): List<Triple<Long, Long, Double>> {
+    fun find(
+        structure: CrystalStructure,
+        atoms: List<AtomImage>,
+        cancelCheck: (() -> Boolean)? = null,
+    ): List<Triple<Long, Long, Double>> {
         if (atoms.isEmpty()) return emptyList()
         val lattice = structure.lattice.matrix
         // The lattice is identical for every centre; compute its inverse once instead of
@@ -62,8 +69,9 @@ internal object VoronoiNeighbours {
         val edges = LinkedHashMap<EdgeKey, Double>()
 
         for (center in atoms) {
-            val initialCandidates = candidates(center, atoms, structure, 1, 1, 1)
-            val provisionalCell = buildCell(initialCandidates)
+            cancelCheck?.let { if (!it()) throw VoronoiAbortedException() }
+            val initialCandidates = candidates(center, atoms, structure, 1, 1, 1, cancelCheck = cancelCheck)
+            val provisionalCell = buildCell(initialCandidates, cancelCheck)
             if (provisionalCell.isEmpty()) continue
 
             // Any plane whose displacement q is longer than twice the farthest cell vertex cannot
@@ -82,8 +90,8 @@ internal object VoronoiNeighbours {
             // Per v0.7.1: pass maxDistance into candidates() so far-away images are skipped during
             // generation, avoiding unnecessary object creation and reducing the sort cost from
             // O(M log M) to O(m log m) where m << M is the post-filter count.
-            val completeCandidates = candidates(center, atoms, structure, shellX, shellY, shellZ, relevantDistance)
-            val faces = buildCell(completeCandidates)
+            val completeCandidates = candidates(center, atoms, structure, shellX, shellY, shellZ, relevantDistance, cancelCheck)
+            val faces = buildCell(completeCandidates, cancelCheck)
 
             for (face in faces) {
                 val neighbour = face.neighbour ?: continue
@@ -106,6 +114,7 @@ internal object VoronoiNeighbours {
         shellY: Int,
         shellZ: Int,
         maxDistance: Double = Double.MAX_VALUE,
+        cancelCheck: (() -> Boolean)? = null,
     ): List<Candidate> {
         require(shellX >= 0 && shellY >= 0 && shellZ >= 0)
         ensureCandidateBudget(atoms.size, shellX, shellY, shellZ)
@@ -121,9 +130,12 @@ internal object VoronoiNeighbours {
             translations += translation to Int3(dx, dy, dz)
         }
         return buildList {
+            var imageIndex = 0
             for (other in atoms) {
                 val otherPosition = other.cartesianCoordinate.toVec3()
                 for ((translation, offset) in translations) {
+                    if (imageIndex and 63 == 0) cancelCheck?.let { if (!it()) throw VoronoiAbortedException() }
+                    imageIndex++
                     if (center.id == other.id && offset.x == 0 && offset.y == 0 && offset.z == 0) continue
                     val displacement = otherPosition + translation - centerPosition
                     val distSq = displacement.lengthSquared()
@@ -153,7 +165,7 @@ internal object VoronoiNeighbours {
         }
     }
 
-    private fun buildCell(candidates: List<Candidate>): List<Face> {
+    private fun buildCell(candidates: List<Candidate>, cancelCheck: (() -> Boolean)? = null): List<Face> {
         if (candidates.isEmpty()) return emptyList()
         val halfExtent = candidates.maxOf { it.distance } + 1.0
         var faces = boundingCube(halfExtent)
@@ -171,7 +183,10 @@ internal object VoronoiNeighbours {
         // the latest R it holds for every later candidate with any smaller R — we can BREAK
         // instead of scanning each far candidate's faces only to skip it.
         var maxVertexDist = maxVertexDistance(faces)
-        for (candidate in candidates) {
+        for ((index, candidate) in candidates.withIndex()) {
+            // Per v0.7.2: cooperative cancellation check every 64 candidates so the app's
+            // withTimeoutOrNull can abort this CPU-bound loop without a coroutine suspension.
+            if (index and 63 == 0) cancelCheck?.let { if (!it()) throw VoronoiAbortedException() }
             if (candidate.distance > 2.0 * maxVertexDist + EPS) break
             faces = clip(faces, candidate)
             if (faces.isEmpty()) break
