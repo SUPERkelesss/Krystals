@@ -65,15 +65,17 @@ internal data class RendererPerformanceSnapshot(
 )
 
 /** Single owner for Filament engine, surface, scene, resources and frame scheduling. */
-/** Export render size per quality tier. LOW = live viewport (viewer-like image),
- *  HIGH = 2x supersample capped at 2560 (per v0.8.43, issue #9: 4096² + MSAA4 OOM'd
- *  low-end GPUs; 2560²×4 ≈ 25MB CPU bitmap, ~200MB MSAA4 GPU texture — acceptable). */
+/** Export render size per quality tier. LOW = live viewport. HIGH = 2x supersampling,
+ *  fitted inside a 2560px long edge without changing the viewport aspect ratio. */
 fun exportRenderSize(viewportWidth: Int, viewportHeight: Int, high: Boolean): Pair<Int, Int> {
     val floor = 512
     if (!high) return viewportWidth.coerceIn(floor, 4096) to viewportHeight.coerceIn(floor, 4096)
-    val w = (viewportWidth * 2).coerceIn(floor, 2560)
-    val h = (viewportHeight * 2).coerceIn(floor, 2560)
-    return w to h
+    val sourceWidth = viewportWidth.coerceAtLeast(1)
+    val sourceHeight = viewportHeight.coerceAtLeast(1)
+    val desiredScale = 2.0
+    val edgeScale = 2560.0 / maxOf(sourceWidth, sourceHeight).toDouble()
+    val scale = minOf(desiredScale, edgeScale)
+    return maxOf(1, (sourceWidth * scale).toInt()) to maxOf(1, (sourceHeight * scale).toInt())
 }
 
 /** Per v0.8.43 (issue #9): hard timeout for one offscreen pixel readback. If the Filament
@@ -247,8 +249,10 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         // exported image matches the on-screen size at the same resolution.
         val actualWidth = if (width <= 0) interaction.session.viewportWidth.coerceIn(512, 4096) else width
         val actualHeight = if (height <= 0) interaction.session.viewportHeight.coerceIn(512, 4096) else height
-        require(actualWidth in 512..4096 && actualHeight in 512..4096) { "export size must be between 512 and 4096" }
-        require(msaaSamples == 1 || msaaSamples == 4) { "msaaSamples must be 1 or 4" }
+        require(actualWidth in 1..4096 && actualHeight in 1..4096) { "export size must be between 1 and 4096" }
+        // readPixels on a multisampled offscreen RenderTarget is not portable across Android GPU
+        // drivers and can abort inside Filament. High quality is provided by supersampling instead.
+        require(msaaSamples == 1) { "offscreen export does not support MSAA" }
         if (closed.get() || submittedScene == null) return null
         return suspendCoroutine { continuation ->
             // Per v0.8.43 (issue #9): every resume goes through this flag — a double resume
@@ -263,16 +267,12 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             mainHandler.postDelayed(timeout, EXPORT_TIMEOUT_MS)
             onMain {
                 runCatching {
-                    // Offscreen target. The MSAA sample count lives on the color/depth
-                    // textures themselves (Texture.Builder.samples) so the FBO is complete —
-                    // the old export path set view.setSampleCount(4) on samples=1 textures,
-                    // which produced a corrupted blue-noise image.
+                    // Single-sample offscreen target. Supersampled dimensions provide high-quality
+                    // antialiasing without the native-driver instability of multisampled readback.
                     val color = Texture.Builder().width(actualWidth).height(actualHeight).levels(1)
-                        .samples(msaaSamples)
                         .sampler(Texture.Sampler.SAMPLER_2D).format(Texture.InternalFormat.RGBA8)
                         .usage(Texture.Usage.COLOR_ATTACHMENT or Texture.Usage.BLIT_SRC).build(engine)
                     val depth = Texture.Builder().width(actualWidth).height(actualHeight).levels(1)
-                        .samples(msaaSamples)
                         .sampler(Texture.Sampler.SAMPLER_2D).format(Texture.InternalFormat.DEPTH24)
                         .usage(Texture.Usage.DEPTH_ATTACHMENT).build(engine)
                     val target = RenderTarget.Builder()
@@ -283,7 +283,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                     val previousViewport = view.viewport
                     view.renderTarget = target
                     view.viewport = Viewport(0, 0, actualWidth, actualHeight)
-                    if (msaaSamples > 1) view.setSampleCount(msaaSamples)
                     updateCamera(actualWidth, actualHeight)
                     renderer.renderStandaloneView(view)
                     val pixels = ByteBuffer.allocateDirect(actualWidth * actualHeight * 4).order(ByteOrder.nativeOrder())
@@ -315,11 +314,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                                         view.renderTarget = previousTarget
                                         view.viewport = previousViewport
                                         updateCamera(previousViewport.width, previousViewport.height)
-                                        if (msaaSamples > 1) {
-                                            view.setSampleCount(1)
-                                            view.setPostProcessingEnabled(false)
-                                            view.setAntiAliasing(View.AntiAliasing.NONE)
-                                        }
                                         engine.destroyRenderTarget(target)
                                         engine.destroyTexture(depth)
                                         engine.destroyTexture(color)
@@ -345,11 +339,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                     }
                     renderer.readPixels(target, 0, 0, actualWidth, actualHeight, descriptor)
                 }.onFailure {
-                    if (msaaSamples > 1) {
-                        view.setSampleCount(1)
-                        view.setPostProcessingEnabled(false)
-                        view.setAntiAliasing(View.AntiAliasing.NONE)
-                    }
                     resumeOnce(null)
                 }
             }

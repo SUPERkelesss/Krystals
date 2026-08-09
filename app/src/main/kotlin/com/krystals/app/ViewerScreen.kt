@@ -458,9 +458,9 @@ internal fun ViewerScreen(
                                 try {
                                     debugLog(EXPORT_IMAGE_TAG) { "ExportImage 1/4: export started (${scene.atoms.size} atoms, ${scene.bonds.size} bonds)" }
                                     val renderer = activeFilamentRenderer
-                                    // Per v0.8.26→v0.9.0: export quality — HIGH renders at 2x
-                                    // supersample with MSAA 4x, LOW renders at the live viewport
-                                    // size (viewer-like image) without MSAA.
+                                    // HIGH uses a larger aspect-preserving offscreen target. Keep
+                                    // it single-sampled: multisampled readPixels crashes on some
+                                    // Android GPU drivers, while supersampling already smooths edges.
                                     val useHigh = settingsValues.exportQuality == ExportQuality.HIGH
                                     val bitmap = if (renderer != null) {
                                         runCatching {
@@ -471,7 +471,7 @@ internal fun ViewerScreen(
                                                     tab.interactionState.session.viewportHeight,
                                                     high = true,
                                                 )
-                                                renderer.renderToBitmap(w, h, msaaSamples = 4)
+                                                renderer.renderToBitmap(w, h, msaaSamples = 1)
                                             } else {
                                                 renderer.renderToBitmap()
                                             }

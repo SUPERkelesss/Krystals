@@ -4,6 +4,7 @@
 
 - Complete molecule images in all directions: any molecule image intersecting the display region — including negative lattice translations — is rendered whole. Fixes missing molecules that dive into the cell from negative sides in low-symmetry (monoclinic/orthorhombic) cells; C60 corner/face images are unchanged.
 - Hydrogen-bond endpoint visibility in molecule-extend mode: an hbond renders only when both endpoint spheres are visible (no dangling segments, no missed in-cell hbonds). Hbonds never trigger molecule expansion.
+- Fix image export crashes on some Android GPUs by replacing multisampled offscreen readback with aspect-preserving supersampling.
 
 ## 2026/07/31 v0.6.5 化学键编辑重构、MP 数据修复与 UI 改进
 

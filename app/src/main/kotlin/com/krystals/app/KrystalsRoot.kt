@@ -740,17 +740,25 @@ fun KrystalsRoot(
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val bitmap = pendingExportBitmap
         pendingExportBitmap = null
-        if (granted && bitmap != null) scope.launch { runCatching { FileRepository.exportPng(activity.contentResolver, bitmap) }.onSuccess { showMessage("Exported to Pictures/Krystals") }.onFailure { if (it !is CancellationException) showMessage(it.message ?: "Export failed") } }
-        else showMessage("Storage permission is required on Android 8–9")
+        if (granted && bitmap != null) scope.launch {
+            runCatching { withContext(Dispatchers.IO) { FileRepository.exportPng(activity.contentResolver, bitmap) } }
+                .onSuccess { showMessage("Exported to Pictures/Krystals") }
+                .onFailure { if (it !is CancellationException) showMessage(it.message ?: "Export failed") }
+            bitmap.recycle()
+        } else {
+            bitmap?.recycle()
+            showMessage("Storage permission is required on Android 8–9")
+        }
     }
     fun requestExport(bitmap: Bitmap) {
         if (Build.VERSION.SDK_INT <= 28 && ContextCompat.checkSelfPermission(activity, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             pendingExportBitmap = bitmap
             permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         } else scope.launch {
-            runCatching { FileRepository.exportPng(activity.contentResolver, bitmap) }
+            runCatching { withContext(Dispatchers.IO) { FileRepository.exportPng(activity.contentResolver, bitmap) } }
                 .onSuccess { showMessage("Exported to Pictures/Krystals") }
                 .onFailure { if (it !is CancellationException) showMessage(it.message ?: "Export failed") }
+            bitmap.recycle()
         }
     }
 

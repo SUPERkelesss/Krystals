@@ -213,9 +213,9 @@ class FilamentCompatibilityTest {
         assertEquals(1080 to 2200, exportRenderSize(1080, 2200, high = false))
         // LOW floors at 512.
         assertEquals(512 to 512, exportRenderSize(300, 300, high = false))
-        // HIGH: 2x supersample.
-        assertEquals(2160 to 2560, exportRenderSize(1080, 2200, high = true))
-        // Per v0.8.43 (issue #9): HIGH caps at 2560 (was 4096) so low-end GPUs don't OOM.
+        // HIGH: 2x supersample fitted to the 2560 long edge without aspect distortion.
+        assertEquals(1256 to 2560, exportRenderSize(1080, 2200, high = true))
+        // Square viewports retain their aspect ratio at the cap.
         assertEquals(2560 to 2560, exportRenderSize(4096, 4096, high = true))
     }
 }
