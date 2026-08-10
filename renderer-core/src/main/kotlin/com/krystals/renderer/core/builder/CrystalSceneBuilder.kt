@@ -8,7 +8,6 @@ import com.krystals.crystal.analysis.coordination.CoordinationAnalyzer
 import com.krystals.crystal.analysis.polyhedron.PolyhedronHull
 import com.krystals.crystal.core.coordinate.CartesianCoordinate
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
-import com.krystals.crystal.core.math.Mat3
 import com.krystals.crystal.core.math.Vec3
 import com.krystals.crystal.core.math.angleDegrees
 import com.krystals.crystal.core.math.distance
@@ -25,6 +24,7 @@ import com.krystals.renderer.core.material.Material
 import com.krystals.renderer.core.primitive.AtomInstance
 import com.krystals.renderer.core.primitive.BondInstance
 import com.krystals.renderer.core.primitive.GatheredAtomInstance
+import com.krystals.renderer.core.scene.GatheredAtom
 import com.krystals.renderer.core.primitive.HbondInstance
 import com.krystals.renderer.core.primitive.MeshInstance
 import com.krystals.renderer.core.primitive.MeshKind
@@ -49,10 +49,10 @@ data class SceneBuildOptions(
     val defaultPolyhedronMaterial: Material = Material(0x809A90A0L, opacity = 0.5, doubleSided = true),
     val defaultAtomRadius: Double = 0.35,
     val bondRadius: Double = 0.15,
-    // Per v0.8.30: hydrogen-bond appearance (radius Å / opacity 0..1).
+    // Per v0.7.0: hydrogen-bond appearance (radius Å / opacity 0..1).
     val hbondRadius: Double = 0.05,
     val hbondOpacity: Double = 0.2,
-    // Per v0.8.x: 氢键角度阈值(D–H···A 夹角,度)。角度 ≤ 阈值的氢键不显示。
+    // Per v0.7.0: 氢键角度阈值(D–H···A 夹角,度)。角度 ≤ 阈值的氢键不显示。
     // 默认 110° 与检测层一致;阈值 ≤ 0 时不过滤。
     val hbondAngleThreshold: Double = 110.0,
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
@@ -64,6 +64,9 @@ data class SceneBuildOptions(
     // molecule expansion (the molecule topology channel contains no hbonds).
     val moleculeExtend: Boolean = false,
     val molecules: List<Molecule> = emptyList(),
+    // Show bonds between atoms that are already visible through first-order per-rule extension.
+    // This never makes another shell atom visible and is ignored by molecule-extend mode.
+    val showSecondaryExtendBonds: Boolean = true,
 ) {
     init {
         require(defaultAtomRadius > 0.0) { "default atom radius must be positive" }
@@ -81,7 +84,7 @@ class CrystalSceneBuilder {
 
         val atomById = analysis.atoms.associateBy { it.id }
         // Per v0.6.5: only make an external-shell atom visible if the bond's directional extend
-        // flag allows it. Per v0.8.44: same-atom periodic self-images never surface their far
+        // flag allows it. Per v0.7.0: same-atom periodic self-images never surface their far
         // end — with the default METALS_ONLY extension the Ca-Ca rule extends, and without this
         // guard the outer-shell Ca images beyond the cell would all become visible as an extra
         // ring around the cell (the reached outer-shell C atoms of real Ca-C extensions still
@@ -234,7 +237,10 @@ class CrystalSceneBuilder {
         /** 场景原子 → 分子索引:原胞原子直查;shell/边界映像经原胞代表(re-same-site + 整数平移)查。 */
         fun moleculeIndexOf(atom: AtomImage): Int? {
             moleculeIndexByRepId[atom.id]?.let { return it }
-            if (!atom.isShell) return null
+            // Per 2026-08-09: 原实现对非 shell 原子直接返回 null —— 扩展晶胞下的
+            // primary(cellOffset ≠ 0,不在 rep 表)因此归属失败,跨子晶胞面的分子内键
+            // 在普通键通道走 mi==null 分支被隐藏。超胞 primary 与外部壳层一样,经
+            // siteId + 整数平移找回原胞代表再查分子。
             val rep = repBySiteId[atom.siteId]?.firstOrNull { isSameAtomPeriodicImage(it, atom) } ?: return null
             return moleculeIndexByRepId[rep.id]
         }
@@ -283,21 +289,25 @@ class CrystalSceneBuilder {
             BondColorMode.UNICOLOR -> options.defaultBondMaterial
         }
 
-        // Per v0.8.2: build gathered-atom groups for co-located atoms of different sites.
+        // Per v0.7.0: build gathered-atom groups for co-located atoms of different sites.
         val colorBySite = options.atomMaterialBySite.mapValues { it.value.argb }
-        val groups = GatheredAtomGrouper.group(analysis.atoms, colorBySite)
-        val groupByMemberId = GatheredAtomGrouper.groupByAtomId(analysis.atoms, colorBySite)
+        val gathered = GatheredAtomGrouper.groupWithIndex(analysis.atoms, colorBySite)
+        val groups = gathered.groups
+        val groupByMemberId = gathered.byMemberId
 
         val objects = mutableListOf<RenderObject>()
 
-        // Per v0.8.2: emit all atoms as AtomInstances (backward-compat for BondNetwork adapter,
+        // Per v0.7.0: emit all atoms as AtomInstances (backward-compat for BondNetwork adapter,
         // picking, info windows), then additionally emit GatheredAtomInstances for groups.
         // Backends that understand GatheredAtomInstance skip drawing individual member atoms.
         val groupCenterById = linkedMapOf<String, Vec3>()
         val groupRadiusById = linkedMapOf<String, Double>()  // for surface-anchored bonds
+        // Per 2026-08-09: 动态 gathered 组(分子映像补全合成)的成员索引 —— emitMoleculeBond
+        // 判断端点是否属于动态组,把键锚定到组球面(与场景组共用 groupRadiusById)。
+        val dynGroupByMember = HashMap<Long, GatheredAtom>()
         for (g in groups) {
             val maxRadius = g.memberAtomIds.mapNotNull { id -> atomById[id]?.let { options.atomRadiusByElement[it.species.symbol] ?: options.defaultAtomRadius } }.maxOrNull() ?: options.defaultAtomRadius
-            // Per v0.8.15: group visibility follows ANY member's atom visibility, including
+            // Per v0.7.0: group visibility follows ANY member's atom visibility, including
             // boundary-image members. Boundary-image groups (e.g. the +z images of (0,0,1))
             // render the SAME pie as the in-cell group — the user requires (0,0,1)-type
             // positions to look identical to (0,0,0). External-shell groups stay hidden
@@ -315,7 +325,7 @@ class CrystalSceneBuilder {
                 visible = anyVisible,
             )
         }
-        // Per v0.8.13: boundary-image (shell) atoms whose cartesian position coincides with a
+        // Per v0.7.0: boundary-image (shell) atoms whose cartesian position coincides with a
         // PRIMARY (in-cell) atom are exact periodic duplicates — rendering both produces two
         // overlapping atoms at cell faces/corners (e.g. (0,0,1)). Skip the shell duplicate; the
         // in-cell atom already represents that position. Shell atoms at positions with no
@@ -336,7 +346,7 @@ class CrystalSceneBuilder {
             )
         }
         // Bond pass: drop intra-group bonds, remap positions, dedupe per (groupKey|atomId, groupKey|atomId, offsetB).
-        // Per v0.8.5: groups anchor bonds at the sphere SURFACE; duplicate member→same-target
+        // Per v0.7.0: groups anchor bonds at the sphere SURFACE; duplicate member→same-target
         // bonds collapse with occ-weighted mixedColor at the group end.
         val seenBondKeys = mutableSetOf<Triple<Any, Any, Triple<Int, Int, Int>>>()
         // Collect per-dedupe-key bonding members for mixed-color collapse (amendment B.3).
@@ -375,7 +385,7 @@ class CrystalSceneBuilder {
             val startKey = dedupeKey.first
             val endKey = dedupeKey.second
 
-            // Per v0.8.5: anchor bonds at sphere SURFACE, not center.
+            // Per v0.7.0: anchor bonds at sphere SURFACE, not center.
             val rawStart = startGroup?.center ?: start.cartesianCoordinate.toVec3()
             val rawEnd = endGroup?.center ?: end.cartesianCoordinate.toVec3()
             val dir = (rawEnd - rawStart).normalized()
@@ -384,7 +394,7 @@ class CrystalSceneBuilder {
             val startPos = rawStart + dir * startRadius
             val endPos = rawEnd - dir * endRadius
 
-            // Per v0.8.5 item 3: blended material for duplicate member→same-target bonds.
+            // Per v0.7.0 item 3: blended material for duplicate member→same-target bonds.
             val members = bondMembersByKey[dedupeKey].orEmpty()
             val (startMat, endMat) = if (members.size >= 2 && endGroup != null) {
                 // Group end: occ-weighted mixedColor of bonding members ↔ target color.
@@ -405,7 +415,7 @@ class CrystalSceneBuilder {
                 bondMaterial(start) to bondMaterial(end)
             }
 
-            // Per v0.8.36: single-cell ("no extension") bond visibility. The old rule only gated
+            // Per v0.7.0: single-cell ("no extension") bond visibility. The old rule only gated
             // external shells, so same-atom periodic images on the cell faces (e.g. Ca1-Ca1 metal
             // bonds at 3.87 A in CaC2) leaked into the non-extended view, and boundary-image
             // copies of in-cell coordination bonds were duplicated. Rules:
@@ -454,18 +464,21 @@ class CrystalSceneBuilder {
                 isSameAtomPeriodicImage(start, end) -> false
                 else -> {
                     if (start.isExternalShell || end.isExternalShell) {
-                        // Genuine out-of-cell neighbours stay behind the rule's extend flag.
-                        bond.rule.shouldExtendAcrossCell(start.siteId, end.isExternalShell)
+                        // The rule flag owns first-order extension. Secondary extension only fills
+                        // bonds whose endpoints were already made visible by other first-order
+                        // bonds; it never changes atom visibility.
+                        bond.rule.shouldExtendAcrossCell(start.siteId, end.isExternalShell) ||
+                            options.showSecondaryExtendBonds && atomVisible(start) && atomVisible(end)
                     } else {
                         // Boundary-image keys (one or both ends are displayed face images):
                         // always shown — both ends are displayed atoms, their bonds are part
-                        // of the picture (v0.8.42 restored after the v0.8.36 over-filtering).
+                        // of the picture (v0.7.0 restored after the v0.7.0 over-filtering).
                         true
                     }
                 }
             }
             val visible = options.showBonds && bond.rule.key !in options.hiddenBondKeys && externalAllowed
-            // Per v0.8.42: no heteronuclear dedup — every bond between displayed atoms
+            // Per v0.7.0: no heteronuclear dedup — every bond between displayed atoms
             // (primary or boundary-image) is rendered, so face images keep ALL their bonds.
             // Same-atom self-images and out-of-cell neighbours were already gated above.
             val finalVisible = visible
@@ -481,6 +494,145 @@ class CrystalSceneBuilder {
             )
         }
 
+        // BondDetector materialises external atoms on demand from primary/boundary centres, so a
+        // bond whose two ends are external may be absent from analysis.bonds even when both atoms
+        // were made visible by first-order extension. Reapply the existing periodic bond topology
+        // to visible images and emit only missing endpoint pairs. The visible atom set is fixed
+        // before this pass, which prevents secondary bonds from recursively extending the shell.
+        if (options.showSecondaryExtendBonds && !options.moleculeExtend && options.showBonds && externallyVisible.isNotEmpty()) {
+            val zero = Int3(0, 0, 0)
+            val representativesBySite = analysis.atoms.asSequence()
+                .filter { !it.isShell && it.cellOffset == zero }
+                .groupBy { it.siteId }
+
+            fun representativeOf(atom: AtomImage): AtomImage? {
+                if (!atom.isShell && atom.cellOffset == zero) return atom
+                return representativesBySite[atom.siteId]
+                    ?.firstOrNull { representative -> isSameAtomPeriodicImage(representative, atom) }
+            }
+
+            fun imageShift(representative: AtomImage, atom: AtomImage): Int3? {
+                val dx = atom.fractionalCoordinate.x - representative.fractionalCoordinate.x
+                val dy = atom.fractionalCoordinate.y - representative.fractionalCoordinate.y
+                val dz = atom.fractionalCoordinate.z - representative.fractionalCoordinate.z
+                val rx = kotlin.math.round(dx).toInt()
+                val ry = kotlin.math.round(dy).toInt()
+                val rz = kotlin.math.round(dz).toInt()
+                if (kotlin.math.abs(dx - rx) >= 1e-4 || kotlin.math.abs(dy - ry) >= 1e-4 || kotlin.math.abs(dz - rz) >= 1e-4) return null
+                return Int3(rx, ry, rz)
+            }
+
+            fun plus(a: Int3, b: Int3) = Int3(a.x + b.x, a.y + b.y, a.z + b.z)
+            fun minus(a: Int3, b: Int3) = Int3(a.x - b.x, a.y - b.y, a.z - b.z)
+
+            data class TopologyTemplate(
+                val repA: Long,
+                val repB: Long,
+                val shiftBFromA: Int3,
+                val rule: BondRule,
+                val distance: Double,
+            )
+
+            val representativeByAtomId = HashMap<Long, AtomImage>()
+            val shiftByAtomId = HashMap<Long, Int3>()
+            for (atom in analysis.atoms) {
+                val representative = representativeOf(atom) ?: continue
+                val shift = imageShift(representative, atom) ?: continue
+                representativeByAtomId[atom.id] = representative
+                shiftByAtomId[atom.id] = shift
+            }
+
+            val templates = linkedMapOf<Triple<Long, Long, Int3>, TopologyTemplate>()
+            for (bond in analysis.bonds) {
+                val startRep = representativeByAtomId[bond.atomA] ?: continue
+                val endRep = representativeByAtomId[bond.atomB] ?: continue
+                if (startRep.id == endRep.id) continue
+                val startShift = shiftByAtomId[bond.atomA] ?: continue
+                val endShift = shiftByAtomId[bond.atomB] ?: continue
+                val template = if (startRep.id < endRep.id) {
+                    TopologyTemplate(startRep.id, endRep.id, minus(endShift, startShift), bond.rule, bond.distance)
+                } else {
+                    TopologyTemplate(endRep.id, startRep.id, minus(startShift, endShift), bond.rule, bond.distance)
+                }
+                templates.putIfAbsent(Triple(template.repA, template.repB, template.shiftBFromA), template)
+            }
+
+            val visibleByPeriodicKey = HashMap<Pair<Long, Int3>, AtomImage>()
+            val visibleByRepresentative = HashMap<Long, MutableList<AtomImage>>()
+            for (atom in analysis.atoms) {
+                if (!atomVisible(atom)) continue
+                val representative = representativeByAtomId[atom.id] ?: continue
+                val shift = shiftByAtomId[atom.id] ?: continue
+                visibleByPeriodicKey.putIfAbsent(representative.id to shift, atom)
+                visibleByRepresentative.getOrPut(representative.id) { mutableListOf() } += atom
+            }
+
+            fun displayKey(atom: AtomImage): String = groupByMemberId[atom.id]
+                ?.let { group -> "g:${group.memberAtomIds.sorted().joinToString(",")}" }
+                ?: "a:${atom.id}"
+
+            fun displayPair(a: AtomImage, b: AtomImage): Pair<String, String> {
+                val ka = displayKey(a)
+                val kb = displayKey(b)
+                return if (ka <= kb) ka to kb else kb to ka
+            }
+
+            val occupiedDisplayPairs = HashSet<Pair<String, String>>()
+            for (bond in analysis.bonds) {
+                val start = atomById[bond.atomA] ?: continue
+                val end = atomById[bond.atomB] ?: continue
+                occupiedDisplayPairs += displayPair(start, end)
+            }
+
+            var secondaryIndex = 0
+            for (template in templates.values) {
+                val imagesA = visibleByRepresentative[template.repA].orEmpty()
+                for (start in imagesA) {
+                    val startShift = shiftByAtomId[start.id] ?: continue
+                    val end = visibleByPeriodicKey[template.repB to plus(startShift, template.shiftBFromA)] ?: continue
+                    if (!start.isExternalShell && !end.isExternalShell) continue
+                    if (isSameAtomPeriodicImage(start, end)) continue
+                    if (template.rule.key in options.hiddenBondKeys) continue
+
+                    val pair = displayPair(start, end)
+                    if (pair in occupiedDisplayPairs) continue
+
+                    val startGroup = groupByMemberId[start.id]
+                    val endGroup = groupByMemberId[end.id]
+                    if (startGroup != null && endGroup != null && startGroup == endGroup) continue
+                    val rawStart = startGroup?.center ?: start.cartesianCoordinate.toVec3()
+                    val rawEnd = endGroup?.center ?: end.cartesianCoordinate.toVec3()
+                    val actualDistance = distance(start.cartesianCoordinate.toVec3(), end.cartesianCoordinate.toVec3())
+                    if (kotlin.math.abs(actualDistance - template.distance) > 1e-3) continue
+                    occupiedDisplayPairs += pair
+                    val direction = (rawEnd - rawStart).normalized()
+                    val startRadius = startGroup?.let {
+                        groupRadiusById["gathered:${it.memberAtomIds.sorted().joinToString(",")}"] ?: 0.0
+                    } ?: 0.0
+                    val endRadius = endGroup?.let {
+                        groupRadiusById["gathered:${it.memberAtomIds.sorted().joinToString(",")}"] ?: 0.0
+                    } ?: 0.0
+                    val syntheticBond = Bond(
+                        atomA = start.id,
+                        atomB = end.id,
+                        distance = actualDistance,
+                        rule = template.rule,
+                        offsetB = template.shiftBFromA,
+                    )
+                    objects += BondInstance(
+                        id = "secondary-bond:${start.id}:${end.id}:${secondaryIndex++}",
+                        bond = syntheticBond,
+                        start = rawStart + direction * startRadius,
+                        end = rawEnd - direction * endRadius,
+                        radius = options.bondRadius,
+                        startMaterial = bondMaterial(start),
+                        endMaterial = bondMaterial(end),
+                        visible = true,
+                    )
+                }
+            }
+        }
+
         // Hydrogen-bond pass (per hbond-model): hbonds are a separate channel and are no longer
         // part of analysis.bonds. Visibility and anchoring mirror the pre-separation behaviour:
         //  - moleculeExtend: show iff both endpoint atoms are visible (hbonds are intermolecular,
@@ -490,7 +642,7 @@ class CrystalSceneBuilder {
         //    external-shell hbonds stay hidden as before);
         //  - dedupe by (endKey pair, offsetB). Overlap with the normal-bond dedupe keys cannot
         //    occur: the hbond window starts at the covalent max and the keys embed atom ids.
-        // Per v0.8.x: covalent-partner map for the D–H···A angle filter — H atom id → its
+        // Per v0.7.0: covalent-partner map for the D–H···A angle filter — H atom id → its
         // covalently bonded atoms (same cut as HbondChecking's covalentPartners: bonds from
         // analysis.bonds). Built once per scene build.
         val covalentPartnersByAtom = HashMap<Long, MutableList<AtomImage>>()
@@ -539,7 +691,7 @@ class CrystalSceneBuilder {
             val dedupeKey = Triple(startKey, endKey, Triple(hbond.offsetB.x, hbond.offsetB.y, hbond.offsetB.z))
             if (!seenHbondKeys.add(dedupeKey)) return@forEachIndexed
 
-            // Per v0.8.5: anchor bonds at sphere SURFACE, not center (same as normal bonds).
+            // Per v0.7.0: anchor bonds at sphere SURFACE, not center (same as normal bonds).
             val rawStart = startGroup?.center ?: start.cartesianCoordinate.toVec3()
             val rawEnd = endGroup?.center ?: end.cartesianCoordinate.toVec3()
             val dir = (rawEnd - rawStart).normalized()
@@ -572,15 +724,16 @@ class CrystalSceneBuilder {
                     }
                 }
             }
-            // Per v0.8.x: D–H···A angle filter (display-only; the detection layer already cut at
-            // 110° during rule generation). Only hbonds whose angle EXCEEDS the threshold are
-            // shown; threshold <= 0 disables the filter; hbonds whose donor H has no covalent
-            // partner are never angle-filtered (mirrors the detection layer's "no partner →
-            // no angle check" behaviour).
+            // D–H···A display threshold. The network contains concrete periodic images, so the
+            // angle must use their actual vectors; minimum-image wrapping here would make distinct
+            // O images share a direction. Auto-detected hbonds without a D-H partner stay hidden;
+            // custom rules retain their explicit user-authored behaviour when the donor bond is absent.
             val partners = covalentPartnersByAtom[start.id].orEmpty()
-            val angleOk = options.hbondAngleThreshold <= 0.0 ||
-                hbondAngleDegrees(start, end, partners, structure.lattice.matrix)
-                    ?.let { it > options.hbondAngleThreshold } ?: true
+            val angle = hbondAngleDegrees(start, end, partners)
+            val angleOk = when {
+                angle != null -> options.hbondAngleThreshold <= 0.0 || angle > options.hbondAngleThreshold
+                else -> !hbond.isAutoDetected
+            }
             val visible = options.showBonds && hbond.ruleKey !in options.hiddenBondKeys && externalAllowed && angleOk
             objects += HbondInstance(
                 id = "hbond:${hbond.donorId}:${hbond.acceptorId}:${hbond.offsetB.x}:${hbond.offsetB.y}:${hbond.offsetB.z}:$index",
@@ -643,9 +796,17 @@ class CrystalSceneBuilder {
                         siteId = ma.siteId,
                         siteLabel = ma.label,
                         species = ma.species,
-                        fractionalCoordinate = FractionalCoordinate.ZERO,
+                        // Per 2026-08-09: 动态原子必须用真实分数坐标(不是 (0,0,0))——
+                        // 信息面板/坐标读取显示真实位置;isSameAtomPeriodicImage 的
+                        // 整数平移判定(分子归属)依赖 frac,修复前全部失败并误落
+                        // "非分子壳层 [0,ex]" 可见性分支。
+                        fractionalCoordinate = posFrac,
                         cartesianCoordinate = CartesianCoordinate(pos.x, pos.y, pos.z),
-                        occupancy = 1.0,
+                        // Per 2026-08-09: 动态原子必须继承网络原子的真实 occupancy
+                        // (MoleculeAtom 不携带)——否则共位动态原子的 gathered 切片比例
+                        // 失真(如 K3 occ0.5 + Na occ0.3 会按 1.0+1.0 归一化成 0.5/0.5,
+                        // 而 t=0 副本是 0.625/0.375 + 20% 背景,周期副本外观不一致)。
+                        occupancy = atomById[maId.toLong()]?.occupancy ?: 1.0,
                         cellOffset = Int3(0, 0, 0),
                         isShell = true,
                         isBoundaryImage = false,
@@ -658,6 +819,40 @@ class CrystalSceneBuilder {
                         radius = options.atomRadiusByElement[ma.species.symbol] ?: options.defaultAtomRadius,
                         material = atomMaterial(dyn),
                         visible = ma.siteId !in options.hiddenSiteIds && inDisplayBand,
+                    )
+                }
+            }
+
+            // Per 2026-08-09: 动态原子同样按共位分组 —— 分子映像的周期副本里,共位原子
+            // (不同 siteId 同位置,如 K3+Na 混合占位)逐 MoleculeAtom 各生成一个实心球,
+            // 在 t≠0 副本位置(无场景原子)会叠成两个纯色球,而 t=0 副本是 gathered pie,
+            // 周期副本外观不一致(用户报告"按分子拓展时 gatheredAtom 显示错误的材质")。
+            // 对动态原子做 GatheredAtomGrouper 分组并发射 GatheredAtomInstance:成员 id
+            // 为负,InstanceManager 的 gatheredByMemberId 据此跳过成员球,pie 材质一致。
+            val dynamicAtoms = dynamicAtomsByRep.values.flatten()
+            if (dynamicAtoms.size >= 2) {
+                val dynById = dynamicAtoms.associateBy { it.id }
+                for (g in GatheredAtomGrouper.group(dynamicAtoms, colorBySite)) {
+                    val maxRadius = g.memberAtomIds.mapNotNull { id ->
+                        dynById[id]?.let { options.atomRadiusByElement[it.species.symbol] ?: options.defaultAtomRadius }
+                    }.maxOrNull() ?: options.defaultAtomRadius
+                    val anyVisible = g.memberAtomIds.any { id ->
+                        objects.filterIsInstance<AtomInstance>().any { it.atom.id == id && it.visible }
+                    }
+                    val remainderMat = Material(argb = g.mixedColor, opacity = 0.25, reflective = false)
+                    // Per 2026-08-09: 动态组与场景组共用 groupRadiusById/groupCenterById ——
+                    // 分子补全键(emitMoleculeBond)与二级键据此把端点锚定到组球面,
+                    // 获得与普通球一致的 0.99*radius 键缩短观感(否则键从球心穿出 pie)。
+                    val gatheredId = "gathered:${g.memberAtomIds.sorted().joinToString(",")}"
+                    groupCenterById[gatheredId] = g.center
+                    groupRadiusById[gatheredId] = maxRadius
+                    g.memberAtomIds.forEach { dynGroupByMember[it] = g }
+                    objects += GatheredAtomInstance(
+                        id = gatheredId,
+                        gathered = g,
+                        radius = maxRadius,
+                        remainderMaterial = remainderMat,
+                        visible = anyVisible,
                     )
                 }
             }
@@ -683,16 +878,28 @@ class CrystalSceneBuilder {
                 val pair = minOf(a.id, best.id) to maxOf(a.id, best.id)
                 if (pair in emittedPairs) return
                 val bondLen = bondLengthByPair[minOf(aRepId, n) to maxOf(aRepId, n)] ?: return
-                val d = distance(aPos, best.cartesianCoordinate.toVec3())
+                val bestPos = best.cartesianCoordinate.toVec3()
+                val d = distance(aPos, bestPos)
                 // 键长验证(±20%):最近映像必须落在分子内键长附近,否则是错误映像。
                 if (d > bondLen * 1.2 || d < bondLen * 0.8) return
                 emittedPairs += pair
                 val key = listOf(a.siteId, best.siteId).sorted().joinToString("\u0000")
+                // Per 2026-08-09: gathered 端点(场景组或动态组)的分子补全键锚定到组球面,
+                // 与普通键通道/二级键一致 —— 否则键从球心穿出 pie,没有普通球
+                // "0.99*radius 缩进"的紧贴观感(InstanceManager 对 gathered 成员跳过
+                // clip,锚定必须在 builder 侧完成)。
+                val dir = (bestPos - aPos).normalized()
+                val aGroup = dynGroupByMember[a.id] ?: groupByMemberId[a.id]
+                val bGroup = dynGroupByMember[best.id] ?: groupByMemberId[best.id]
+                fun groupRadius(g: GatheredAtom?): Double =
+                    g?.let { groupRadiusById["gathered:${it.memberAtomIds.sorted().joinToString(",")}"] ?: 0.0 } ?: 0.0
+                val startPos = aPos + dir * groupRadius(aGroup)
+                val endPos = bestPos - dir * groupRadius(bGroup)
                 objects += BondInstance(
                     id = "molbond:${a.id}:${best.id}",
                     bond = Bond(a.id, best.id, d, moleculeRule, Int3(0, 0, 0)),
-                    start = aPos,
-                    end = best.cartesianCoordinate.toVec3(),
+                    start = startPos,
+                    end = endPos,
                     radius = options.bondRadius,
                     startMaterial = bondMaterial(a),
                     endMaterial = bondMaterial(best),
@@ -726,7 +933,7 @@ class CrystalSceneBuilder {
                 }
             }
 
-            // Per v0.8.x (4.2): hbond 映像补全 —— 动态原子(本块合成的显示原子,不在
+            // Per v0.7.0 (4.2): hbond 映像补全 —— 动态原子(本块合成的显示原子,不在
             // BondNetwork 中)无法被 BondDetector 生成氢键,导致"晶胞外的两个可见原子
             // 形成的氢键"不渲染。网络氢键模板的周期副本平移不改变 D–H···A 几何
             // (键长/角度均为平移不变量),故对每个模板,在"可见供体 H 球"与"可见受体
@@ -756,7 +963,7 @@ class CrystalSceneBuilder {
                     val acceptor = atomById[hbond.acceptorId] ?: return@forEach
                     val partners = covalentPartnersByAtom[donor.id].orEmpty()
                     val angleOk = options.hbondAngleThreshold <= 0.0 ||
-                        hbondAngleDegrees(donor, acceptor, partners, structure.lattice.matrix)
+                        hbondAngleDegrees(donor, acceptor, partners)
                             ?.let { it > options.hbondAngleThreshold } ?: true
                     if (!angleOk) return@forEach
                     val donorBalls = visibleBallsBySite[donor.siteId].orEmpty()
@@ -856,7 +1063,7 @@ class CrystalSceneBuilder {
         }
     }
 
-    /** Per v0.8.13: 1e-4-quantized cartesian key for exact-coincidence dedupe (boundary-image
+    /** Per v0.7.0: 1e-4-quantized cartesian key for exact-coincidence dedupe (boundary-image
      *  atoms that duplicate an in-cell atom's position). */
     private fun AtomKey(a: AtomImage): Triple<Int, Int, Int> {
         val p = a.cartesianCoordinate.toVec3()
@@ -893,34 +1100,20 @@ class CrystalSceneBuilder {
         return Material(argb = (ia.toLong() shl 24) or (ir.toLong() shl 16) or (ig.toLong() shl 8) or ib.toLong(), reflective = false)
     }
 
-    /** Per v0.8.x: shortest periodic displacement from [from] to [to], in cartesian space —
-     *  same semantics as HbondChecking.periodicDisplacement (the fractional difference wraps
-     *  into (-0.5, 0.5] before mapping back), so a donor H near the cell boundary measures
-     *  its acceptor and covalent partner across the boundary correctly. */
-    private fun periodicDisplacement(from: Vec3, to: Vec3, lattice: Mat3): Vec3 {
-        val frac = lattice.inverse() * (to - from)
-        val wrapped = Vec3(
-            frac.x - kotlin.math.round(frac.x),
-            frac.y - kotlin.math.round(frac.y),
-            frac.z - kotlin.math.round(frac.z),
-        )
-        return lattice * wrapped
-    }
-
-    /** Per v0.8.x: D–H···A angle in degrees for an hbond whose donor is [h] and acceptor is [a]
-     *  (vertex at H, evaluated at the origin — translation-invariant). Measured over the
-     *  periodic shortest displacements; the best (largest) angle across all covalent partners
-     *  [partners] is used. Returns null when [h] has no covalent partner — no angle to filter. */
-    private fun hbondAngleDegrees(h: AtomImage, a: AtomImage, partners: List<AtomImage>, lattice: Mat3): Double? {
+    /** Per v0.7.0: D–H···A angle in degrees for an hbond whose donor is [h] and acceptor is [a]
+     *  (vertex at H, evaluated at the origin — translation-invariant). The atoms are concrete
+     *  materialised images, so their actual Cartesian displacements preserve which O/H image is
+     *  being drawn. Returns null when [h] has no covalent donor partner. */
+    private fun hbondAngleDegrees(h: AtomImage, a: AtomImage, partners: List<AtomImage>): Double? {
         val hPos = h.cartesianCoordinate.toVec3()
-        val toA = periodicDisplacement(hPos, a.cartesianCoordinate.toVec3(), lattice)
+        val toA = a.cartesianCoordinate.toVec3() - hPos
         return partners.map { p ->
-            val toP = periodicDisplacement(hPos, p.cartesianCoordinate.toVec3(), lattice)
+            val toP = p.cartesianCoordinate.toVec3() - hPos
             angleDegrees(toP, Vec3(0.0, 0.0, 0.0), toA)
         }.maxOrNull()
     }
 
-    /** Per v0.8.36: true when [b] is a periodic image of the same atom as [a] — the fractional
+    /** Per v0.7.0: true when [b] is a periodic image of the same atom as [a] — the fractional
      *  difference is an integer lattice translation (within float tolerance). Used to gate
      *  same-atom self-image bonds (e.g. Ca1-Ca1 metal bonds across the CaC2 cell face) behind
      *  the rule's extend flag, while leaving different-atom image pairs (C-C dumbbells) alone. */

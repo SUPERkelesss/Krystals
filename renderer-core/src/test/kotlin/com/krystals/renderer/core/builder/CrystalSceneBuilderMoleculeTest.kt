@@ -23,6 +23,9 @@ import com.krystals.crystal.core.periodic.Int3
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.core.symmetry.SymmetryOperation
 import com.krystals.renderer.core.primitive.AtomInstance
+import com.krystals.renderer.core.primitive.BondInstance
+import com.krystals.renderer.core.primitive.GatheredAtomInstance
+import com.krystals.renderer.core.scene.GatheredAtom
 import com.krystals.renderer.core.scene.RenderScene
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -202,6 +205,32 @@ class CrystalSceneBuilderMoleculeTest {
         // 跨胞氯分子键 7-10 可见;同原子自像键 8-10 隐藏。
         assertTrue(scene.bondBetween(7, 10).visible, "cross-cell Cl2 molecule bond should be visible")
         assertFalse(scene.bondBetween(8, 10).visible, "same-atom self-image bond is not a molecule bond")
+    }
+
+    @Test
+    fun moleculeExtendIgnoresSecondaryBondPreference() {
+        val disabled = build(
+            SceneBuildOptions(
+                moleculeExtend = true,
+                molecules = molecules,
+                showSecondaryExtendBonds = false,
+            ),
+        )
+        val enabled = build(
+            SceneBuildOptions(
+                moleculeExtend = true,
+                molecules = molecules,
+                showSecondaryExtendBonds = true,
+            ),
+        )
+        assertEquals(
+            disabled.atoms.filter { it.visible }.map { it.atom.id }.toSet(),
+            enabled.atoms.filter { it.visible }.map { it.atom.id }.toSet(),
+        )
+        assertEquals(
+            disabled.bonds.filter { it.visible }.map { it.id }.toSet(),
+            enabled.bonds.filter { it.visible }.map { it.id }.toSet(),
+        )
     }
 
     @Test
@@ -597,6 +626,118 @@ class CrystalSceneBuilderMoleculeTest {
             scene.atoms.any { it.visible && distance(it.atom.cartesianCoordinate.toVec3(), Vec3(2.0, 2.0, 2.0)) < 1e-6 },
             "acceptor ball at (2,2,2.0) visible",
         )
+    }
+
+    @Test
+    fun moleculeExtendGroupsDynamicCoLocatedAtoms() {
+        // 2026-08-09 bug 修复:分子映像周期副本里的共位原子(不同 siteId 同位置,
+        // 如 K3 occ0.5 + Na occ0.3 混合占位)在 t≠0 副本位置(无场景原子)会逐
+        // MoleculeAtom 各生成一个实心球,叠成两个纯色球;而 t=0 副本是 gathered
+        // pie —— 周期副本外观不一致。修复:动态原子同样按共位分组发射
+        // GatheredAtomInstance(成员 id 为负),且 occupancy 继承网络原子真实值,
+        // 使 slices/remainder 与 t=0 副本完全一致。
+        // 场景:K-K2-K3/Na 链(键网络连通 → 单个分子),K3 与 Na 同位置 frac z=0.5。
+        val atoms = listOf(
+            AtomImage(1, "K#1", "K", Species("K"), FractionalCoordinate(0.0, 0.0, 0.0), CartesianCoordinate(0.0, 0.0, 0.0), 1.0, Int3(0, 0, 0)),
+            AtomImage(2, "K2#2", "K2", Species("K"), FractionalCoordinate(0.0, 0.0, 0.3), CartesianCoordinate(0.0, 0.0, 1.2), 0.3, Int3(0, 0, 0)),
+            AtomImage(3, "K3#3", "K3", Species("K"), FractionalCoordinate(0.0, 0.0, 0.5), CartesianCoordinate(0.0, 0.0, 2.0), 0.5, Int3(0, 0, 0)),
+            AtomImage(4, "Na#4", "Na", Species("Na"), FractionalCoordinate(0.0, 0.0, 0.5), CartesianCoordinate(0.0, 0.0, 2.0), 0.3, Int3(0, 0, 0)),
+        )
+        val pBonds = listOf(
+            bond(1, 2, "K#1", "K2#2"),
+            bond(2, 3, "K2#2", "K3#3"),
+            bond(2, 4, "K2#2", "Na#4"),
+        )
+        val mol = Molecule(
+            "chain",
+            listOf(
+                MoleculeAtom(1, "K", Species("K"), CartesianCoordinate(0.0, 0.0, 0.0), siteId = "K#1"),
+                MoleculeAtom(2, "K2", Species("K"), CartesianCoordinate(0.0, 0.0, 1.2), siteId = "K2#2"),
+                MoleculeAtom(3, "K3", Species("K"), CartesianCoordinate(0.0, 0.0, 2.0), siteId = "K3#3"),
+                MoleculeAtom(4, "Na", Species("Na"), CartesianCoordinate(0.0, 0.0, 2.0), siteId = "Na#4"),
+            ),
+            listOf(MoleculeBond(1, 2), MoleculeBond(2, 3), MoleculeBond(2, 4)),
+        )
+        val scene = build(
+            SceneBuildOptions(moleculeExtend = true, molecules = listOf(mol)),
+            pBonds, atoms,
+        )
+        val gathers = scene.objects.filterIsInstance<GatheredAtomInstance>().filter { it.visible }
+        // t 范围:x,y,z ∈ {0,1}(分子恰在原点) → 8 个映像中 1 个被场景承接:
+        // 1 个场景组 @(0,0,2.0) + 7 个动态组(K3+Na 共位对在 x/y/z 平移位置)。
+        assertEquals(8, gathers.size, "1 scene group + 7 dynamic groups (3 axes x 2 translations)")
+        val sceneG = gathers.first { it.gathered.memberAtomIds.all { id -> id > 0 } }
+        val dynGroups = gathers.filter { it.gathered.memberAtomIds.all { id -> id < 0 } }
+        assertEquals(7, dynGroups.size, "all K3+Na image copies group into pies")
+        // 每组都有 z=6.0 位置(沿 +z 的副本)。
+        assertTrue(dynGroups.any { kotlin.math.abs(it.gathered.center.z - 6.0) < 1e-6 }, "z=6.0 dynamic group exists")
+        // 动态组成员 id 为负,且与场景组切片/余量完全一致(occ 继承真实值)。
+        fun comparableSlices(g: GatheredAtom) = g.slices.map { Triple(it.siteId, it.color, it.fraction) }
+        for (dg in dynGroups) {
+            assertEquals(comparableSlices(sceneG.gathered), comparableSlices(dg.gathered), "identical pie slices (occ inherited) at ${dg.gathered.center}")
+            assertEquals(sceneG.gathered.remainderFraction, dg.gathered.remainderFraction, 1e-9, "identical remainder")
+            assertEquals(sceneG.gathered.mixedColor, dg.gathered.mixedColor, "identical mixed color")
+        }
+        assertEquals(0.2, dynGroups.first().gathered.remainderFraction, 1e-9, "K3 0.5 + Na 0.3 -> 20% remainder")
+        // 动态成员球仍发射(供 picking),位置与组中心重合。
+        val dynBalls = scene.atoms.filter { it.id.startsWith("molatom:") && it.atom.id in dynGroups.first().gathered.memberAtomIds }
+        assertEquals(2, dynBalls.size)
+        assertTrue(dynBalls.all { kotlin.math.abs(it.atom.cartesianCoordinate.z - 6.0) < 1e-6 })
+    }
+
+    @Test
+    fun moleculeExtendBondsAnchorAtDynamicGroupSurface() {
+        // 2026-08-09 bug 修复:gatheredAtom 作为分子球展开时,分子补全键(emitMoleculeBond)
+        // 必须像普通球一样锚定到组球面(组半径) —— 否则键从球心穿出 pie,视觉上没有
+        // 普通球"0.99*radius 缩进"的紧贴观感(InstanceManager 对 gathered 成员跳过 clip,
+        // 锚定必须在 builder 侧完成)。
+        // 夹具同 moleculeExtendGroupsDynamicCoLocatedAtoms:K-K2-K3/Na 链,分子恰在原点。
+        val atoms = listOf(
+            AtomImage(1, "K#1", "K", Species("K"), FractionalCoordinate(0.0, 0.0, 0.0), CartesianCoordinate(0.0, 0.0, 0.0), 1.0, Int3(0, 0, 0)),
+            AtomImage(2, "K2#2", "K2", Species("K"), FractionalCoordinate(0.0, 0.0, 0.3), CartesianCoordinate(0.0, 0.0, 1.2), 0.3, Int3(0, 0, 0)),
+            AtomImage(3, "K3#3", "K3", Species("K"), FractionalCoordinate(0.0, 0.0, 0.5), CartesianCoordinate(0.0, 0.0, 2.0), 0.5, Int3(0, 0, 0)),
+            AtomImage(4, "Na#4", "Na", Species("Na"), FractionalCoordinate(0.0, 0.0, 0.5), CartesianCoordinate(0.0, 0.0, 2.0), 0.3, Int3(0, 0, 0)),
+        )
+        val pBonds = listOf(
+            bond(1, 2, "K#1", "K2#2"),
+            bond(2, 3, "K2#2", "K3#3"),
+            bond(2, 4, "K2#2", "Na#4"),
+        )
+        val mol = Molecule(
+            "chain",
+            listOf(
+                MoleculeAtom(1, "K", Species("K"), CartesianCoordinate(0.0, 0.0, 0.0), siteId = "K#1"),
+                MoleculeAtom(2, "K2", Species("K"), CartesianCoordinate(0.0, 0.0, 1.2), siteId = "K2#2"),
+                MoleculeAtom(3, "K3", Species("K"), CartesianCoordinate(0.0, 0.0, 2.0), siteId = "K3#3"),
+                MoleculeAtom(4, "Na", Species("Na"), CartesianCoordinate(0.0, 0.0, 2.0), siteId = "Na#4"),
+            ),
+            listOf(MoleculeBond(1, 2), MoleculeBond(2, 3), MoleculeBond(2, 4)),
+        )
+        val scene = build(
+            SceneBuildOptions(moleculeExtend = true, molecules = listOf(mol)),
+            pBonds, atoms,
+        )
+        // z=6.0 的动态组(K3+Na 共位映像)。
+        val dynGroup = scene.objects.filterIsInstance<GatheredAtomInstance>()
+            .filter { it.visible && it.gathered.memberAtomIds.all { id -> id < 0 } }
+            .first { kotlin.math.abs(it.gathered.center.z - 6.0) < 1e-6 }
+        val center = dynGroup.gathered.center
+        val molBonds = scene.objects.filterIsInstance<BondInstance>().filter { it.id.startsWith("molbond:") && it.visible }
+        assertTrue(molBonds.isNotEmpty(), "molecule-completion bonds must exist")
+        // 组半径 = 成员最大原子半径 = defaultAtomRadius(0.35,测试 options 默认)。
+        val groupRadius = 0.35
+        // 组端键:恰好一端停在组球面(距组中心 = 组半径)。
+        val groupEnded = molBonds.filter {
+            kotlin.math.abs(distance(it.end, center) - groupRadius) < 1e-3 ||
+                kotlin.math.abs(distance(it.start, center) - groupRadius) < 1e-3
+        }
+        assertTrue(groupEnded.isNotEmpty(), "some molbond must terminate on the dynamic group sphere surface")
+        for (b in groupEnded) {
+            val dStart = distance(b.start, center)
+            val dEnd = distance(b.end, center)
+            val nearEnd = minOf(dStart, dEnd)
+            assertEquals(groupRadius, nearEnd, 1e-6, "group end of ${b.id} must sit on the group sphere surface")
+        }
     }
 
     @Test

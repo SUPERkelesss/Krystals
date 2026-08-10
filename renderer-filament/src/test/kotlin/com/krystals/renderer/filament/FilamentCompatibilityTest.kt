@@ -1,7 +1,9 @@
 package com.krystals.renderer.filament
 
+import com.google.android.filament.SwapChainFlags
 import com.krystals.renderer.core.style.DepthCueing
 import com.krystals.renderer.core.style.WorldLight
+import com.krystals.renderer.core.style.desaturateArgb
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -61,134 +63,156 @@ class FilamentCompatibilityTest {
         val cosPhi = cos(phi)
         assertEquals((cosPhi * cos(theta)), direction.x, 1e-9)
         assertEquals((cosPhi * sin(theta)), direction.y, 1e-9)
-        // v0.8.31: -sin(phi) restored — the v0.8.29 "+sin" flip inverted the elevation
-        // on device (user: "高度角方向反了"). v0.8.19/0.8.26 both confirmed -sin works.
-        assertEquals(-sin(phi), direction.z, 1e-9)
+        // Filament view space looks down -Z; a camera-side light is surface-to-light +Z.
+        assertEquals(sin(phi), direction.z, 1e-9)
     }
 
     @Test
-    fun `sun direction stays in camera hemisphere with travel toward scene`() {
-        // v0.8.31 direction contract (device-verified): surface-to-light at 90°
-        // elevation is -Z; the LightManager travel direction (negated) is +Z, so the
-        // sun shines from the camera's side toward the scene.
-        val surfaceToLight = viewSpaceLightDirection(0f, 90f)
-        assertEquals(0.0, surfaceToLight.x, 1e-9)
-        assertEquals(0.0, surfaceToLight.y, 1e-9)
-        assertEquals(-1.0, surfaceToLight.z, 1e-9)
+    fun `sun direction lights camera facing atom hemisphere`() {
+        // Shader and LightManager both use +Z at the camera-facing pole.
+        val surfaceToLight = viewSpaceLightDirection(0f, 89.9f)
+        assertEquals(kotlin.math.cos(Math.toRadians(89.9)), surfaceToLight.x, 1e-6)
+        assertEquals(0.0, surfaceToLight.y, 1e-6)
+        assertEquals(kotlin.math.sin(Math.toRadians(89.9)), surfaceToLight.z, 1e-6)
 
-        val travel = worldLightTravelDirection(
+        val lightManagerDirection = worldLightManagerDirection(
             azimuthDegrees = 0f,
-            elevationDegrees = 90f,
+            elevationDegrees = 89.9f,
             cameraRotation = com.krystals.crystal.core.math.Mat3.IDENTITY,
         )
-        assertEquals(0.0, travel.x, 1e-9)
-        assertEquals(0.0, travel.y, 1e-9)
-        assertEquals(1.0, travel.z, 1e-9)  // travel toward the scene (+Z view space)
+        assertEquals(-surfaceToLight.x, lightManagerDirection.x, 1e-6)
+        assertEquals(-surfaceToLight.y, lightManagerDirection.y, 1e-6)
+        assertEquals(surfaceToLight.z, lightManagerDirection.z, 1e-6)
     }
 
     @Test
-    fun `world light travel direction is opposite of surface-to-light`() {
-        // v0.8.19 regression: viewSpaceLightDirection returns surface-to-light (the
-        // direction from the surface toward the light, used by the NdotL shader term),
-        // but Filament's LightManager.setDirection wants the light TRAVEL direction
-        // (from the light toward the scene). The two differ by a sign. At identity
-        // camera the world travel direction must be the negated view direction.
-        val travel = worldLightTravelDirection(
+    fun `light manager flips screen plane but retains camera side`() {
+        val managerDirection = worldLightManagerDirection(
             azimuthDegrees = 35f,
             elevationDegrees = 60f,
             cameraRotation = com.krystals.crystal.core.math.Mat3.IDENTITY,
         )
         val surfaceToLight = viewSpaceLightDirection(35f, 60f)
-        assertEquals(-surfaceToLight.x, travel.x, 1e-9)
-        assertEquals(-surfaceToLight.y, travel.y, 1e-9)
-        assertEquals(-surfaceToLight.z, travel.z, 1e-9)
+        assertEquals(-surfaceToLight.x, managerDirection.x, 1e-9)
+        assertEquals(-surfaceToLight.y, managerDirection.y, 1e-9)
+        assertEquals(surfaceToLight.z, managerDirection.z, 1e-9)
     }
 
     @Test
-    fun `world light travel direction is camera anchored`() {
-        // The light is anchored to the camera: rotating the camera must rotate the
-        // world-space travel direction by the inverse camera rotation, so the
-        // light-to-camera relationship stays constant.
+    fun `light manager direction is camera anchored`() {
+        // Rotating the camera must rotate the manager direction by the inverse camera
+        // rotation, so the light-to-camera relationship stays constant.
         val rot = com.krystals.crystal.core.math.rotY(90.0)
-        val travel = worldLightTravelDirection(
+        val managerDirection = worldLightManagerDirection(
             azimuthDegrees = 0f,
-            elevationDegrees = 90f,
+            elevationDegrees = 89.9f,
             cameraRotation = rot,
         )
-        // surface-to-light at (az=0, el=90) = (0,0,-1) (v0.8.31 sign); travel
-        // = (0,0,+1) in view space. World = rotY(90).transposed() * (0,0,1).
-        // rotY(90) maps world->view, so view->world is rotY(-90): the c column
-        // (sin(-90),0,cos(-90)) = (-1,0,0) applied to (0,0,1) gives (-1,0,0).
-        val expected = com.krystals.crystal.core.math.rotY(-90.0) * com.krystals.crystal.core.math.Vec3(0.0, 0.0, 1.0)
-        assertEquals(expected.x, travel.x, 1e-9)
-        assertEquals(expected.y, travel.y, 1e-9)
-        assertEquals(expected.z, travel.z, 1e-9)
+        val surfaceToLight = viewSpaceLightDirection(0f, 89.9f)
+        val expected = com.krystals.crystal.core.math.rotY(-90.0) *
+            com.krystals.crystal.core.math.Vec3(-surfaceToLight.x, -surfaceToLight.y, surfaceToLight.z)
+        assertEquals(expected.x, managerDirection.x, 1e-9)
+        assertEquals(expected.y, managerDirection.y, 1e-9)
+        assertEquals(expected.z, managerDirection.z, 1e-9)
     }
 
     @Test
-    fun `default appearance light direction has negative z`() {
+    fun `default appearance light direction has positive z`() {
         val appearance = com.krystals.renderer.core.style.ViewerAppearance()
         val direction = viewSpaceLightDirection(
             appearance.lightAzimuth,
             appearance.lightElevation,
         )
-        // 默认方位 150°、高度 45°:光从屏幕左前上方来,负 Z 表示向相机方向(v0.8.31)。
-        assertEquals(-1.0, direction.z / kotlin.math.abs(direction.z), 1e-9)
+        // Default azimuth 150 degrees and elevation 30 degrees: upper-left, camera-side.
+        assertEquals(30f, appearance.lightElevation)
+        assertEquals(1.0, direction.z / kotlin.math.abs(direction.z), 1e-9)
         assertEquals(-1.0, direction.x / kotlin.math.abs(direction.x), 1e-9)
     }
 
     @Test
-    fun `light model is fifty percent ambient and fifty percent sun`() {
-        // v0.8.42: the total light splits into a constant 50% ambient term and a
-        // directional 50% sun term that carries the diffuse + specular.
-        assertEquals(0.5f, WorldLight.AMBIENT_RATIO, 0.001f)
-        assertEquals(0.5f, WorldLight.SUN_RATIO, 0.001f)
+    fun `light model keeps stable ambient above directional sun`() {
+        assertEquals(0.6f, WorldLight.AMBIENT_RATIO, 0.001f)
+        assertEquals(0.4f, WorldLight.SUN_RATIO, 0.001f)
         assertEquals(1.0f, WorldLight.AMBIENT_RATIO + WorldLight.SUN_RATIO, 0.001f)
-        assertEquals(0.5f, diffuseAmbient(), 0.001f)  // ambient share is constant
-        assertEquals(0.25f, sunShade(0.5f), 0.001f)   // 50% * intensity
-        assertEquals(0.2f, sunShade(0.4f), 0.001f)    // default intensity -> 20% sun
     }
 
     @Test
     fun `diffusion slider drives specular width without dead lower clamp`() {
-        // v0.8.14 regression: shininess was clamped at 4.0, so moving the diffusion
+        // v0.7.0 regression: shininess was clamped at 4.0, so moving the diffusion
         // slider barely changed the highlight. Shininess must respond across the range.
         val tight = specularShininess(0.35f)  // diffusion 0   -> radius 0.35
-        val wide = specularShininess(1.5f)    // diffusion 1   -> radius 1.5
+        val wide = specularShininess(2.0f)    // diffusion 1   -> radius 2.0
         assertTrue(tight > wide, "smaller radius must give tighter highlight: $tight vs $wide")
-        assertTrue(wide in 1.3f..2.0f, "wide highlight must stay near 1.5 floor, got $wide")
-        assertEquals(2.14f, specularShininess(0.925f), 0.01f) // default diffusion 0.5 -> 2/(0.935)
+        assertTrue(wide in 0.8f..1.1f, "wide highlight must stay near the broad-light floor, got $wide")
+        assertEquals(1.69f, specularShininess(1.175f), 0.01f) // default diffusion 0.5 -> 2/(1.185)
     }
 
     @Test
-    fun `glass atom uses mirror specular only without frosted diffuse`() {
-        // v0.8.17: the frosted (diffuse) share is fully removed — atoms are lit by the
-        // mirror highlight alone on a faint ambient base, so they never wash out.
-        assertEquals(0.0f, atomDiffuseWeight(), 0.001f, "frosted diffuse must be gone")
-        assertEquals(1.0f, atomSpecularBlend(), 0.001f) // highlight blends to full white
+    fun `atom pbr configuration matches ceramic spec`() {
+        // Glazed ceramic keeps a compact highlight and a clear silhouette reflection.
+        assertEquals(0.0f, AtomPbr.METALLIC, 0.001f)
+        assertEquals(0.44f, AtomPbr.ROUGHNESS, 0.001f)
+        assertEquals(0.45f, AtomPbr.REFLECTANCE, 0.001f)
+        assertEquals(1.0f, AtomPbr.CLEAR_COAT, 0.001f)
+        assertEquals(0.18f, AtomPbr.CLEAR_COAT_ROUGHNESS, 0.001f)
+        assertEquals(0.95f, AtomPbr.SATURATION_FACTOR, 0.001f)
     }
 
     @Test
     fun `world light intensity stays below overexposure threshold`() {
-        // v0.8.21: with post-processing disabled (no tone mapping), 150k lux clipped the
-        // PBR highlight to pure white and its arc edge read as a "bright edge" on atoms.
-        // The mapping must stay strong but non-clipping.
-        // v0.8.30: base raised 30k -> 90k to undo the dimming from the 60/40 split;
-        // the sun light only receives 40% of it, so the highlight stays well under clip.
-        assertEquals(36_000f, worldLightIntensityLux(0.4f), 1f)   // default intensity
-        assertEquals(90_000f, worldLightIntensityLux(1.0f), 1f)   // slider max
-        assertEquals(1f, worldLightIntensityLux(0f), 1f)           // floor
+        // With post-processing disabled (no tone mapping), noon-sun lux levels clip the
+        // PBR highlight to pure white — at 90° elevation the camera-facing sun lights
+        // the whole visible hemisphere and the atom goes fully white. The lux base is
+        // sized so the sun share (50%) stays below clipping across the slider range.
+        assertEquals(0.4f, worldLightIntensityLux(0.4f), 0.001f)
+        assertEquals(1f, worldLightIntensityLux(1.0f), 0.001f)
+        assertEquals(0f, worldLightIntensityLux(0f), 0.001f)
         assertTrue(worldLightIntensityLux(1.0f) < 100_000f, "must not approach noon-sun levels")
+        // Bonds are intentionally subordinate to same-colour atoms.
+        assertEquals(0.85f, BOND_BRIGHTNESS, 0.001f)
+        assertEquals(1.0f, MESH_BRIGHTNESS, 0.001f)
+        assertEquals(1f, DIRECTIONAL_LIGHT_LUX_BASE, 0.001f)
+        assertEquals(28_000f, AMBIENT_LIGHT_LUX, 1f)
+        assertEquals(28_000f, ambientLightIntensityLux(), 1f)
     }
 
     @Test
-    fun `atom pbr configuration matches spec`() {
-        // v0.8.33: atoms have no clear coat — plain dielectric (diffuse + basic
-        // Fresnel reflectance) lit by the 60% ambient / 40% sun scene light.
-        assertEquals(0.0f, AtomPbr.METALLIC, 0.001f)
-        assertEquals(0.32f, AtomPbr.ROUGHNESS, 0.001f)
-        assertEquals(0.56f, AtomPbr.REFLECTANCE, 0.001f)
-        assertEquals(0.95f, AtomPbr.SATURATION_FACTOR, 0.001f)
+    fun `atom roughness follows diffusion slider`() {
+        assertEquals(0.28f, atomRoughness(0f), 0.001f)
+        assertEquals(AtomPbr.ROUGHNESS, atomRoughness(0.5f), 0.001f)
+        assertEquals(0.60f, atomRoughness(1f), 0.001f)
+        assertEquals(0.456f, atomRoughness(0.55f), 0.001f)
+    }
+
+    @Test
+    fun `material light uses front facing negative z convention`() {
+        val uiDirection = viewSpaceLightDirection(150f, 30f)
+        val materialDirection = materialLightDirection(150f, 30f)
+        assertEquals(uiDirection.x, materialDirection.x, 1e-9)
+        assertEquals(uiDirection.y, materialDirection.y, 1e-9)
+        assertEquals(-uiDirection.z, materialDirection.z, 1e-9)
+    }
+
+    @Test
+    fun `ambient occlusion is fixed at sixty percent`() {
+        assertEquals(0.60f, FIXED_AMBIENT_OCCLUSION_INTENSITY, 0.001f)
+    }
+
+    @Test
+    fun `hand lit brightness keeps bonds below mesh brightness`() {
+        assertEquals(BOND_BRIGHTNESS, handLitBrightness(MaterialKind.BOND_NORMAL), 0.001f)
+        assertEquals(BOND_BRIGHTNESS, handLitBrightness(MaterialKind.BOND_NORMAL_TRANSPARENT), 0.001f)
+        assertEquals(BOND_BRIGHTNESS, handLitBrightness(MaterialKind.BOND_HYDROGEN), 0.001f)
+        assertEquals(MESH_BRIGHTNESS, handLitBrightness(MaterialKind.MESH_POLYHEDRON), 0.001f)
+    }
+
+    @Test
+    fun `export keeps readable and sRGB flags`() {
+        assertEquals(SwapChainFlags.CONFIG_READABLE, exportSwapChainFlags(false))
+        assertEquals(
+            SwapChainFlags.CONFIG_READABLE or SwapChainFlags.CONFIG_SRGB_COLORSPACE,
+            exportSwapChainFlags(true),
+        )
     }
 
     @Test
@@ -228,9 +252,9 @@ class FilamentCompatibilityTest {
         assertEquals(1080 to 2200, exportRenderSize(1080, 2200, high = false))
         // LOW floors at 512.
         assertEquals(512 to 512, exportRenderSize(300, 300, high = false))
-        // HIGH: 2x supersample fitted to the 2560 long edge without aspect distortion.
-        assertEquals(1256 to 2560, exportRenderSize(1080, 2200, high = true))
+        // HIGH: 4x supersample fitted to the 4096 long edge without aspect distortion.
+        assertEquals(2010 to 4096, exportRenderSize(1080, 2200, high = true))
         // Square viewports retain their aspect ratio at the cap.
-        assertEquals(2560 to 2560, exportRenderSize(4096, 4096, high = true))
+        assertEquals(4096 to 4096, exportRenderSize(4096, 4096, high = true))
     }
 }

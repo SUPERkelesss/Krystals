@@ -1,7 +1,9 @@
 material {
-    name : KrystalsUnlitOpaque,
+    name : KrystalsBondNormalTransparent,
     shadingModel : unlit,
-    blending : opaque,
+    blending : transparent,
+    doubleSided : true,
+    transparency : twoPassesOneSide,
     requires : [ tangents ],
     variables : [ customNormal ],
     parameters : [
@@ -12,7 +14,9 @@ material {
         { type : float, name : reflectionEnabled },
         { type : float3, name : lightDirection },
         { type : float, name : highlightIntensity },
-        { type : float, name : highlightRadius }
+        { type : float, name : highlightRadius },
+        { type : float, name : sunShare },
+        { type : float, name : brightness }
     ]
 }
 fragment {
@@ -21,28 +25,24 @@ fragment {
         vec3 worldN = normalize(variable_customNormal.xyz);
         vec3 viewN = normalize(mat3(getViewFromWorldMatrix()) * worldN);
         // Edge (silhouette) darkening: view-space normals near the screen plane darken,
-        // giving spheres and cylinders stronger volume.
+        // giving cylinders stronger volume.
         float edge = clamp(length(viewN.xy), 0.0, 1.0);
         float edgeShade = 1.0 - materialParams.reflectionEnabled * edge * 0.30;
         vec3 L = normalize(materialParams.lightDirection);
         float NdotL = max(dot(viewN, L), 0.0);
-        // v0.8.42: light model = ambient 50% + sun 50%. The ambient term is constant;
-        // the sun term carries the directional diffuse (NdotL) scaled by sun strength
-        // (highlightIntensity = former reflection intensity).
-        float ambientShade = 0.5;
-        float sunShade = 0.5 * materialParams.highlightIntensity * NdotL;
-        float diffuseShade = ambientShade + sunShade;
+        // Scene light model: (1 - sunShare) constant ambient + sunShare directional sun.
+        float sunShare = materialParams.sunShare;
+        float diffuseShade = ((1.0 - sunShare) + sunShare * materialParams.highlightIntensity * NdotL) * materialParams.brightness;
         vec4 color = vec4(materialParams.baseColor.rgb * diffuseShade * edgeShade, materialParams.baseColor.a);
-        // Real Blinn-Phong specular: half-vector NdotH makes the highlight follow the
+        // Blinn-Phong specular: half-vector NdotH makes the highlight follow the
         // view (orthographic camera view vector V = (0,0,1)).
-        vec3 V = vec3(0.0, 0.0, 1.0);
+        vec3 V = vec3(0.0, 0.0, -1.0);
         vec3 H = normalize(L + V);
         float NdotH = max(dot(viewN, H), 0.0);
-        // v0.8.29: sun angular radius (highlightRadius, former reflection diffusion)
-        // drives the highlight width; specular strength scales with the sun 50% share.
         float shininess = max(2.0 / (materialParams.highlightRadius + 0.01), 1.5);
-        float specular = materialParams.reflectionEnabled * 0.5 * materialParams.highlightIntensity * pow(NdotH, shininess);
-        color.rgb = mix(color.rgb, vec3(1.0), specular * 0.75);
+        float specular = materialParams.reflectionEnabled * sunShare * materialParams.highlightIntensity * pow(NdotH, shininess);
+        color.rgb = mix(color.rgb, vec3(1.0), specular * 0.12);
+        // Depth cueing: fade toward the background color with view-space depth.
         float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
         float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
@@ -52,6 +52,8 @@ fragment {
 }
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
+        // The mesh carries normals encoded in the TANGENTS quaternion (no NORMAL
+        // attribute is uploaded); decode the smooth normal here.
         vec4 q = mesh_tangents;
         vec3 n = vec3(
             2.0 * (q.x * q.z + q.w * q.y),

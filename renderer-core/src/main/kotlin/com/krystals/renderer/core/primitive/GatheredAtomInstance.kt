@@ -5,7 +5,7 @@ import com.krystals.renderer.core.scene.GatheredAtom
 import com.krystals.renderer.core.scene.RenderObject
 
 /**
- * Per v0.8.2: a single pie-chart sphere rendered in place of multiple atoms whose expanded
+ * Per v0.7.0: a single pie-chart sphere rendered in place of multiple atoms whose expanded
  * cartesian positions coincide (substitutional / mixed-occupancy disorder).
  *
  * Member atom [AtomInstance]s are NOT emitted when a group exists — this instance

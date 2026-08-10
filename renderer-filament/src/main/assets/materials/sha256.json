@@ -1,13 +1,10 @@
-{
-    "atom_opaque.filamat":  "3bdaec3d8380e9f8f7f57fe363e69173eeac9f9e2aacde506eeb33a26fe1c653",
-    "atom_transparent.filamat":  "34a971b7ce430fbe7e8e608d474ac6de08951590bcba6bc81782e41d61315498",
-    "opaque.filamat":  "41bdd1241ed50765a11d042d323b75d45b973806adad50ee80a4b88f35595a09",
-    "transparent.filamat":  "4e0bafe8942493f070e4437d9086158375878c66c15a6da5baec43ed5010ab28",
-    "polyhedron.filamat":  "ec25320cbd0115d6842f3d19f07a0caee1dd0e69f2dfdf99c22d7b8293475bee",
-    "unlit_opaque.filamat":  "f685ff472c9bf85eb5aefe01beefa9becd803a22bc1cc45e0cc7e392c297cfbe",
-    "unlit_transparent.filamat":  "bebd942ce68a7ae2693680a60938e90c4b9e318d88ad18c09c672deaa9cda92f",
-    "unlit_polyhedron.filamat":  "92358607c18ea034e1fc6e92ef866a7a8e7338278cdbe693b62755efdddf36a2",
-    "highlight.filamat":  "e9486e62ecab0661198c0765fe55b7318a47133e2a891785b425417d698023e3",
-    "depth_cueing.filamat":  "37e43341e0a7ebabc1335176c92d74d3175a73e98eaa7669f4460b9aa089feab",
-    "picking.filamat":  "d4b81d4bd51736b4657c13bcf3d38d8b0dba8007292cada0f090ec22a484b129"
-}
+{
+  "atom_solid.filamat": "62095e53b03d6e0738a4459f858116bb690c1f590174d59a656b4ff770fab0d9",
+  "atom_occupancy.filamat": "f2dfe1a64ea2d9a56d8ad68c1b773465c686d117b053a65d03f26e343eea657a",
+  "atom_pie.filamat": "a3190128c6c7992dfba643ad633fe81665d071c9da1b08e523eaf8c51ed160f7",
+  "atom_transparent.filamat": "13b0acb626c41ffc8a80253dbc0b78ceed74dd9ca22f859113f2ba35daebe889",
+  "bond_normal.filamat": "659ab122ddbd314bf31415ed2e2b806b24a13c6be27bc9e6bb5d8c21a187ca33",
+  "bond_normal_transparent.filamat": "6ee895f102e0462f2cd99bbd7f13a5f51af2581b7cebe4fbc7929cab499f6d1b",
+  "bond_hydrogen.filamat": "b99d83816541d50eef2dbb08e8fbd1945ac452bb186aec6c40b10a20005a4744",
+  "mesh_polyhedron.filamat": "cf191025a3795adf970aee62f2534143e6a08a80f9a837e56a6da3c59de591f7"
+}

@@ -22,9 +22,10 @@ import kotlin.test.assertEquals
 
 /**
  * Per hbond-angle-threshold: the scene builder filters hbonds by the D–H···A angle
- * (vertex at H, measured over periodic shortest displacements). Only hbonds whose angle
+ * (vertex at H, measured from the concrete rendered atom images). Only hbonds whose angle
  * EXCEEDS `hbondAngleThreshold` are visible; threshold <= 0 disables the filter; hbonds
- * whose donor H has no covalent partner are never angle-filtered.
+ * whose donor H has no covalent partner retain custom-rule behaviour; auto-detected contacts
+ * require a D-H donor.
  *
  * Geometry (10 Å cubic cell, P1):
  *   H (0.4, 0.5, 0.5)   — donor
@@ -136,13 +137,49 @@ class HbondAngleThresholdTest {
     }
 
     @Test
-    fun hbondWithoutCovalentPartnerIsNeverAngleFiltered() {
+    fun customHbondWithoutCovalentPartnerRemainsVisible() {
         val net = makeNetwork(
             allAtoms,
             listOf(hbond(1, 5, "C1", 1.41)),
             emptyList(),
         )
         val visible = visibleHbondIds(net, SceneBuildOptions(hbondAngleThreshold = 150.0))
-        assertEquals(setOf(5L), visible, "no covalent partner: hbond shown at any threshold, got $visible")
+        assertEquals(setOf(5L), visible, "manual hbond rules without donor data remain visible, got $visible")
+    }
+
+    @Test
+    fun concreteAcceptorImageIsNotWrappedToTheOppositeDirection() {
+        // 4 A cell. D at x=2, H at x=3, so D-H points toward -x. The selected acceptor image
+        // is at x=0.8: its ACTUAL H...A vector is -2.2 A and D-H...A = 0 degrees (reject).
+        // Minimum-image wrapping changes it to +1.8 A and incorrectly reports 180 degrees.
+        val smallCell = structure.copy(lattice = Lattice(4.0, 4.0, 4.0, 90.0, 90.0, 90.0))
+        fun image(id: Long, siteId: String, x: Double, element: String) = AtomImage(
+            id = id,
+            siteId = siteId,
+            siteLabel = siteId,
+            species = Species(element),
+            fractionalCoordinate = FractionalCoordinate(x / 4.0, 0.5, 0.5),
+            cartesianCoordinate = CartesianCoordinate(x, 2.0, 2.0),
+            occupancy = 1.0,
+            cellOffset = Int3(0, 0, 0),
+        )
+        val atoms = listOf(
+            image(1, "H1", 3.0, "H"),
+            image(2, "D1", 2.0, "O"),
+            image(3, "A1", 0.8, "O"),
+        )
+        val covalent = Bond(1, 2, 1.0, BondRule("H1", "D1", 0.1, 1.5, BondRuleSource.AUTO))
+        val net = BondNetwork(
+            atoms = atoms,
+            bonds = listOf(covalent),
+            hbonds = listOf(hbond(1, 3, "A1", 2.2)),
+            structure = smallCell,
+            expansion = Expansion(),
+        )
+
+        val visible = CrystalSceneBuilder().build(
+            smallCell, net, SceneBuildOptions(hbondAngleThreshold = 110.0),
+        ).hbonds.filter { it.visible }
+        assertEquals(0, visible.size, "the wrong periodic O image must fail the D-H...A angle")
     }
 }

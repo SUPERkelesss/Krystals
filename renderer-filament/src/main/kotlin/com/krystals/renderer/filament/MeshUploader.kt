@@ -16,9 +16,9 @@ import kotlin.math.sqrt
 enum class SharedGeometry { SPHERE_HIGH, SPHERE_MEDIUM, SPHERE_LOW, CYLINDER, LINE, AXIS, MEASUREMENT }
 
 enum class SphereLod(val rings: Int, val sectors: Int) {
-    HIGH(16, 24),
-    MEDIUM(10, 16),
-    LOW(6, 12),
+    HIGH(32, 48),
+    MEDIUM(16, 24),
+    LOW(8, 16),
 }
 
 data class MeshBounds(
@@ -175,12 +175,12 @@ class MeshUploader(private val engine: Engine) : AutoCloseable {
     }
 
     /**
-     * Per v0.8.9: generate a sector of a unit-radius disk in the XY plane.
+     * Per v0.7.0: generate a sector of a unit-radius disk in the XY plane.
      * [startAngleDeg] + [sweepAngleDeg] define the arc in degrees measured
      * clockwise from +Y (12-o'clock). Center vertex at origin, arc vertices
      * at unit radius.
      *
-     * Per v0.8.10: sphere-impostor normals — each vertex normal =
+     * Per v0.7.0: sphere-impostor normals — each vertex normal =
      * normalize(x, y, sqrt(1-x^2-y^2)) so the lit material shades the flat
      * disk like a sphere. arcSteps defaults to 32 for smooth arcs.
      */
@@ -243,7 +243,7 @@ class MeshUploader(private val engine: Engine) : AutoCloseable {
         return MeshData(positions.toFloatArray(), normals.toFloatArray(), indices.toIntArray())
     }
 
-    private fun cylinder(sectors: Int = 24): MeshData {
+    private fun cylinder(sectors: Int = 48): MeshData {
         val positions = ArrayList<Float>()
         val normals = ArrayList<Float>()
         for (side in 0..sectors) {

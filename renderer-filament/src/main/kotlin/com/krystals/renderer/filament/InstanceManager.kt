@@ -63,9 +63,9 @@ class InstanceManager {
         val sphereGeometry = sphereGeometryForVisibleAtoms(scene.atoms.count(AtomInstance::visible))
         val atomsByImageId = scene.atoms.associateBy { it.atom.id }
 
-        // Per v0.8.8: gather co-located mixed-occupancy atoms — per-slice sector meshes
+        // Per v0.7.0: gather co-located mixed-occupancy atoms — per-slice sector meshes
         // are emitted by GpuInstanceManager. InstanceManager only tracks membership.
-        // Per v0.8.14: index members of ALL groups (visible or not). A group hidden because it
+        // Per v0.7.0: index members of ALL groups (visible or not). A group hidden because it
         // is a pure boundary-image bundle (e.g. the +z images of (0,0,1)) must still suppress
         // its member atoms — otherwise they fall back to individual sphere rendering and the
         // position shows a plain single-site ball instead of nothing.
@@ -87,7 +87,7 @@ class InstanceManager {
         scene.bonds.asSequence().filter(BondInstance::visible).forEach { bond ->
             val startAtom = atomsByImageId[bond.bond.atomA]
             val endAtom = atomsByImageId[bond.bond.atomB]
-            // Per v0.8.8: skip radius clip for gathered group endpoints — the scene
+            // Per v0.7.0: skip radius clip for gathered group endpoints — the scene
             // builder already anchored the bond at the sphere surface.
             val startRadius = if (startAtom?.atom?.id in gatheredByMemberId) 0.0
                 else startAtom?.takeIf { it.visible }?.radius
@@ -158,10 +158,10 @@ class InstanceManager {
         val length = delta.length()
         if (length < 1e-12) return start to end
         val dir = delta / length
-        // Extend the cylinder 2% into the atom sphere so the joint is tight instead of
+        // Extend the cylinder 1% into the atom sphere so the joint is tight instead of
         // leaving a visible gap at the surface.
-        val startOffset = startRadius?.let { minOf(it * 0.98, length * 0.5) } ?: 0.0
-        val endOffset = endRadius?.let { minOf(it * 0.98, length * 0.5) } ?: 0.0
+        val startOffset = startRadius?.let { minOf(it * 0.99, length * 0.5) } ?: 0.0
+        val endOffset = endRadius?.let { minOf(it * 0.99, length * 0.5) } ?: 0.0
         return (start + dir * startOffset) to (end - dir * endOffset)
     }
 

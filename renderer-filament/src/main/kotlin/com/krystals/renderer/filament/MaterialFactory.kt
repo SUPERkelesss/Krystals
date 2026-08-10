@@ -8,26 +8,48 @@ import com.google.android.filament.MaterialInstance
 import com.krystals.renderer.core.style.RenderEnvironment
 import com.krystals.renderer.core.style.DepthCueing
 import com.krystals.renderer.core.style.WorldLight
+import com.krystals.renderer.core.style.desaturateArgb
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+/**
+ * Material tree — one Filament material per semantic kind:
+ *
+ * ├── Atom
+ * │   ├── Solid        lit PBR ceramic, fully occupied opaque atoms
+ * │   ├── Occupancy    lit PBR ceramic, partial-occupancy atoms: occupied share opaque,
+ * │   │                missing share a solid 30%-color/70%-background wedge (opaque pass)
+ * │   ├── Pie          lit PBR ceramic, gathered (mixed-occupancy) atoms: per-element
+ * │   │                sector colors from twelve o'clock clockwise + missing wedge
+ * │   └── Transparent  lit PBR ceramic + user atom opacity (translucent pass)
+ * ├── Bond
+ * │   ├── Normal       hand-lit (diffuse + Blinn-Phong), opaque / transparent variants
+ * │   └── Hydrogen     hand-lit diffuse only, translucent
+ * └── Mesh
+ *     └── Polyhedron   hand-lit, translucent, two-sided
+ *
+ * Cell frame / axis / measurement / polyhedron outline reuse the Bond materials:
+ * with reflective=false their shader degrades to plain diffuse, matching how they
+ * rendered before the tree consolidation.
+ */
 enum class MaterialKind(val assetName: String) {
-    ATOM_OPAQUE("materials/atom_opaque.filamat"),
+    // ── Atom ─────────────────────────────────────────────────────────────
+    ATOM_SOLID("materials/atom_solid.filamat"),
+    ATOM_OCCUPANCY("materials/atom_occupancy.filamat"),
+    ATOM_PIE("materials/atom_pie.filamat"),
     ATOM_TRANSPARENT("materials/atom_transparent.filamat"),
-    OPAQUE("materials/opaque.filamat"),
-    TRANSPARENT("materials/transparent.filamat"),
-    POLYHEDRON("materials/polyhedron.filamat"),
-    UNLIT_OPAQUE("materials/unlit_opaque.filamat"),
-    UNLIT_TRANSPARENT("materials/unlit_transparent.filamat"),
-    UNLIT_POLYHEDRON("materials/unlit_polyhedron.filamat"),
-    HIGHLIGHT("materials/highlight.filamat"),
-    DEPTH_CUEING("materials/depth_cueing.filamat"),
-    PICKING("materials/picking.filamat"),
+    // ── Bond ─────────────────────────────────────────────────────────────
+    BOND_NORMAL("materials/bond_normal.filamat"),
+    BOND_NORMAL_TRANSPARENT("materials/bond_normal_transparent.filamat"),
+    BOND_HYDROGEN("materials/bond_hydrogen.filamat"),
+    // ── Mesh ─────────────────────────────────────────────────────────────
+    MESH_POLYHEDRON("materials/mesh_polyhedron.filamat"),
 }
 
-/** True for the two atom materials (lit PBR since v0.8.18). */
+/** True for the four atom materials (lit PBR ceramic). */
 internal val MaterialKind.isAtom: Boolean
-    get() = this == MaterialKind.ATOM_OPAQUE || this == MaterialKind.ATOM_TRANSPARENT
+    get() = this == MaterialKind.ATOM_SOLID || this == MaterialKind.ATOM_OCCUPANCY ||
+        this == MaterialKind.ATOM_PIE || this == MaterialKind.ATOM_TRANSPARENT
 
 /** Loads fixed-version filamat payloads and owns all Material / MaterialInstance objects. */
 class MaterialFactory(
@@ -53,7 +75,7 @@ class MaterialFactory(
         instanceCache[kind to key]?.let { return it }
         val material = materials[kind] ?: load(kind)?.also { materials[kind] = it } ?: return null
         return material.createInstance().also { instance ->
-            // v0.8.18: atom base color is the CPK color desaturated by 5% (AtomPbr).
+            // Atom base color is the CPK color desaturated by 5% (AtomPbr).
             val argb = if (kind.isAtom) desaturateArgb(key.argb, AtomPbr.SATURATION_FACTOR) else key.argb
             val alpha = (argb ushr 24 and 0xFF).toFloat() / 255f * Double.fromBits(key.opacityBits).toFloat()
             val red = (argb ushr 16 and 0xFF).toFloat() / 255f
@@ -62,17 +84,38 @@ class MaterialFactory(
             runCatching { instance.setParameter("baseColor", Colors.RgbaType.SRGB, red, green, blue, alpha) }
             runCatching { instance.setParameter("reflectionEnabled", if (key.reflective) 1f else 0f) }
             runCatching { instance.setParameter("occupancy", Double.fromBits(key.occupancyBits).toFloat()) }
+            // Gathered pie: sector colors + cumulative end angles, twelve o'clock clockwise.
+            if (kind == MaterialKind.ATOM_PIE && key.slices.isNotEmpty()) {
+                val segments = FloatArray(32) // 8 × float4 (rgb + cumulative fraction)
+                var cum = 0f
+                key.slices.forEachIndexed { i, enc ->
+                    if (i >= 8) return@forEachIndexed
+                    val argb = enc ushr 16
+                    val frac = (enc and 0xFFFF).toFloat() / 65535f
+                    cum += frac
+                    segments[i * 4] = ((argb ushr 16) and 0xFF).toFloat() / 255f
+                    segments[i * 4 + 1] = ((argb ushr 8) and 0xFF).toFloat() / 255f
+                    segments[i * 4 + 2] = (argb and 0xFF).toFloat() / 255f
+                    segments[i * 4 + 3] = cum
+                }
+                // Filament array parameters: the [size] suffix belongs to the TYPE in
+                // the .mat declaration (`float4[8]`), not the name — declaring
+                // `name : segments[8]` bakes the literal "segments[8] " (with a stray
+                // space) as the uniform name and every setParameter misses silently.
+                runCatching { instance.setParameter("segments", MaterialInstance.FloatElement.FLOAT4, segments, 0, segments.size / 4) }
+            }
             instances += instance
             instanceCache[kind to key] = instance
-            applyEnvironment(instance, key, lastDepthState ?: DepthState(environment, 0f, 0f))
+            applyEnvironment(instance, kind, key, lastDepthState ?: DepthState(environment, 0f, 0f))
         }
     }
 
     fun updateDepthCueing(instance: MaterialInstance, environment: RenderEnvironment, near: Float, far: Float) {
-        applyEnvironment(instance, instanceCache.entries.firstOrNull { it.value === instance }?.key?.second ?: return, DepthState(environment, near, far))
+        val cached = instanceCache.entries.firstOrNull { it.value === instance } ?: return
+        applyEnvironment(instance, cached.key.first, cached.key.second, DepthState(environment, near, far))
     }
 
-    private fun applyEnvironment(instance: MaterialInstance, key: MaterialKey, state: DepthState) {
+    private fun applyEnvironment(instance: MaterialInstance, kind: MaterialKind, key: MaterialKey, state: DepthState) {
         val environment = state.environment
         val cue = environment.depthCueing
         val argb = environment.backgroundArgb
@@ -82,7 +125,7 @@ class MaterialFactory(
         runCatching { instance.setParameter("depthCueEnabled", if (cue.enabled) 1f else 0f) }
         // The light is anchored to the camera (view space): rotating the crystal never
         // changes the light-to-camera relationship, so the direction is camera-independent.
-        val direction = viewSpaceLightDirection(light.azimuthDegrees, light.elevationDegrees)
+        val direction = materialLightDirection(light.azimuthDegrees, light.elevationDegrees)
         runCatching {
             instance.setParameter(
                 "lightDirection",
@@ -92,7 +135,20 @@ class MaterialFactory(
             )
         }
         runCatching { instance.setParameter("highlightIntensity", light.intensity) }
-        runCatching { instance.setParameter("highlightRadius", 0.35f + 1.15f * light.diffusion) }
+            runCatching { instance.setParameter("highlightRadius", 0.35f + 1.65f * light.diffusion) }
+        // The diffusion slider widens the highlight on every instance class: hand-lit
+        // shaders (bond/mesh) via highlightRadius → shininess, lit atom materials via
+        // PBR roughness. Both are driven by the same WorldLight.diffusion value.
+        if (kind.isAtom) {
+            runCatching { instance.setParameter("roughness", atomRoughness(light.diffusion)) }
+        }
+        // Bonds stay subordinate to same-colour atoms. Polyhedra retain their existing
+        // brightness so this hierarchy change does not alter unrelated mesh styling.
+        runCatching { instance.setParameter("brightness", handLitBrightness(kind)) }
+        // Sun/ambient split of the hand-lit shaders, injected from the same WorldLight
+        // constants that drive the scene's directional light and IndirectLight — atom,
+        // bond and mesh instances always follow one light model.
+        runCatching { instance.setParameter("sunShare", WorldLight.SUN_RATIO) }
         runCatching {
             instance.setParameter(
                 "backgroundColor",
@@ -108,7 +164,19 @@ class MaterialFactory(
         val state = DepthState(environment, near, far)
         if (state == lastDepthState) return
         lastDepthState = state
-        instanceCache.forEach { (cacheKey, instance) -> applyEnvironment(instance, cacheKey.second, state) }
+        instanceCache.forEach { (cacheKey, instance) -> applyEnvironment(instance, cacheKey.first, cacheKey.second, state) }
+    }
+
+    /** Destroys cached instances that are no longer referenced by any live renderable. */
+    fun retainInstances(usedKeys: Set<Pair<MaterialKind, MaterialKey>>) {
+        val iterator = instanceCache.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.key in usedKeys) continue
+            engine.destroyMaterialInstance(entry.value)
+            instances.remove(entry.value)
+            iterator.remove()
+        }
     }
 
     private fun load(kind: MaterialKind): Material? = runCatching {
@@ -119,8 +187,6 @@ class MaterialFactory(
 
     override fun close() {
         instances.asReversed().forEach(engine::destroyMaterialInstance)
-        // Per v0.8.1: destroyMaterial does not mutate the materials map — forward iteration avoids
-        // the toList() snapshot (reverse order within a shutdown pass is irrelevant).
         materials.values.forEach(engine::destroyMaterial)
         instances.clear()
         instanceCache.clear()
@@ -135,7 +201,7 @@ private data class DepthState(
     val far: Float,
 )
 
-/** Maps Legacy's normalized visible-depth scale (+3 near, -3 far) to Filament view-space Z. */
+/** Maps the normalized visible-depth scale (+3 near, -3 far) to Filament view-space Z. */
 internal fun depthCueViewRange(cue: DepthCueing, visibleNear: Float, visibleFar: Float): Pair<Float, Float> {
     val span = (visibleNear - visibleFar).coerceAtLeast(1e-6f)
     val center = (visibleNear + visibleFar) * 0.5f
@@ -150,157 +216,120 @@ internal fun depthCueViewRange(cue: DepthCueing, visibleNear: Float, visibleFar:
  * The sun is anchored to the camera: no matter how the crystal is rotated, the
  * sun-to-camera relationship stays constant, so [cameraRotation] must NOT be applied.
  *
- * v0.8.31 sign: Z = -sin(phi) (restored from v0.8.26). The v0.8.29 "+sin(phi)" flip
- * inverted the elevation direction on device (user: "高度角方向反了"). The working
- * chain is the v0.8.19/0.8.26 one: -sin(phi) surface-to-light, negated again in
- * worldLightTravelDirection, ends at +Z for 90° elevation — the sun's travel direction
- * pointing at the scene from the camera's hemisphere.
+ * Sign convention: Filament view space looks down -Z, so a camera-side light has
+ * surface-to-light +Z. This same vector also feeds the device-calibrated LightManager.
  */
 internal fun viewSpaceLightDirection(
     azimuthDegrees: Float,
     elevationDegrees: Float,
 ): com.krystals.crystal.core.math.Vec3 {
     val theta = Math.toRadians(azimuthDegrees.toDouble())
-    val phi = Math.toRadians(elevationDegrees.coerceIn(0f, 90f).toDouble())
+    val phi = Math.toRadians(elevationDegrees.coerceIn(0f, 89.9f).toDouble())
     val cosPhi = kotlin.math.cos(phi)
-    // Surface-to-light in view space: 0° elevation = horizon, 90° = toward the camera.
+    // Filament view space looks down -Z, so a camera-side light is surface-to-light +Z.
     return com.krystals.crystal.core.math.Vec3(
         cosPhi * kotlin.math.cos(theta),
         cosPhi * kotlin.math.sin(theta),
-        -kotlin.math.sin(phi),
+        kotlin.math.sin(phi),
     )
 }
 
 /**
- * World-space light TRAVEL direction for Filament's LightManager.setDirection.
+ * Direction supplied to Filament's LightManager in world space.
  *
- * The camera-anchored light is expressed in view space by [viewSpaceLightDirection]
- * as surface-to-light (the direction from the surface toward the light, used by the
- * shader's NdotL term). Filament's directional light wants the opposite sign — the
- * direction the light TRAVELS (from the light toward the scene). Negate, then rotate
- * from view space into world space via the inverse camera rotation, keeping the
- * light-to-camera relationship constant as the crystal rotates.
+ * Device verification shows that this camera setup needs +Z to light the camera-facing
+ * atom hemisphere, while Filament's screen-plane convention is opposite to the shader's
+ * surface-to-light X/Y convention. Flip X/Y only, then rotate the camera-anchored vector
+ * into world space.
  */
-internal fun worldLightTravelDirection(
+internal fun worldLightManagerDirection(
     azimuthDegrees: Float,
     elevationDegrees: Float,
     cameraRotation: com.krystals.crystal.core.math.Mat3,
 ): com.krystals.crystal.core.math.Vec3 {
     val viewSurfaceToLight = viewSpaceLightDirection(azimuthDegrees, elevationDegrees)
-    val viewTravel = viewSurfaceToLight * -1.0
-    return cameraRotation.transposed() * viewTravel
+    val filamentDirection = com.krystals.crystal.core.math.Vec3(
+        -viewSurfaceToLight.x,
+        -viewSurfaceToLight.y,
+        viewSurfaceToLight.z,
+    )
+    return cameraRotation.transposed() * filamentDirection
+}
+
+/** Custom materials use the renderer's front surface at view-space -Z. */
+internal fun materialLightDirection(
+    azimuthDegrees: Float,
+    elevationDegrees: Float,
+): com.krystals.crystal.core.math.Vec3 {
+    val uiDirection = viewSpaceLightDirection(azimuthDegrees, elevationDegrees)
+    return com.krystals.crystal.core.math.Vec3(uiDirection.x, uiDirection.y, -uiDirection.z)
 }
 
 /**
- * Ambient floor for the unlit shader lighting — v0.8.29: the ambient term is the
- * constant 60% share of the light model (WorldLight.AMBIENT_RATIO), independent of
- * sun strength. The sun 40% share carries the directional diffuse + specular.
- */
-internal fun diffuseAmbient(): Float = WorldLight.AMBIENT_RATIO
-
-/**
- * Sun angular radius -> Blinn-Phong shininess (highlight radius 0.35 + 1.15*diffusion),
- * mirroring the .mat payloads. v0.8.14: no dead 4.0 lower clamp — the diffusion slider
- * must visibly widen/narrow the highlight across its full range.
+ * Sun angular radius -> Blinn-Phong shininess (highlight radius 0.35 + 1.65*diffusion),
+ * mirroring the hand-lit .mat shaders. No lower clamp: the diffusion slider must visibly
+ * widen/narrow the highlight across its full range.
  */
 internal fun specularShininess(highlightRadius: Float): Float =
-    maxOf(2.0f / (highlightRadius + 0.01f), 1.5f)
+    maxOf(2.0f / (highlightRadius + 0.01f), 0.8f)
 
 /**
- * Frosted (diffuse) share of the atom glass shading — mirrors the NdotL weight in the
- * atom_opaque / atom_transparent payloads. v0.8.17: fully removed (0.0) — atoms are
- * lit by the mirror highlight alone on the faint ambient base.
- */
-internal fun atomDiffuseWeight(): Float = 0.0f
-
-/**
- * Specular blend factor for the atom glass shading — mirrors the `specular * X` mix in
- * the atom payloads. Full white makes the mirror highlight pop on the faint base.
- */
-internal fun atomSpecularBlend(): Float = 1.0f
-
-/**
- * Atom material shading parameters.
+ * Atom ceramic PBR parameters — must mirror the values compiled into
+ * atom_solid.mat / atom_transparent.mat.
  *
- * v0.8.33: no clear coat — plain dielectric base (metallic 0, roughness 0.32,
- * reflectance 0.56) with diffuse + basic Fresnel reflectance only. The 60% ambient /
- * 40% sun scene light is applied by Filament's IndirectLight + directional light.
- * Must mirror the values baked into atom_opaque.mat / atom_transparent.mat. The 5%
- * CPK desaturation remains atom-specific.
+ * Glazed ceramic: non-metallic dielectric with a controlled, visible highlight.
+ * The scene light model (60% ambient / 40% sun) is applied by
+ * Filament's IndirectLight + directional light. The 5% CPK desaturation is atom-specific.
  */
 internal object AtomPbr {
     const val METALLIC = 0.0f
-    const val ROUGHNESS = 0.32f
-    const val REFLECTANCE = 0.56f
+    const val ROUGHNESS = 0.44f
+    const val REFLECTANCE = 0.45f
+    const val CLEAR_COAT = 1.0f
+    const val CLEAR_COAT_ROUGHNESS = 0.18f
     /** CPK base color is desaturated by 5% before it reaches the material. */
     const val SATURATION_FACTOR = 0.95f
 }
 
 /**
- * Sun 40% share multiplier for the unlit (bond/mesh) shaders — mirrors the
- * `0.4 * highlightIntensity` terms compiled into opaque/transparent/polyhedron.
+ * PBR roughness for lit atom materials, driven by the sun diffusion slider.
+ * diffusion 0 → sharp highlight (0.28), 0.5 → base ceramic roughness, 1 →
+ * soft but still visible highlight (0.60). Keeping the upper end below 1 prevents
+ * the highlight from disappearing at the default diffusion setting.
  */
-internal fun sunShade(intensity: Float): Float = WorldLight.SUN_RATIO * intensity
+internal fun atomRoughness(diffusion: Float): Float =
+    (0.28f + diffusion * 0.32f).coerceIn(0.28f, 0.60f)
 
 /**
- * Directional light intensity in lux for a [worldLightIntensityLux]-style mapping.
- *
- * v0.8.21: 150_000 lux (noon sun) overexposed the PBR highlight to pure white because
- * the view has post-processing (tone mapping) disabled — the highlight clipped and its
- * arc edge read as a "bright edge" on the atom.
- * v0.8.30: base raised from 30_000 to 90_000. The v0.8.29 60/40 ambient/sun split
- * scaled BOTH lights down (~3x total), leaving atoms mostly in shadow; the raised base
- * restores v0.8.21 brightness while the 60/40 split keeps the highlight well under the
- * noon-sun clipping level.
+ * PBR atoms receive their stable base illumination from the indirect light. Their
+ * directional highlight is bounded in the atom material, so the Filament directional
+ * light stays at a negligible intensity and cannot clip the whole sphere near 90°.
+ */
+internal const val DIRECTIONAL_LIGHT_LUX_BASE = 1f
+internal const val AMBIENT_LIGHT_LUX = 28_000f
+
+/**
+ * Overall brightness multiplier for the hand-lit (bond/mesh/hydrogen) shaders. The lit
+ * atom path uses a stable indirect-light base; this factor keeps bonds subordinate.
+ */
+internal const val BOND_BRIGHTNESS = 0.85f
+internal const val MESH_BRIGHTNESS = 1.0f
+
+internal fun handLitBrightness(kind: MaterialKind): Float = when (kind) {
+    MaterialKind.BOND_NORMAL,
+    MaterialKind.BOND_NORMAL_TRANSPARENT,
+    MaterialKind.BOND_HYDROGEN,
+    -> BOND_BRIGHTNESS
+    MaterialKind.MESH_POLYHEDRON -> MESH_BRIGHTNESS
+    else -> 1.0f
+}
+
+/**
+ * Negligible PBR directional light. The slider-controlled atom highlight is evaluated
+ * and bounded in the material; hand-lit bonds and meshes use the slider directly.
  */
 internal fun worldLightIntensityLux(intensity: Float): Float =
-    (intensity * 90_000f).coerceAtLeast(1f)
+    intensity.coerceIn(0f, 1f) * DIRECTIONAL_LIGHT_LUX_BASE
 
-/**
- * Desaturates an ARGB color by [factor] (1.0 = identity) in HSL space, preserving hue
- * and lightness. Used for the atom base color (CPK colors at 95% saturation).
- */
-internal fun desaturateArgb(argb: Long, factor: Float): Long {
-    val alpha = (argb ushr 24 and 0xFF).toInt()
-    var r = (argb ushr 16 and 0xFF).toInt() / 255f
-    var g = (argb ushr 8 and 0xFF).toInt() / 255f
-    var b = (argb and 0xFF).toInt() / 255f
-    val max = maxOf(r, g, b)
-    val min = minOf(r, g, b)
-    val lightness = (max + min) / 2f
-    val delta = max - min
-    if (delta == 0f) return argb // gray: saturation already 0
-    val saturation = if (lightness > 0.5f) delta / (2f - max - min) else delta / (max + min)
-    val newSaturation = (saturation * factor).coerceIn(0f, 1f)
-    if (newSaturation == 0f) {
-        val gray = (lightness * 255f).toInt().coerceIn(0, 255)
-        return (alpha.toLong() shl 24) or (gray.toLong() shl 16) or (gray.toLong() shl 8) or gray.toLong()
-    }
-    val q = if (lightness < 0.5f) lightness * (1f + newSaturation) else lightness + newSaturation - lightness * newSaturation
-    val p = 2f * lightness - q
-    fun hue2rgb(p: Float, q: Float, t: Float): Float {
-        var tt = t
-        if (tt < 0f) tt += 1f
-        if (tt > 1f) tt -= 1f
-        return when {
-            tt < 1f / 6f -> p + (q - p) * 6f * tt
-            tt < 1f / 2f -> q
-            tt < 2f / 3f -> p + (q - p) * (2f / 3f - tt) * 6f
-            else -> p
-        }
-    }
-    var h = 0f
-    when (max) {
-        r -> h = ((g - b) / delta + if (g < b) 6f else 0f) / 6f
-        g -> h = ((b - r) / delta + 2f) / 6f
-        b -> h = ((r - g) / delta + 4f) / 6f
-    }
-    r = hue2rgb(p, q, h + 1f / 3f)
-    g = hue2rgb(p, q, h)
-    b = hue2rgb(p, q, h - 1f / 3f)
-    fun toByte(v: Float) = (v * 255f).toInt().coerceIn(0, 255)
-    return (alpha.toLong() shl 24) or
-        (toByte(r).toLong() shl 16) or
-        (toByte(g).toLong() shl 8) or
-        toByte(b).toLong()
-}
+/** Ambient fill remains stable while the slider controls only directional light. */
+internal fun ambientLightIntensityLux(): Float = AMBIENT_LIGHT_LUX

@@ -7,6 +7,8 @@ import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.style.RenderConfiguration
 import com.krystals.renderer.core.style.RenderPalette
 import com.krystals.renderer.core.style.ViewerAppearance
+import com.krystals.renderer.core.style.desaturateArgb
+import com.krystals.renderer.core.style.BOND_SATURATION_FACTOR
 
 object CrystalRenderSceneFactory {
     fun build(
@@ -20,7 +22,8 @@ object CrystalRenderSceneFactory {
         structuralExpansion: Boolean = false,
         moleculeExtend: Boolean = false,
         molecules: List<Molecule> = emptyList(),
-        // Per v0.8.x: hbond D–H···A angle threshold (degrees) — hbonds at or below it are hidden.
+        showSecondaryExtendBonds: Boolean = true,
+        // Per v0.7.0: hbond D–H···A angle threshold (degrees) — hbonds at or below it are hidden.
         hbondAngleThreshold: Double = 110.0,
     ): RenderScene {
         val atoms = analysis.atoms
@@ -38,7 +41,9 @@ object CrystalRenderSceneFactory {
         }
         val bondMaterials = uniqueSiteAtoms.associate { atom ->
             atom.siteId to Material(
-                argb = RenderPalette.resolveSiteArgb(atom.siteId, atom.species.symbol, renderConfiguration),
+                // Two-tone bonds use the site CPK color at 90% saturation (BICOLOR mode);
+                // UNICOLOR mode uses defaultBondMaterial and is not affected.
+                argb = desaturateArgb(RenderPalette.resolveSiteArgb(atom.siteId, atom.species.symbol, renderConfiguration), BOND_SATURATION_FACTOR),
                 opacity = appearance.bondOpacity.toDouble(),
                 reflective = appearance.bondReflectionEnabled,
             )
@@ -78,6 +83,7 @@ object CrystalRenderSceneFactory {
                 structuralExpansion = structuralExpansion,
                 moleculeExtend = moleculeExtend,
                 molecules = molecules,
+                showSecondaryExtendBonds = showSecondaryExtendBonds,
             ),
         )
     }

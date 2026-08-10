@@ -33,16 +33,15 @@ class GpuInstanceManager(
     private val materials: MaterialFactory,
 ) : AutoCloseable {
     private val entities = linkedMapOf<String, Int>()
-    // Per v0.8.1: objectByEntity is only ever touched on the Filament render thread (sync/clear/
+    // Per v0.7.0: objectByEntity is only ever touched on the Filament render thread (sync/clear/
     // destroy all run inside submit()). The lock was dead overhead — if pickGpu() is ever wired
     // into production it reads objectIdForEntity() cross-thread and the lock must be restored.
     private val objectByEntity = linkedMapOf<Int, String>()
+    private val materialKeyByEntity = linkedMapOf<Int, Pair<MaterialKind, MaterialKey>>()
     private val ownedMeshByEntity = linkedMapOf<Int, UploadedMesh>()
     private val auxiliaryIds = linkedSetOf<String>()
     private val sceneAuxiliaryIds = linkedSetOf<String>()
     private val auxiliaryMeshes = linkedMapOf<String, MeshData>()
-    // Per v0.8.10: gathered pie entity registry for per-frame billboard updates.
-    private val pieRegistry = linkedMapOf<Int, Pair<Vec3, Double>>()  // entity → (center, radius)
     private val polyhedronBatchIds = linkedSetOf<String>()
     private val polyhedronOutlineIds = linkedSetOf<String>()
     private val model = InstanceManager()
@@ -61,7 +60,7 @@ class GpuInstanceManager(
         if (lastSnapshot === snapshot) return
         atomsById = snapshot.atoms.associateBy { it.atom.id }
         val diff = model.sync(snapshot)
-        // Per v0.8.1: sequenceOf(...).flatten() avoids the intermediate set/list allocations of the
+        // Per v0.7.0: sequenceOf(...).flatten() avoids the intermediate set/list allocations of the
         // old set-union (+) and flatten() — sync() now allocates nothing beyond the records map.
         sequenceOf(diff.removed, diff.updated).flatten().forEach(::destroy)
         val records = diff.batches.values.asSequence().flatten().associateBy { it.objectId }
@@ -73,7 +72,7 @@ class GpuInstanceManager(
                 objectByEntity[entity] = id.substringBeforeLast(":a").substringBeforeLast(":b")
             }
         }
-        // Per v0.8.1: destroy() removes from entities/objectByEntity, never from these sets, so
+        // Per v0.7.0: destroy() removes from entities/objectByEntity, never from these sets, so
         // forward iteration avoids the toList() snapshot (destroy order within a batch is irrelevant).
         polyhedronBatchIds.forEach(::destroy)
         polyhedronBatchIds.clear()
@@ -107,84 +106,62 @@ class GpuInstanceManager(
                 polyhedronOutlineIds += id
             }
         }
-        // Per v0.8.10: render gathered-atom groups as billboard disk sectors with atom-like
-        // shading (PIE_SECTOR maps to lit atom materials). Billboard transforms are updated
-        // per-frame via updateBillboardTransforms() — not baked here.
-        pieRegistry.clear()
-        val gatheredInstances = snapshot.objects.asSequence().filterIsInstance<GatheredAtomInstance>().filter(GatheredAtomInstance::visible).toList()
+        // Gathered-atom groups render as real 3D spheres with the occupancy material —
+        // the occupied share (mixed element color) renders opaque, the missing share as
+        // a 30%-color/70%-background wedge from twelve o'clock clockwise, exactly like
+        // partial-occupancy atoms. Same sphere meshes and lit ceramic pipeline as
+        // regular atoms, so lighting and volume match the rest of the scene.
+        val gatheredInstances = snapshot.objects.asSequence()
+            .filterIsInstance<GatheredAtomInstance>()
+            .filter(GatheredAtomInstance::visible)
+            .toList()
         gatheredInstances.forEachIndexed { gIdx, gInst ->
             val g = gInst.gathered
-            val center = g.center
-            val radius = gInst.radius
-            var accumAngle = -90f
-            g.slices.forEachIndexed { sIdx, slice ->
-                val sweep = (slice.fraction * 360f).toFloat().coerceAtLeast(1f)
-                val mesh = meshes.diskSector(accumAngle, sweep)
-                val meshId = "gathered-pie:$gIdx:s$sIdx"
-                auxiliaryMeshes[meshId] = mesh
-                val sliceMat = Material(argb = slice.color, reflective = true)
-                // Per v0.8.13: slices are OPAQUE (occupancy 1.0) — passing totalOcc made every
-                // sector translucent and the transparent pass depth-sorted/blended them into a
-                // muddy face with wrong-looking shading. Opaque sectors match the legacy 2D pie
-                // arcs; only the remainder wedge is translucent.
-                val record = InstanceRecord(
-                    meshId, 0,
-                    BatchKey(GeometryKind.PIE_SECTOR, MaterialKey(sliceMat, 1.0)),
-                    identity(), // billboard set per-frame by updateBillboardTransforms
-                )
-                create(record, snapshot)?.let { entity ->
-                    entities[meshId] = entity
-                    objectByEntity[entity] = g.memberAtomIds.firstOrNull()?.toString().orEmpty()
-                    sceneAuxiliaryIds += meshId
-                    pieRegistry[entity] = center to radius
-                }
-                accumAngle += sweep
+            val lod = when {
+                gatheredInstances.size <= 2000 -> SphereLod.HIGH
+                gatheredInstances.size <= 20000 -> SphereLod.MEDIUM
+                else -> SphereLod.LOW
             }
-            // Remainder sector — translucent so it reads as "missing occupancy" on any background.
-            if (g.remainderFraction > 0.001f) {
-                val sweep = (g.remainderFraction * 360f).toFloat().coerceAtLeast(1f)
-                val mesh = meshes.diskSector(accumAngle, sweep)
-                val meshId = "gathered-pie:$gIdx:rem"
-                auxiliaryMeshes[meshId] = mesh
-                val remMat = Material(argb = g.mixedColor, opacity = 0.4, reflective = true)
-                val record = InstanceRecord(
-                    meshId, 0,
-                    BatchKey(GeometryKind.PIE_SECTOR, MaterialKey(remMat)),
-                    identity(),
-                )
-                create(record, snapshot)?.let { entity ->
-                    entities[meshId] = entity
-                    objectByEntity[entity] = g.memberAtomIds.firstOrNull()?.toString().orEmpty()
-                    sceneAuxiliaryIds += meshId
-                    // Remainder also gets billboard updates (same center/radius)
-                    pieRegistry[entity] = center to radius
-                }
+            val geometry = when (lod) {
+                SphereLod.HIGH -> GeometryKind.SPHERE_HIGH
+                SphereLod.MEDIUM -> GeometryKind.SPHERE_MEDIUM
+                SphereLod.LOW -> GeometryKind.SPHERE_LOW
+            }
+            val occupiedFraction = (1.0 - g.remainderFraction).coerceIn(0.0, 1.0)
+            // Per-sector element colors: each encoded as (argb shl 16) or (fraction*65535).
+            // The pie material resolves sector colors from twelve o'clock clockwise, so
+            // A 0.5 + B 0.3 renders as A, B, then the 30/70 background-blended wedge.
+            val encodedSlices = g.slices.map { slice ->
+                val frac = (slice.fraction.coerceIn(0.0, 1.0) * 65535.0).toInt().coerceIn(0, 65535)
+                (slice.color shl 16) or frac.toLong()
+            }
+            val id = "gathered:$gIdx"
+            val record = InstanceRecord(
+                id, 0,
+                BatchKey(
+                    geometry,
+                    MaterialKey(
+                        Material(argb = g.mixedColor, reflective = true),
+                        occupancy = occupiedFraction,
+                        slices = encodedSlices,
+                    ),
+                ),
+                sphereTransform(g.center, gInst.radius),
+            )
+            create(record, snapshot)?.let { entity ->
+                entities[id] = entity
+                objectByEntity[entity] = g.memberAtomIds.firstOrNull()?.toString().orEmpty()
+                sceneAuxiliaryIds += id
             }
         }
 
         addFrameAndAxes(snapshot)
+        materials.retainInstances(materialKeyByEntity.values.toSet())
         lastDocumentState = null
         lastSnapshot = snapshot
     }
 
-    /**
-     * Per v0.8.10: recompute billboard transforms for all gathered pie entities.
-     * Called every frame before render with the current camera position.
-     * [cameraPosition] is the world-space eye/camera position.
-     */
-    fun updateBillboardTransforms(cameraPosition: Vec3, cameraUp: Vec3 = Vec3(0.0, 1.0, 0.0)) {
-        if (pieRegistry.isEmpty()) return
-        val billboard = billboardTransform(cameraPosition, cameraUp)
-        pieRegistry.forEach { (entity, pair) ->
-            val (center, radius) = pair
-            engine.transformManager.setTransform(
-                engine.transformManager.getInstance(entity),
-                billboard(center, radius),
-            )
-        }
-    }
-
-    // Per v0.8.1: only read from PickingRenderer.pickGpu(), which is not wired into production
+    // Per v0.7.0: only read from PickingRenderer.pickGpu(), which is not wired into production
     // (picking runs the CPU projection path). If GPU picking is ever enabled cross-thread, the
     // lock around objectByEntity must be restored.
     fun objectIdForEntity(entity: Int): String? = objectByEntity[entity]
@@ -235,10 +212,10 @@ class GpuInstanceManager(
         auxiliaryMeshes.clear()
         polyhedronBatchIds.clear()
         polyhedronOutlineIds.clear()
-        pieRegistry.clear()
         lastDocumentState = null
         lastSnapshot = null
         atomsById = emptyMap()
+        materials.retainInstances(emptySet())
     }
 
     override fun close() = clear()
@@ -248,15 +225,15 @@ class GpuInstanceManager(
             GeometryKind.SPHERE_HIGH, GeometryKind.HIGHLIGHT -> meshes.sharedSphere(SphereLod.HIGH)
             GeometryKind.SPHERE_MEDIUM -> meshes.sharedSphere(SphereLod.MEDIUM)
             GeometryKind.SPHERE_LOW -> meshes.sharedSphere(SphereLod.LOW)
-            // Per v0.8.1: hbonds are thin cylinders, same shared mesh as normal bonds.
-            GeometryKind.CYLINDER, GeometryKind.HBOND -> meshes.sharedCylinder()
+            // Per v0.7.0: hbonds are thin cylinders, same shared mesh as normal bonds.
+            GeometryKind.CYLINDER, GeometryKind.HBOND,
+            GeometryKind.FRAME, GeometryKind.AXIS, GeometryKind.MEASUREMENT -> meshes.sharedCylinder()
             GeometryKind.POLYHEDRON, GeometryKind.PIE_SECTOR -> {
                 val mesh = auxiliaryMeshes[record.objectId]
                     ?: snapshot.meshes.firstOrNull { it.id == record.objectId }?.toMeshData()
                     ?: return null
                 meshes.upload(mesh)
             }
-            GeometryKind.FRAME, GeometryKind.AXIS, GeometryKind.MEASUREMENT -> meshes.sharedCylinder()
         }
         val materialKind = materialKindFor(record.batch.geometry, record.batch.material)
         val material = materials.create(materialKind, record.batch.material, snapshot.environment) ?: return null
@@ -282,6 +259,7 @@ class GpuInstanceManager(
         val transform = engine.transformManager.create(entity)
         engine.transformManager.setTransform(transform, record.transform)
         scene.addEntity(entity)
+        materialKeyByEntity[entity] = materialKind to record.batch.material
         if (record.batch.geometry == GeometryKind.POLYHEDRON) ownedMeshByEntity[entity] = uploaded
         return entity
     }
@@ -411,12 +389,12 @@ class GpuInstanceManager(
     }
 
     companion object {
-        /** Per v0.8.11: returns a closure that builds a per-center column-major 4×4
+        /** Per v0.7.0: returns a closure that builds a per-center column-major 4×4
          *  billboard matrix. [cameraPosition] is the world-space eye position.
          *  [cameraUp] is the screen-up direction in world space (camera local +Y).
          *  right = cross(cameraUp, normal); up = normal × right, so the pie's
          *  12-o'clock locks to screen 12-o'clock regardless of camera roll.
-         *  Per v0.8.12: the local +Y column is NEGATED (-up) so the disk's slice
+         *  Per v0.7.0: the local +Y column is NEGATED (-up) so the disk's slice
          *  start (local -90°, i.e. local -Y) lands on screen UP (12 o'clock) and
          *  the counterclockwise local sweep renders clockwise on screen — matching
          *  the legacy 2D pie (start -90°, positive sweep). */
@@ -442,6 +420,7 @@ class GpuInstanceManager(
     private fun destroy(id: String) {
         val entity = entities.remove(id) ?: return
         objectByEntity.remove(entity)
+        materialKeyByEntity.remove(entity)
         ownedMeshByEntity.remove(entity)?.let(meshes::destroy)
         scene.removeEntity(entity)
         engine.destroyEntity(entity)
@@ -459,21 +438,24 @@ class GpuInstanceManager(
     }
 }
 
-internal fun materialKindFor(geometry: GeometryKind, material: MaterialKey): MaterialKind = when {
-    geometry == GeometryKind.HIGHLIGHT -> MaterialKind.HIGHLIGHT
-    geometry == GeometryKind.SPHERE_HIGH && material.transparent -> MaterialKind.ATOM_TRANSPARENT
-    geometry == GeometryKind.SPHERE_MEDIUM && material.transparent -> MaterialKind.ATOM_TRANSPARENT
-    geometry == GeometryKind.SPHERE_LOW && material.transparent -> MaterialKind.ATOM_TRANSPARENT
-    geometry == GeometryKind.SPHERE_HIGH -> MaterialKind.ATOM_OPAQUE
-    geometry == GeometryKind.SPHERE_MEDIUM -> MaterialKind.ATOM_OPAQUE
-    geometry == GeometryKind.SPHERE_LOW -> MaterialKind.ATOM_OPAQUE
-    // Per v0.8.10: PIE_SECTOR uses atom-like lit materials (sphere-impostor normals).
-    geometry == GeometryKind.PIE_SECTOR && material.transparent -> MaterialKind.ATOM_TRANSPARENT
-    geometry == GeometryKind.PIE_SECTOR -> MaterialKind.ATOM_OPAQUE
-    geometry == GeometryKind.POLYHEDRON && material.reflective -> MaterialKind.POLYHEDRON
-    geometry == GeometryKind.POLYHEDRON -> MaterialKind.UNLIT_POLYHEDRON
-    material.transparent && material.reflective -> MaterialKind.TRANSPARENT
-    material.transparent -> MaterialKind.UNLIT_TRANSPARENT
-    material.reflective -> MaterialKind.OPAQUE
-    else -> MaterialKind.UNLIT_OPAQUE
+internal fun materialKindFor(geometry: GeometryKind, material: MaterialKey): MaterialKind = when (geometry) {
+    // Atoms and gathered-atom pie sectors share the lit ceramic materials. Partial
+    // occupancy (< 1) atoms render in the opaque pass with the missing share as a
+    // solid background-blended wedge; gathered groups carry per-sector colors.
+    GeometryKind.SPHERE_HIGH, GeometryKind.SPHERE_MEDIUM, GeometryKind.SPHERE_LOW, GeometryKind.HIGHLIGHT ->
+        when {
+            material.slices.isNotEmpty() -> MaterialKind.ATOM_PIE
+            Double.fromBits(material.occupancyBits) < 0.999 -> MaterialKind.ATOM_OCCUPANCY
+            material.transparent -> MaterialKind.ATOM_TRANSPARENT
+            else -> MaterialKind.ATOM_SOLID
+        }
+    GeometryKind.PIE_SECTOR ->
+        if (material.transparent) MaterialKind.ATOM_TRANSPARENT else MaterialKind.ATOM_SOLID
+    GeometryKind.HBOND -> MaterialKind.BOND_HYDROGEN
+    GeometryKind.CYLINDER ->
+        if (material.transparent) MaterialKind.BOND_NORMAL_TRANSPARENT else MaterialKind.BOND_NORMAL
+    GeometryKind.POLYHEDRON -> MaterialKind.MESH_POLYHEDRON
+    // Auxiliaries (cell frame / axes / measurement lines) reuse the hand-lit bond
+    // material; with reflective=false its shader degrades to plain diffuse.
+    GeometryKind.FRAME, GeometryKind.AXIS, GeometryKind.MEASUREMENT -> MaterialKind.BOND_NORMAL
 }

@@ -1,10 +1,7 @@
 material {
-    name : KrystalsAtomTransparent,
+    name : KrystalsAtomSolid,
     shadingModel : lit,
-    blending : transparent,
-    depthWrite : true,
-    doubleSided : true,
-    transparency : twoPassesOneSide,
+    blending : opaque,
     requires : [ tangents ],
     variables : [ customNormal ],
     parameters : [
@@ -12,7 +9,6 @@ material {
         { type : float3, name : backgroundColor },
         { type : float2, name : depthRange },
         { type : float, name : depthCueEnabled },
-        { type : float, name : occupancy },
         { type : float, name : reflectionEnabled },
         { type : float3, name : lightDirection },
         { type : float, name : highlightIntensity },
@@ -29,13 +25,9 @@ fragment {
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
         float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
         color.rgb = mix(color.rgb, materialParams.backgroundColor, fog);
-        // Occupancy sector cutout: fade the wedge past the occupancy fraction,
-        // measured clockwise from twelve o'clock on the view-space normal.
+        material.baseColor = color;
         vec3 worldN = normalize(variable_customNormal.xyz);
         vec3 viewN = normalize(mat3(getViewFromWorldMatrix()) * worldN);
-        float clockwiseFromTwelve = fract(atan(viewN.x, viewN.y) / 6.28318530 + 1.0);
-        color.a *= mix(0.15, 1.0, step(clockwiseFromTwelve, clamp(materialParams.occupancy, 0.0, 1.0)));
-        material.baseColor = color;
         vec3 L = normalize(materialParams.lightDirection);
         vec3 H = normalize(L + vec3(0.0, 0.0, -1.0));
         float NdotL = max(dot(viewN, L), 0.0);
@@ -44,11 +36,12 @@ fragment {
         float rim = pow(clamp(1.0 - max(-viewN.z, 0.0), 0.0, 1.0), mix(12.0, 2.5, spread))
             * sqrt(NdotL);
         float highlight = clamp(materialParams.reflectionEnabled * materialParams.highlightIntensity
-            * (0.68 * spot + 0.32 * rim) * color.a * (1.0 - fog), 0.0, 0.82);
+            * (0.68 * spot + 0.32 * rim) * (1.0 - fog), 0.0, 0.82);
         vec3 atomColor = color.rgb * (0.72 + 0.18 * materialParams.highlightIntensity * NdotL);
         material.baseColor = vec4(0.0, 0.0, 0.0, color.a);
         material.emissive = vec4(mix(atomColor, vec3(0.98), highlight), 0.0);
-        // Match the solid atom's glazed ceramic response.
+        // Indirect PBR light preserves element colour and AO. The bounded emissive term
+        // above supplies the directional spot and light-side silhouette reflection.
         material.metallic = 0.0;
         material.roughness = materialParams.roughness;
         material.reflectance = 0.45;

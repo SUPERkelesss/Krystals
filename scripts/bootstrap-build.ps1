@@ -1,7 +1,8 @@
 param(
     [string]$Matc,
     [switch]$Install,
-    [switch]$VerifyOnly
+    [switch]$VerifyOnly,
+    [switch]$CompileOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,10 +19,9 @@ $MatOutput         = Join-Path $Root 'renderer-filament\src\main\assets\material
 $MatManifest       = Join-Path $MatOutput 'sha256.json'
 
 $MatNames = @(
-    'atom_opaque', 'atom_transparent',
-    'opaque', 'transparent', 'polyhedron',
-    'unlit_opaque', 'unlit_transparent', 'unlit_polyhedron',
-    'highlight', 'depth_cueing', 'picking'
+    'atom_solid', 'atom_occupancy', 'atom_pie', 'atom_transparent',
+    'bond_normal', 'bond_normal_transparent', 'bond_hydrogen',
+    'mesh_polyhedron'
 )
 
 # Compile materials when -Install or -Matc is provided (and not -VerifyOnly)
@@ -74,8 +74,8 @@ foreach ($Name in $MatNames) {
 }
 Write-Host "Filament $FilamentVersion materials verified." -ForegroundColor Green
 
-# If VerifyOnly, stop here — no JDK/SDK/Gradle needed
-if ($VerifyOnly) { return }
+# If VerifyOnly or CompileOnly, stop here — no JDK/SDK/Gradle needed
+if ($VerifyOnly -or $CompileOnly) { return }
 
 # ── JDK 17 setup ──────────────────────────────────────────────
 function Find-Jdk17 {

@@ -28,7 +28,7 @@ import kotlin.test.assertEquals
  *   → 10 visible hbond bonds
  *
  * Per-H shortest-distance and angle >110-degree filters are applied at the bond level
- * (BondDetector post-filter v0.8.5), keeping exactly 10 surviving hbond bonds.
+ * (BondDetector post-filter v0.7.0), keeping exactly 10 surviving hbond bonds.
  */
 class HbondH3po4SceneTest {
 

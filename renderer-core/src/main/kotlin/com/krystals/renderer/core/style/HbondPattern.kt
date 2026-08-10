@@ -3,7 +3,7 @@ package com.krystals.renderer.core.style
 import com.krystals.renderer.core.material.Material
 
 /**
- * Per v0.8.1: fixed appearance for hydrogen-bond cylinders/lines.
+ * Per v0.7.0: fixed appearance for hydrogen-bond cylinders/lines.
  *
  * The scene builder emits hydrogen bonds as separate [com.krystals.renderer.core.primitive.HbondInstance]
  * objects (the hbond channel of [com.krystals.crystal.analysis.bonding.BondNetwork]); it overrides the
@@ -12,7 +12,7 @@ import com.krystals.renderer.core.material.Material
  */
 object HbondPattern {
     /** Cylinder radius in Å. */
-    // Per v0.8.6: further reduced from 0.1 to 0.05 AA (user request).
+    // Per v0.7.0: further reduced from 0.1 to 0.05 AA (user request).
     const val RADIUS: Double = 0.05
 
     /** Translucent gray (front-end backends may restyle, e.g. legacy uses dotted lines). */
@@ -22,6 +22,6 @@ object HbondPattern {
     const val OPACITY: Float = 0.2f
 
     /** Single material shared by both start and end of every H-bond.
-     *  Per v0.8.30: radius/opacity are overridable via ViewerAppearance. */
+     *  Per v0.7.0: radius/opacity are overridable via ViewerAppearance. */
     fun material(opacity: Float = OPACITY): Material = Material(argb = COLOR, opacity = opacity.toDouble(), reflective = false)
 }

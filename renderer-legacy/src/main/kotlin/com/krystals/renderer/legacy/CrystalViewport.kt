@@ -216,7 +216,7 @@ fun rememberViewerController() = remember { ViewerController() }
 
 private data class TapEvent(val time: Long, val position: Offset)
 
-/** Per v0.8.1: mutable draw-frame outputs that are only read by the gesture handler. Plain fields
+/** Per v0.7.0: mutable draw-frame outputs that are only read by the gesture handler. Plain fields
  *  (NOT Compose state) — writing them every frame inside the Canvas draw lambda must not schedule a
  *  recomposition cascade. */
 private class TapHitState {
@@ -387,10 +387,10 @@ private fun LegacyCanvasViewport(
     onBlankTap: () -> Unit = {},
 ) {
     val background = colorFromArgb(backgroundColor(appearance.backgroundArgb).srgbArgb)
-    // Per v0.8.1: draw-frame outputs live in a plain (non-Compose-state) holder so per-frame writes
+    // Per v0.7.0: draw-frame outputs live in a plain (non-Compose-state) holder so per-frame writes
     // inside the Canvas draw lambda do not schedule recompositions.
     val hitState = remember { TapHitState() }
-    // Per v0.8.1: reflection parameters depend only on lightIntensity/diffusion (change on slider
+    // Per v0.7.0: reflection parameters depend only on lightIntensity/diffusion (change on slider
     // moves, not per frame) — compute once here instead of once per atom/bond/polyhedron-face.
     val reflection = remember(appearance.lightIntensity, appearance.diffusion) {
         legacyReflectionParameters(appearance.lightIntensity, appearance.diffusion)
@@ -566,8 +566,8 @@ private fun LegacyCanvasViewport(
                 )
             }
         }
-        // Per v0.8.2: gathered-atom groups (same-position disorder) rendered as pie-chart spheres.
-        // Per v0.8.13: respect GatheredAtomInstance.visible — pure boundary-image groups (shell
+        // Per v0.7.0: gathered-atom groups (same-position disorder) rendered as pie-chart spheres.
+        // Per v0.7.0: respect GatheredAtomInstance.visible — pure boundary-image groups (shell
         // members only, e.g. the +z images of a face position like (0,0,1)) must NOT render.
         val gatheredColorBySite = linkedMapOf<String, Long>() // computed from scene options
         val sceneGathered = scene?.objects?.filterIsInstance<GatheredAtomInstance>()?.filter { it.visible }.orEmpty()
@@ -578,7 +578,7 @@ private fun LegacyCanvasViewport(
             // Emit gathered-atom pies before individual atoms so depth-sorting works naturally.
             sceneGathered.forEach { gInst ->
                 val g = gInst.gathered
-                // Per v0.8.9: must subtract center like atom projection (L515).
+                // Per v0.7.0: must subtract center like atom projection (L515).
                 val depth = legacyCameraDepth(controller.rotation * (g.center - center))
                 val pos = project(controller.rotation * (g.center - center))
                 val r = (gInst.radius * scale).coerceIn(9.0, 84.0).toFloat()
@@ -592,7 +592,7 @@ private fun LegacyCanvasViewport(
                 snapshot.bonds.forEach { bond ->
                     val a = byId[bond.atomA] ?: return@forEach
                     val b = byId[bond.atomB] ?: return@forEach
-                    // Per v0.8.8: skip radius clip for gathered group endpoints — the
+                    // Per v0.7.0: skip radius clip for gathered group endpoints — the
                     // scene builder already anchored the bond at the sphere surface.
                     val ca = if (bond.atomA in groupByMemberId) a.copy(radius = 0f) else a
                     val cb = if (bond.atomB in groupByMemberId) b.copy(radius = 0f) else b
@@ -600,7 +600,7 @@ private fun LegacyCanvasViewport(
                     val externalBond = b.atom.isExternalShell
                     if (externalBond && !bond.rule.shouldExtendAcrossCell(ca.atom.siteId, true)) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(3f, 32f)
-                    // Per v0.8.1: H-bonds are a single gray dotted line (no split-cylinder).
+                    // Per v0.7.0: H-bonds are a single gray dotted line (no split-cylinder).
                     if (bond.rule.isHBond) {
                         add(BondRenderable(ca, cb, width, isHBond = true))
                     } else {
@@ -684,7 +684,7 @@ private fun LegacyCanvasViewport(
             drawAtomInfo(projected, inspectedAtomId, false, appearance, bondValenceBySite, gatheredFor(inspectedAtomId))?.let { infoBounds += Triple(it, false, inspectedAtomId) }
         }
         hitState.atomInfoBounds = infoBounds
-        // Per v0.8.1: projectedAtoms was already set at line ~531-533 above; this duplicate
+        // Per v0.7.0: projectedAtoms was already set at line ~531-533 above; this duplicate
         // assignment (legacy dead write) is removed.
     }
 }
@@ -893,7 +893,7 @@ private fun DrawScope.drawBond(
     val end = b.point - dir * if (bHidden) 0f else b.radius
     val clipped = end - start
     if (clipped.getDistance() < 0.001f) return
-    // Per v0.8.1: H-bonds are drawn as a single gray dotted line instead of split cylinders.
+    // Per v0.7.0: H-bonds are drawn as a single gray dotted line instead of split cylinders.
     if (isHBond) {
         drawLine(Color.Gray.copy(alpha = 0.31f), start, end, strokeWidth = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 6f)))
         return
@@ -1156,7 +1156,7 @@ private fun DrawScope.drawAtomInfo(
 ): Rect? {
     val label: String
     val anchorX: Float; val anchorY: Float; val anchorR: Float
-    // Per v0.8.2: gathered group info window — up to 3 member sites, "---" separated.
+    // Per v0.7.0: gathered group info window — up to 3 member sites, "---" separated.
     if (gatheredMemberIds.isNotEmpty()) {
         val members = gatheredMemberIds.mapNotNull { id -> projected.firstOrNull { it.atom.id == id } }
         val first = members.firstOrNull() ?: return null

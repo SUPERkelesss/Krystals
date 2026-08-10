@@ -22,6 +22,11 @@ data class GatheredAtom(
     val wasNormalized: Boolean,        // true when raw Σocc > 1
 )
 
+data class GatheredAtomGroups(
+    val groups: List<GatheredAtom>,
+    val byMemberId: Map<Long, GatheredAtom>,
+)
+
 /**
  * Groups expanded atoms by matching cartesian coordinates (tolerance 1e-4 Å) into
  * [GatheredAtom] bundles. Only atoms of DIFFERENT site ids at the same position
@@ -39,8 +44,12 @@ object GatheredAtomGrouper {
      * Group atoms by rounded cartesian position. Each group must contain ≥2 atoms
      * with at least TWO distinct [AtomImage.siteId] values.
      */
-    fun group(atoms: List<AtomImage>, colorBySite: Map<String, Long>): List<GatheredAtom> {
-        if (atoms.size < 2) return emptyList()
+    fun group(atoms: List<AtomImage>, colorBySite: Map<String, Long>): List<GatheredAtom> =
+        groupWithIndex(atoms, colorBySite).groups
+
+    /** Groups atoms once and returns both the stable group list and its member-id index. */
+    fun groupWithIndex(atoms: List<AtomImage>, colorBySite: Map<String, Long>): GatheredAtomGroups {
+        if (atoms.size < 2) return GatheredAtomGroups(emptyList(), emptyMap())
 
         // Spatial hash: (ix, iy, iz) → atoms at that cell.
         val buckets = linkedMapOf<Triple<Int, Int, Int>, MutableList<AtomImage>>()
@@ -80,16 +89,16 @@ object GatheredAtomGrouper {
             val center = bucket.first().cartesianCoordinate.toVec3()
             result += GatheredAtom(center, ids, slices, remainder, mixed, wasNormalized)
         }
-        return result
+        val byMemberId = linkedMapOf<Long, GatheredAtom>()
+        for (group in result) {
+            for (id in group.memberAtomIds) byMemberId[id] = group
+        }
+        return GatheredAtomGroups(result, byMemberId)
     }
 
     /** Returns a map from member atom id to its [GatheredAtom], or empty map if no groups. */
     fun groupByAtomId(atoms: List<AtomImage>, colorBySite: Map<String, Long>): Map<Long, GatheredAtom> {
-        val result = linkedMapOf<Long, GatheredAtom>()
-        for (g in group(atoms, colorBySite)) {
-            for (id in g.memberAtomIds) result[id] = g
-        }
-        return result
+        return groupWithIndex(atoms, colorBySite).byMemberId
     }
 
     /** Blends slice colors weighted by fraction into a single ARGB (alpha=0xFF). */

@@ -74,20 +74,32 @@ class InstanceManagerTest {
     }
 
     @Test
-    fun reflectionSettingChoosesLitOrUnlitMaterial() {
-        val litOpaque = MaterialKey(Material(0xFFFFFFFF, reflective = true))
-        val unlitOpaque = MaterialKey(Material(0xFFFFFFFF, reflective = false))
-        val litTransparent = MaterialKey(Material(0xFFFFFFFF, opacity = 0.5, reflective = true))
-        val unlitTransparent = MaterialKey(Material(0xFFFFFFFF, opacity = 0.5, reflective = false))
+    fun geometryAndTransparencySelectMaterialKind() {
+        val opaque = MaterialKey(Material(0xFFFFFFFF, reflective = true))
+        val transparent = MaterialKey(Material(0xFFFFFFFF, opacity = 0.5, reflective = true))
+        val partialOcc = MaterialKey(Material(0xFFFFFFFF, reflective = true), occupancy = 0.5)
+        val gatheredPie = MaterialKey(
+            Material(0xFFFFFFFF, reflective = true), occupancy = 0.8,
+            slices = listOf((0xFFFF0000L shl 16) or 0x8000, (0xFF00FF00L shl 16) or 0x4000),
+        )
 
-        assertEquals(MaterialKind.ATOM_OPAQUE, materialKindFor(GeometryKind.SPHERE_HIGH, litOpaque))
-        assertEquals(MaterialKind.ATOM_OPAQUE, materialKindFor(GeometryKind.SPHERE_HIGH, unlitOpaque))
-        assertEquals(MaterialKind.ATOM_TRANSPARENT, materialKindFor(GeometryKind.SPHERE_LOW, litTransparent))
-        assertEquals(MaterialKind.ATOM_TRANSPARENT, materialKindFor(GeometryKind.SPHERE_MEDIUM, unlitTransparent))
-        assertEquals(MaterialKind.TRANSPARENT, materialKindFor(GeometryKind.CYLINDER, litTransparent))
-        assertEquals(MaterialKind.UNLIT_TRANSPARENT, materialKindFor(GeometryKind.CYLINDER, unlitTransparent))
-        assertEquals(MaterialKind.POLYHEDRON, materialKindFor(GeometryKind.POLYHEDRON, litTransparent))
-        assertEquals(MaterialKind.UNLIT_POLYHEDRON, materialKindFor(GeometryKind.POLYHEDRON, unlitTransparent))
+        assertEquals(MaterialKind.ATOM_SOLID, materialKindFor(GeometryKind.SPHERE_HIGH, opaque))
+        assertEquals(MaterialKind.ATOM_SOLID, materialKindFor(GeometryKind.SPHERE_MEDIUM, opaque))
+        assertEquals(MaterialKind.ATOM_TRANSPARENT, materialKindFor(GeometryKind.SPHERE_LOW, transparent))
+        // Partial occupancy stays in the opaque pass (background-blended missing wedge).
+        assertEquals(MaterialKind.ATOM_OCCUPANCY, materialKindFor(GeometryKind.SPHERE_HIGH, partialOcc))
+        assertEquals(MaterialKind.ATOM_OCCUPANCY, materialKindFor(GeometryKind.SPHERE_MEDIUM, partialOcc))
+        // Gathered groups with sector colors use the pie material.
+        assertEquals(MaterialKind.ATOM_PIE, materialKindFor(GeometryKind.SPHERE_HIGH, gatheredPie))
+        assertEquals(MaterialKind.ATOM_SOLID, materialKindFor(GeometryKind.PIE_SECTOR, opaque))
+        assertEquals(MaterialKind.ATOM_TRANSPARENT, materialKindFor(GeometryKind.PIE_SECTOR, transparent))
+        assertEquals(MaterialKind.BOND_NORMAL, materialKindFor(GeometryKind.CYLINDER, opaque))
+        assertEquals(MaterialKind.BOND_NORMAL_TRANSPARENT, materialKindFor(GeometryKind.CYLINDER, transparent))
+        assertEquals(MaterialKind.BOND_HYDROGEN, materialKindFor(GeometryKind.HBOND, transparent))
+        assertEquals(MaterialKind.MESH_POLYHEDRON, materialKindFor(GeometryKind.POLYHEDRON, transparent))
+        // Auxiliaries (cell frame / axes / measurement) reuse the hand-lit bond material.
+        assertEquals(MaterialKind.BOND_NORMAL, materialKindFor(GeometryKind.FRAME, opaque))
+        assertEquals(MaterialKind.BOND_NORMAL, materialKindFor(GeometryKind.MEASUREMENT, opaque))
     }
 
     @Test
@@ -108,15 +120,15 @@ class InstanceManagerTest {
 
         val halfA = diff.batches.values.flatten().first { it.objectId == "bond:test:a" }
         val halfB = diff.batches.values.flatten().first { it.objectId == "bond:test:b" }
-        // Both endpoints are visible, so each is clipped inward by min(0.3*0.98, 0.5) = 0.294.
-        // The clipped bond spans 0.294..0.706, split at the 0.5 midpoint into two 0.206 halves.
+        // Both endpoints are visible, so each is clipped inward by min(0.3*0.99, 0.5) = 0.297.
+        // The clipped bond spans 0.297..0.703, split at the 0.5 midpoint into two 0.203 halves.
         // transform[12]=start.x, transform[13]=start.y, transform[5]=yAxis.y*length.
         assertEquals(0.0f, halfA.transform[12], 1e-4f) // start x stays on the bond axis
-        assertEquals(0.294f, halfA.transform[13], 1e-4f) // start clipped inward by 0.294
-        assertEquals(0.206f, halfA.transform[5], 1e-4f)  // half A length = 0.5 - 0.294
+        assertEquals(0.297f, halfA.transform[13], 1e-4f) // start clipped inward by 0.297
+        assertEquals(0.203f, halfA.transform[5], 1e-4f)  // half A length = 0.5 - 0.297
         assertEquals(0.0f, halfB.transform[12], 1e-4f) // start x stays on the bond axis
         assertEquals(0.5f, halfB.transform[13], 1e-4f) // half B starts at the midpoint
-        assertEquals(0.206f, halfB.transform[5], 1e-4f)  // half B length = 0.706 - 0.5
+        assertEquals(0.203f, halfB.transform[5], 1e-4f)  // half B length = 0.703 - 0.5
     }
 
     @Test
@@ -127,14 +139,14 @@ class InstanceManagerTest {
 
         val halfA = diff.batches.values.flatten().first { it.objectId == "bond:test:a" }
         val halfB = diff.batches.values.flatten().first { it.objectId == "bond:test:b" }
-        // Only the visible start atom is clipped (inward 0.294); the hidden end atom is not, so the
-        // bond spans 0.294..1.0, split at the 0.647 midpoint into two 0.353 halves.
+        // Only the visible start atom is clipped (inward 0.297); the hidden end atom is not, so the
+        // bond spans 0.297..1.0, split at the 0.6485 midpoint into two 0.3515 halves.
         assertEquals(0.0f, halfA.transform[12], 1e-4f) // start x stays on the bond axis
-        assertEquals(0.294f, halfA.transform[13], 1e-4f) // start clipped to visible atom radius
-        assertEquals(0.353f, halfA.transform[5], 1e-4f)  // half A length = 0.647 - 0.294
+        assertEquals(0.297f, halfA.transform[13], 1e-4f) // start clipped to visible atom radius
+        assertEquals(0.3515f, halfA.transform[5], 1e-4f) // half A length = 0.6485 - 0.297
         assertEquals(0.0f, halfB.transform[12], 1e-4f) // start x stays on the bond axis
-        assertEquals(0.647f, halfB.transform[13], 1e-4f) // half B starts at the midpoint
-        assertEquals(0.353f, halfB.transform[5], 1e-4f)  // half B reaches the un-clipped end (1.0)
+        assertEquals(0.6485f, halfB.transform[13], 1e-4f) // half B starts at the midpoint
+        assertEquals(0.3515f, halfB.transform[5], 1e-4f)  // half B reaches the un-clipped end (1.0)
     }
 
     @Test
@@ -277,7 +289,7 @@ class InstanceManagerTest {
     @Test
     fun gatheredMembersAreSkippedInInstancedRecords() {
         // Disordered structure: two co-located sites (C/N at the same position) + one O partner.
-        // Regression (v0.8.8): the gathered group must stay a single pie — member atoms must
+        // Regression (v0.7.0): the gathered group must stay a single pie — member atoms must
         // never be emitted as instanced spheres (that would render as overlapping balls).
         val structure = CrystalStructure(
             blockName = "disordered",
@@ -328,7 +340,7 @@ class InstanceManagerTest {
         )
     }
 
-    // ── v0.8.9 billboard tests (pure companion function, no GPU needed) ─────────
+    // ── v0.7.0 billboard tests (pure companion function, no GPU needed) ─────────
 
     @Test
     fun billboardNormalPointsTowardCamera() {
@@ -357,7 +369,7 @@ class InstanceManagerTest {
 
     @Test
     fun billboardSliceStartPointsAtScreenUp() {
-        // Per v0.8.12 regression: the disk's slice start (local -90° = local -Y) must land on
+        // Per v0.7.0 regression: the disk's slice start (local -90° = local -Y) must land on
         // screen UP. Camera above (+Z), cameraUp = world +Y → the local +Y column (m[4..6])
         // must be -cameraUp, so a vertex at local (0,-1) maps to +cameraUp (12 o'clock).
         val f = GpuInstanceManager.billboardTransform(
@@ -388,7 +400,7 @@ class InstanceManagerTest {
 
     @Test
     fun allGroupMembersAreSkippedInInstancedRecords() {
-        // Regression (v0.8.14/15): EVERY gathered group — including pure boundary-image groups
+        // Regression (v0.7.0/15): EVERY gathered group — including pure boundary-image groups
         // at (0,0,1)-type positions — must be visible and rendered as a pie; its member atoms
         // must never appear as individual spheres (that would render as overlapping balls or a
         // plain single-site ball instead of the pie).
@@ -406,7 +418,7 @@ class InstanceManagerTest {
         val scene = CrystalSceneBuilder().build(structure, analysis, SceneBuildOptions())
         val groups = scene.objects.filterIsInstance<GatheredAtomInstance>()
         assertTrue(groups.size >= 2, "in-cell group + boundary-image groups expected")
-        assertTrue(groups.all { it.visible }, "all groups (incl. boundary-image ones) must be visible per v0.8.15")
+        assertTrue(groups.all { it.visible }, "all groups (incl. boundary-image ones) must be visible per v0.7.0")
 
         val manager = InstanceManager()
         val diff = manager.sync(scene)

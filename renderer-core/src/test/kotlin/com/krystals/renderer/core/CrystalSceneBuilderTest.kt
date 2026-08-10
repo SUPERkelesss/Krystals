@@ -24,7 +24,11 @@ import com.krystals.renderer.core.primitive.GatheredAtomInstance
 import com.krystals.renderer.core.primitive.MeshKind
 import com.krystals.renderer.core.style.HbondPattern
 import com.krystals.renderer.core.style.RenderConfiguration
+import com.krystals.renderer.core.style.RenderPalette
 import com.krystals.renderer.core.style.ViewerAppearance
+import com.krystals.renderer.core.style.BOND_SATURATION_FACTOR
+import com.krystals.renderer.core.style.BondColorMode
+import com.krystals.renderer.core.style.desaturateArgb
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -96,6 +100,44 @@ class CrystalSceneBuilderTest {
     }
 
     @Test
+    fun bicolorBondMaterialsUseCpKColorAtNinetyPercentSaturation() {
+        // Two-tone bonds: the start/end cylinder colors are the site CPK color
+        // desaturated by 10% (BOND_SATURATION_FACTOR). Atom materials keep the raw
+        // CPK color in the scene layer (atom desaturation happens in the Filament
+        // MaterialFactory at 95%), and UNICOLOR mode is not affected.
+        val structure = structure()
+        val rule = BondRule("Cs", "Cl", 0.1, 4.0)
+        val analysis = BondDetector.buildNetwork(structure, BondConfiguration(listOf(rule)))
+
+        val scene = CrystalRenderSceneFactory.build(
+            analysis = analysis,
+            appearance = ViewerAppearance(),
+            renderConfiguration = RenderConfiguration(),
+        )
+
+        val bond = scene.bonds.first()
+        val csColor = RenderPalette.elementArgb("Cs")
+        val clColor = RenderPalette.elementArgb("Cl")
+        assertEquals(desaturateArgb(csColor, BOND_SATURATION_FACTOR), bond.startMaterial.argb)
+        assertEquals(desaturateArgb(clColor, BOND_SATURATION_FACTOR), bond.endMaterial.argb)
+
+        // Atom materials stay at the raw CPK color in the scene layer.
+        val csAtom = scene.atoms.first { it.atom.species.symbol == "Cs" }
+        assertEquals(csColor, csAtom.material.argb)
+
+        // UNICOLOR mode: both halves use the uniform bond color, untouched.
+        val unicolor = CrystalRenderSceneFactory.build(
+            analysis = analysis,
+            appearance = ViewerAppearance(bondColorMode = BondColorMode.UNICOLOR, uniformBondArgb = 0xFF9A90A0),
+            renderConfiguration = RenderConfiguration(),
+        )
+        unicolor.bonds.forEach {
+            assertEquals(0xFF9A90A0L, it.startMaterial.argb)
+            assertEquals(0xFF9A90A0L, it.endMaterial.argb)
+        }
+    }
+
+    @Test
     fun hbondBondsGetFixedGrayTranslucentAppearance() {
         // H and F with an hbond rule — scene must override radius, start/end material.
         val structure = CrystalStructure(
@@ -161,7 +203,7 @@ class CrystalSceneBuilderTest {
 
     @Test
     fun boundaryImageCoincidingWithPrimaryIsDeduplicated() {
-        // Regression (v0.8.13): two-overlapping-atoms at cell faces/corners. A shell atom whose
+        // Regression (v0.7.0): two-overlapping-atoms at cell faces/corners. A shell atom whose
         // cartesian position coincides exactly with a primary atom is a periodic duplicate and
         // must not be emitted — only the primary AtomInstance stays at that position.
         val structure = structure()
@@ -186,7 +228,7 @@ class CrystalSceneBuilderTest {
 
     @Test
     fun pureBoundaryImageGroupRendersLikeInCellGroup() {
-        // Regression (v0.8.15): a gathered group whose members are ALL shell atoms (e.g. the +z
+        // Regression (v0.7.0): a gathered group whose members are ALL shell atoms (e.g. the +z
         // boundary images of a face position like (0,0,1)) must render the SAME pie as the
         // in-cell group — boundary positions look identical to (0,0,0), per user requirement.
         val structure = structure() // cubic, c = 4.0

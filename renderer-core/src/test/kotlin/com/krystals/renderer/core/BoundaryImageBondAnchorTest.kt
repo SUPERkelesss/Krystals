@@ -17,7 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * v0.8.42: boundary-image atoms (the periodic images displayed on the cell faces, e.g.
+ * v0.7.0: boundary-image atoms (the periodic images displayed on the cell faces, e.g.
  * (1,0,0) / (0,0,1)) must keep their bonds — every displayed atom that participates in the
  * bond network must be attached to at least one visible bond, and in fact to ALL of them
  * (no heteronuclear dedup). Same-atom periodic self-images (Ca-Ca) are never rendered.
@@ -67,7 +67,7 @@ class BoundaryImageBondAnchorTest {
         // CaC2 with METALS_ONLY-style extension (Ca-Ca extendAtoB=true, like the app's default):
         // the outer-shell Ca images beyond the cell must NOT be displayed — they are same-atom
         // periodic self-images of the extended metal bond, not atoms the extension reaches
-        // (v0.8.44). Reached outer-shell C atoms are still allowed.
+        // (v0.7.0). Reached outer-shell C atoms are still allowed.
         val structure = CrystalStructure(
             blockName = "cac2",
             lattice = Lattice(3.86859720, 3.86859720, 6.40422248, 90.0, 90.0, 90.0),

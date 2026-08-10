@@ -63,19 +63,25 @@ internal data class RendererPerformanceSnapshot(
     val depthPointsEvaluated: Int,
 )
 
+internal const val FIXED_AMBIENT_OCCLUSION_INTENSITY = 0.60f
+
 /** Single owner for Filament engine, surface, scene, resources and frame scheduling. */
-/** Export render size per quality tier. LOW = live viewport. HIGH = 2x supersampling,
- *  fitted inside a 2560px long edge without changing the viewport aspect ratio. */
+/** Export render size per quality tier. LOW = live viewport. HIGH = 4x supersampling,
+ *  fitted inside a 4096px long edge without changing the viewport aspect ratio. */
 fun exportRenderSize(viewportWidth: Int, viewportHeight: Int, high: Boolean): Pair<Int, Int> {
     val floor = 512
     if (!high) return viewportWidth.coerceIn(floor, 4096) to viewportHeight.coerceIn(floor, 4096)
     val sourceWidth = viewportWidth.coerceAtLeast(1)
     val sourceHeight = viewportHeight.coerceAtLeast(1)
-    val desiredScale = 2.0
-    val edgeScale = 2560.0 / maxOf(sourceWidth, sourceHeight).toDouble()
+    val desiredScale = 4.0
+    val edgeScale = 4096.0 / maxOf(sourceWidth, sourceHeight).toDouble()
     val scale = minOf(desiredScale, edgeScale)
     return maxOf(1, (sourceWidth * scale).toInt()) to maxOf(1, (sourceHeight * scale).toInt())
 }
+
+internal fun exportSwapChainFlags(srgbSupported: Boolean): Long =
+    SwapChainFlags.CONFIG_READABLE or
+        if (srgbSupported) SwapChainFlags.CONFIG_SRGB_COLORSPACE else 0L
 
 internal fun rgbaBytesToArgb(pixels: ByteBuffer, pixelCount: Int): IntArray {
     require(pixelCount >= 0 && pixels.remaining() >= pixelCount * 4)
@@ -100,7 +106,7 @@ internal fun rgbaBytesToArgb(pixels: ByteBuffer, pixelCount: Int): IntArray {
     return argb
 }
 
-/** Per v0.8.43 (issue #9): hard timeout for one offscreen pixel readback. If the Filament
+/** Per v0.7.0 (issue #9): hard timeout for one offscreen pixel readback. If the Filament
  *  readPixels callback never fires (GPU hang / renderer death), the export coroutine
  *  resumes with null instead of suspending forever. */
 private const val EXPORT_TIMEOUT_MS = 12_000L
@@ -125,14 +131,14 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private var interaction = InteractionState()
     private var frameScheduled = false
     private val frameBudget = DirtyFrameBudget()
-    // Per v0.8.25: while the app is in the background (ON_STOP) frame scheduling is paused —
+    // Per v0.7.0: while the app is in the background (ON_STOP) frame scheduling is paused —
     // the surface may still exist (lock screen, split view) and without this the renderer
     // would keep drawing frames on any pending request, wasting GPU/battery.
     private val paused = AtomicBoolean(false)
     private var sceneRadius = 10.0
     private var sceneCenter = Vec3.ZERO
     private var lastCameraPosition = Vec3.ZERO
-    private var lastCameraUp = Vec3(0.0, 1.0, 0.0)  // Per v0.8.11: camera local +Y in world
+    private var lastCameraUp = Vec3(0.0, 1.0, 0.0)  // Per v0.7.0: camera local +Y in world
     private var sceneBounds: SceneBounds? = null
     private var allSceneBounds: SceneBounds? = null
     private var bondValenceBySite: Map<String, Double> = emptyMap()
@@ -151,31 +157,28 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         view = engine.createView()
         cameraEntity = EntityManager.get().create()
         camera = engine.createCamera(cameraEntity)
-        // v0.8.18: atoms are lit (PBR) materials, so the scene needs a real light. The
+        // Atoms are lit (PBR) materials, so the scene needs a real light. The
         // directional light is anchored to the camera (view-space fixed direction) and a
-        // small constant indirect light prevents the unlit side from going pure black.
+        // constant indirect light prevents the unlit side from going pure black.
         lightEntity = EntityManager.get().create()
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
             .castLight(true)
             .castShadows(false)
             .build(engine, lightEntity)
         filamentScene.addEntity(lightEntity)
-        // v0.8.29: light model = ambient 60% + sun 40%. The IndirectLight carries the
-        // ambient share; the directional LightManager light carries the sun share. Both
-        // intensities are refreshed in updateLightingAndDepth from the world light.
-        // v0.8.30: irradiance SH coefficient raised 0.5 -> 0.8 so the ambient term
-        // actually fills the shadow side of lit atoms (user: "most of the ball is in
-        // shadow").
-        // v0.8.42: ambient re-enabled at 50% share (was 60% before the temp sun-only
-        // debug). The directional LightManager light carries the other 50%.
+        // Scene light model: WorldLight.AMBIENT_RATIO (50%) ambient carried by the
+        // IndirectLight + WorldLight.SUN_RATIO (50%) sun carried by the directional
+        // light. Both intensities are refreshed in updateLightingAndDepth from the
+        // world light. The 0.8 SH irradiance fills the shadow side of lit atoms.
         indirectLight = IndirectLight.Builder()
             .irradiance(1, floatArrayOf(0.8f, 0.8f, 0.8f))
-            .intensity(WorldLight.AMBIENT_RATIO * 90_000f)
+            .intensity(ambientLightIntensityLux())
             .build(engine)
         filamentScene.indirectLight = indirectLight
         view.scene = filamentScene
         view.camera = camera
         view.setPostProcessingEnabled(false)
+        configureAmbientOcclusion()
         meshUploader = MeshUploader(engine)
         materialFactory = MaterialFactory(appContext, engine)
         gpuInstances = GpuInstanceManager(engine, filamentScene, meshUploader, materialFactory)
@@ -186,7 +189,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         detachInternal()
         require(surface.isValid) { "Filament surface is not valid" }
         // Request an sRGB swap chain so that linear clear colors and material outputs are
-        // correctly encoded to the display color space, matching the Legacy backend.
+        // correctly encoded to the display color space, matching offscreen export.
         val flags = if (SwapChain.isSRGBSwapChainSupported(engine)) SwapChainFlags.CONFIG_SRGB_COLORSPACE else 0L
         swapChain = engine.createSwapChain(surface, flags)
         requestFrames(3)
@@ -196,7 +199,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
 
     override fun submit(scene: RenderScene) {
         checkOpen()
-        // v0.8.22: bond radius is applied as-is (the old 0.5× Filament scaling was
+        // v0.7.0: bond radius is applied as-is (the old 0.5× Filament scaling was
         // removed; the UI slider max/default were halved to compensate).
         if (submittedScene === scene) return
         submittedScene = scene
@@ -211,7 +214,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         updateClearColor(scene)
         updateLightingAndDepth()
         updateCamera()
-        // v0.8.25: one redundant frame is enough on scene submit (the visible frame plus a
+        // v0.7.0: one redundant frame is enough on scene submit (the visible frame plus a
         // single follow-up); the previous 3-frame burst was unnecessary GPU work.
         requestFrames(2)
     }
@@ -277,7 +280,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         require(msaaSamples == 1) { "offscreen export does not support MSAA" }
         if (closed.get() || submittedScene == null) return null
         return suspendCoroutine { continuation ->
-            // Per v0.8.43 (issue #9): every resume goes through this flag — a double resume
+            // Per v0.7.0 (issue #9): every resume goes through this flag — a double resume
             // would throw IllegalStateException. The 12 s timeout also guarantees the caller
             // is resumed even when the readback callback never fires (GPU hang / renderer
             // death), which previously suspended the export coroutine forever.
@@ -319,7 +322,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                     exportSwapChain = engine.createSwapChain(
                         actualWidth,
                         actualHeight,
-                        SwapChainFlags.CONFIG_READABLE,
+                        exportSwapChainFlags(SwapChain.isSRGBSwapChainSupported(engine)),
                     )
                     view.renderTarget = null
                     view.viewport = Viewport(0, 0, actualWidth, actualHeight)
@@ -468,17 +471,17 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         val eye = target + worldFromCamera * Vec3(0.0, 0.0, max(50.0, sceneRadius * 4.0))
         lastCameraPosition = eye
         val up = worldFromCamera * Vec3(0.0, 1.0, 0.0)
-        lastCameraUp = up  // Per v0.8.11: for billboard roll anchoring
+        lastCameraUp = up  // Per v0.7.0: for billboard roll anchoring
         camera.lookAt(eye.x, eye.y, eye.z, target.x, target.y, target.z, up.x, up.y, up.z)
     }
 
     private fun updateLightingAndDepth() {
         val scene = submittedScene ?: return
-        // v0.8.19: viewSpaceLightDirection is surface-to-light (shader NdotL term);
-        // LightManager.setDirection wants the light TRAVEL direction (opposite sign),
-        // in world space, camera-anchored.
+        // Filament uses the opposite screen-plane sign from the custom shader while
+        // retaining +Z for this camera setup; worldLightManagerDirection applies that
+        // device-calibrated conversion.
         val light = scene.environment.worldLight
-        val worldDir = worldLightTravelDirection(
+        val worldDir = worldLightManagerDirection(
             light.azimuthDegrees,
             light.elevationDegrees,
             interaction.session.camera.rotation,
@@ -490,15 +493,14 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
             worldDir.y.toFloat(),
             worldDir.z.toFloat(),
         )
-        // v0.8.29: the sun carries 40% of the total light; the ambient 60% lives on the
-        // IndirectLight. With post-processing disabled (no tone mapping) this stays well
-        // below noon-sun so the PBR highlight never clips to pure white.
+        // The sun carries SUN_RATIO (50%) of the total light; the ambient share lives on
+        // the IndirectLight. With post-processing disabled (no tone mapping) this stays
+        // well below noon-sun so the PBR highlight never clips to pure white.
         engine.lightManager.setIntensity(
             lightInstance,
             worldLightIntensityLux(light.intensity) * WorldLight.SUN_RATIO,
         )
-        // v0.8.42: ambient re-enabled at 50% share.
-        indirectLight.setIntensity(WorldLight.AMBIENT_RATIO * 90_000f * light.intensity.coerceAtLeast(0.25f))
+        indirectLight.setIntensity(ambientLightIntensityLux())
         // Depth-cueing range is derived from the visible-atoms AABB, not the preloaded
         // neighbor-cell shell. +3 maps to the nearest visible corner, -3 to the farthest.
         val visibleBounds = scene.visibleBounds()
@@ -519,213 +521,19 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         }
     }
 
-    private fun composeOverlay(bitmap: Bitmap) {
-        val scene = submittedScene ?: return
-        val atoms = scene.atoms.associateBy { it.atom.id }
-        if (atoms.isEmpty()) return
-        val state = interaction.document
-        val cameraState = interaction.session.camera
-        val projection = scene.sceneProjection(cameraState, bitmap.width, bitmap.height)
-        fun project(id: Long): Pair<Float, Float>? {
-            val atom = atoms[id]?.atom ?: return null
-            val (px, py) = projection.project(atom.cartesianCoordinate.toVec3())
-            return px.toFloat() to py.toFloat()
-        }
-        val canvas = Canvas(bitmap)
-        val scale = (bitmap.width / 1080f).coerceIn(0.5f, 1.0f)
-        val measurementPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = 48f * scale
-            setShadowLayer(5f * scale, scale, scale, Color.BLACK)
-        }
-        val measurements = buildList {
-            state.lockedMeasurements.forEach { add(it to true) }
-            if (state.measurementMode != MeasurementMode.NONE && state.selection.selectedAtomIds.isNotEmpty()) {
-                add(com.krystals.interaction.measure.MeasurementSelection(state.selection.selectedAtomIds, state.measurementMode) to false)
-            }
-        }
-        measurements.forEach { (selection, locked) ->
-            val expected = when (selection.mode) {
-                MeasurementMode.LENGTH -> 2
-                MeasurementMode.ANGLE -> 3
-                MeasurementMode.DIHEDRAL -> 4
-                else -> 0
-            }
-            if (expected == 0 || selection.atomIds.size < expected) return@forEach
-            val selectedIds = selection.atomIds.takeLast(expected)
-            val coordinates = selectedIds.mapNotNull { atoms[it]?.atom?.cartesianCoordinate?.toVec3() }
-            val projected = selectedIds.mapNotNull(::project)
-            if (coordinates.size != expected || projected.size != expected) return@forEach
-            // Per v0.6: dihedral plane gradient overlay (matches Legacy renderer's LinearGradient).
-            if (selection.mode == MeasurementMode.DIHEDRAL) {
-                DihedralTool.planes(coordinates[0], coordinates[1], coordinates[2], coordinates[3]).forEach { plane ->
-                    val sv = plane.vertices.map { v ->
-                        val (px, py) = projection.project(v)
-                        px.toFloat() to py.toFloat()
-                    }
-                    if (sv.size == 4) {
-                        val path = Path().apply { moveTo(sv[0].first, sv[0].second); sv.drop(1).forEach { lineTo(it.first, it.second) }; close() }
-                        val shader = LinearGradient(sv[0].first, sv[0].second, sv[3].first, sv[3].second,
-                            intArrayOf(Color.argb(112, 150, 95, 205), Color.argb(56, 128, 72, 180), Color.TRANSPARENT),
-                            null, Shader.TileMode.CLAMP)
-                        canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.shader = shader })
-                    }
-                }
-            }
-            val label = when (selection.mode) {
-                MeasurementMode.LENGTH -> "%.4f \u00C5".format(DistanceTool.calculate(coordinates[0], coordinates[1]))
-                MeasurementMode.ANGLE -> "%.3f\u00B0".format(AngleTool.calculate(coordinates[0], coordinates[1], coordinates[2]))
-                MeasurementMode.DIHEDRAL -> "%.3f\u00B0".format(DihedralTool.calculate(coordinates[0], coordinates[1], coordinates[2], coordinates[3]))
-                else -> return@forEach
-            }
-            val anchorX = projected.map { it.first }.average().toFloat()
-            val anchorY = projected.map { it.second }.average().toFloat()
-            val bounds = android.graphics.Rect()
-            measurementPaint.getTextBounds(label, 0, label.length, bounds)
-            val pad = 16f * scale
-            val left = anchorX + 12f * scale - pad
-            val top = anchorY - 12f * scale - bounds.height() - pad
-            val panel = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = if (locked) Color.argb(209, 153, 102, 204) else Color.argb(166, 0, 0, 0)
-            }
-            canvas.drawRoundRect(left, top, anchorX + 12f * scale + bounds.width() + pad, anchorY - 12f * scale + pad, 14f * scale, 14f * scale, panel)
-            canvas.drawText(label, anchorX + 12f * scale, anchorY - 12f * scale, measurementPaint)
-        }
-        val inspectionIds = state.inspection.lockedInspectedAtomIds + listOfNotNull(state.inspection.inspectedAtomId).filterNot { it in state.inspection.lockedInspectedAtomIds }
-        val infoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = 40f * scale
-            setShadowLayer(5f * scale, scale, scale, Color.BLACK)
-        }
-        inspectionIds.forEach { id ->
-            val atomInstance = atoms[id] ?: return@forEach
-            val atom = atomInstance.atom
-            val anchor = project(id) ?: return@forEach
-            val locked = id in state.inspection.lockedInspectedAtomIds
-            // Per v0.6.5: find co-located atoms (same fractional coordinate) and display them stacked.
-            val coLocated = scene.atoms.filter { it.atom.id != atom.id && it.atom.fractionalCoordinate == atom.fractionalCoordinate }
-            val allAtoms = listOf(atom) + coLocated.map { it.atom }
-            val atomBlocks = allAtoms.map { a ->
-                val bvs = bondValenceBySite[a.siteId]?.let { "  s = %.2f".format(it) }.orEmpty()
-                val fractional = a.fractionalCoordinate
-                listOf(
-                    "${a.species.symbol}  ${a.siteLabel}  occ ${a.occupancy}$bvs",
-                    "(${fractional.x.formatFract()}, ${fractional.y.formatFract()}, ${fractional.z.formatFract()})",
-                )
-            }
-            val allLines = atomBlocks.flatMapIndexed { i, block ->
-                if (i > 0) listOf("---") + block else block
-            }
-            val lineHeight = infoPaint.fontMetrics.run { descent - ascent }
-            val dividerHeight = lineHeight * 0.3f
-            val maxWidth = allLines.maxOf(infoPaint::measureText)
-            val pad = 16f * scale
-            val atomRadius = projection.screenRadius(atomInstance.radius).toFloat()
-            val totalHeight = allLines.size * lineHeight + (atomBlocks.size - 1) * dividerHeight
-            val left = anchor.first + atomRadius + 14f * scale
-            val top = anchor.second - atomRadius - 14f * scale - totalHeight - pad
-            val bottom = anchor.second - atomRadius - 14f * scale + pad
-            val panel = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = if (locked) Color.argb(209, 153, 102, 204) else Color.argb(166, 0, 0, 0)
-            }
-            canvas.drawRoundRect(left, top, left + maxWidth + pad * 2f, bottom, 14f * scale, 14f * scale, panel)
-            var currentY = top + pad + lineHeight - infoPaint.fontMetrics.descent
-            allLines.forEach { line ->
-                canvas.drawText(line, left + pad, currentY, infoPaint)
-                currentY += if (line == "---") dividerHeight + lineHeight else lineHeight
-            }
-        }
-        // Selection rings follow Filament's visual sphere radius (world radius × screen scale)
-        // without Legacy's pixel clamp, so exported rings hug the rendered sphere at any zoom.
-        val lockedIds = state.lockedMeasurements.flatMap { it.atomIds }.toSet() + state.inspection.lockedInspectedAtomIds
-        val highlightedIds = state.selection.selectedAtomIds.toSet() + lockedIds + listOfNotNull(state.inspection.inspectedAtomId)
-        val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-        highlightedIds.forEach { id ->
-            val atomInstance = atoms[id] ?: return@forEach
-            val anchor = project(id) ?: return@forEach
-            val isLocked = id in lockedIds
-            ringPaint.color = if (isLocked) SelectionColors.LOCKED_ARGB.toInt() else SelectionColors.SELECTED_ARGB.toInt()
-            ringPaint.strokeWidth = (if (isLocked) 6f else 5f) * scale
-            val r = projection.screenRadius(atomInstance.radius).toFloat()
-            canvas.drawCircle(anchor.first, anchor.second, r + 4f * scale, ringPaint)
-        }
-        if (scene.environment.axes.visible) drawAxesOverlay(canvas, scene, bitmap.width, bitmap.height, scale)
+    private fun configureAmbientOcclusion() {
+        view.setAmbientOcclusionOptions(View.AmbientOcclusionOptions().apply {
+            aoType = View.AmbientOcclusionOptions.AmbientOcclusionType.SAO
+            enabled = true
+            intensity = FIXED_AMBIENT_OCCLUSION_INTENSITY
+            radius = 0.5f
+            bias = 0.01f
+            resolution = 0.5f
+            quality = View.QualityLevel.MEDIUM
+            lowPassFilter = View.QualityLevel.MEDIUM
+            upsampling = View.QualityLevel.MEDIUM
+        })
     }
-
-    private fun drawAxesOverlay(canvas: Canvas, scene: RenderScene, width: Int, height: Int, scale: Float) {
-        val matrix = scene.structure.lattice.matrix
-        val directions = when (scene.environment.axes.mode) {
-            AxisMode.ABC -> listOf(matrix.a, matrix.b, matrix.c)
-            AxisMode.XYZ -> listOf(Vec3(1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0))
-        }
-        val labels = if (scene.environment.axes.mode == AxisMode.ABC) listOf("a", "b", "c") else listOf("X", "Y", "Z")
-        val colors = intArrayOf(0xFFE57373.toInt(), 0xFF81C784.toInt(), 0xFF64B5F6.toInt())
-    val originX = width * scene.environment.axes.offsetX + 28f * scale
-    val originY = height * scene.environment.axes.offsetY + 40f * scale - 75f * scale
-        val maxArrowLength = 75f * scale
-        val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = 30f * scale
-            clearShadowLayer()
-        }
-        // Pre-compute rotated directions for depth sorting.
-        val rotatedDirs = directions.mapIndexed { index, direction ->
-            val rotated = interaction.session.camera.rotation * direction.normalized()
-            Triple(index, direction, rotated)
-        }
-        fun drawArrow(index: Int, direction: Vec3, rotated: Vec3) {
-            val dx = rotated.x.toFloat()
-            val dy = -rotated.y.toFloat()
-            val projectedLength = kotlin.math.sqrt(dx * dx + dy * dy)
-            val visibleLength = maxArrowLength * projectedLength
-            val ux = if (projectedLength > 0.0001f) dx / projectedLength else 0f
-            val uy = if (projectedLength > 0.0001f) dy / projectedLength else 0f
-            // Arrow starts 12f from center along the arrow direction.
-            val hubR = 12f * scale
-            val startX = originX + ux * hubR
-            val startY = originY + uy * hubR
-            val tipX = originX + ux * (hubR + visibleLength)
-            val tipY = originY + uy * (hubR + visibleLength)
-            val headLength = 14f * scale
-            val baseX = tipX - ux * headLength
-            val baseY = tipY - uy * headLength
-            val shaft = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colors[index]; strokeWidth = 5f * scale; strokeCap = Paint.Cap.ROUND }
-            canvas.drawLine(startX, startY, baseX, baseY, shaft)
-            val perpendicularX = -uy
-            val perpendicularY = ux
-            val halfHead = headLength * 0.6f
-            val arrow = Path().apply {
-                moveTo(tipX, tipY)
-                lineTo(baseX + perpendicularX * halfHead, baseY + perpendicularY * halfHead)
-                lineTo(baseX - perpendicularX * halfHead, baseY - perpendicularY * halfHead)
-                close()
-            }
-            canvas.drawPath(arrow, shaft)
-            labelPaint.color = colors[index]
-            canvas.drawText(labels[index], tipX + 4f * scale, tipY - 4f * scale, labelPaint)
-        }
-        // Draw back arrows (pointing away from viewer) first so the center sphere
-        // correctly occludes them.
-        rotatedDirs.filter { it.third.z <= 0.0 }.forEach { (index, direction, rotated) ->
-            drawArrow(index, direction, rotated)
-        }
-        // Per v0.6.3: gray sphere at the origin (vertex of the three arrows).
-        val light = scene.environment.worldLight
-        val theta = light.azimuthDegrees / 180f * PI.toFloat()
-        val phi = light.elevationDegrees / 180f * PI.toFloat()
-        val hubRadius = 12f * scale
-        val highlightX = originX + (cos(phi) * cos(theta) * hubRadius * 0.375f)
-        val highlightY = originY - (cos(phi) * sin(theta) * hubRadius * 0.375f)
-        val centerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = RadialGradient(highlightX, highlightY, hubRadius, intArrayOf(0xFFE0E0E0.toInt(), 0xFF68686F.toInt()), null, Shader.TileMode.CLAMP)
-        }
-        canvas.drawCircle(originX, originY, hubRadius, centerPaint)
-        // Draw front arrows (pointing toward the viewer) on top of the sphere.
-        rotatedDirs.filter { it.third.z > 0.0 }.forEach { (index, direction, rotated) ->
-            drawArrow(index, direction, rotated)
-        }
-    }
-
-    private fun Double.formatFract() = "%.4f".format(this)
 
     private fun updateClearColor(scene: RenderScene) {
         renderer.clearOptions = Renderer.ClearOptions().apply {

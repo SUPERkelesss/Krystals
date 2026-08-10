@@ -1,10 +1,7 @@
 material {
-    name : KrystalsAtomTransparent,
+    name : KrystalsAtomPie,
     shadingModel : lit,
-    blending : transparent,
-    depthWrite : true,
-    doubleSided : true,
-    transparency : twoPassesOneSide,
+    blending : opaque,
     requires : [ tangents ],
     variables : [ customNormal ],
     parameters : [
@@ -17,24 +14,33 @@ material {
         { type : float3, name : lightDirection },
         { type : float, name : highlightIntensity },
         { type : float, name : highlightRadius },
-        { type : float, name : roughness }
+        { type : float, name : roughness },
+        { type : float4[8], name : segments }
     ]
 }
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        vec4 color = materialParams.baseColor;
+        vec3 worldN = normalize(variable_customNormal.xyz);
+        vec3 viewN = normalize(mat3(getViewFromWorldMatrix()) * worldN);
+        // Pie sectors, twelve o'clock clockwise: each segment ends at seg.a (cumulative
+        // fraction), the first matching segment supplies its element color.
+        float a = fract(atan(viewN.x, viewN.y) / 6.28318530 + 1.0);
+        vec3 col = materialParams.baseColor.rgb;
+        for (int i = 0; i < 8; i++) {
+            vec4 seg = materialParams.segments[i];
+            if (seg.a > 0.001 && a < seg.a) { col = seg.rgb; break; }
+        }
+        // Missing occupancy share: solid wedge of 30% pie color / 70% background.
+        float occupied = step(a, clamp(materialParams.occupancy, 0.0, 1.0));
+        vec3 missingColor = mix(col, materialParams.backgroundColor, 0.80);
+        col = mix(missingColor, col, occupied);
+        vec4 color = vec4(col, materialParams.baseColor.a);
         // Depth cueing: fade toward the background color with view-space depth.
         float viewDepth = (getViewFromWorldMatrix() * vec4(getWorldPosition(), 1.0)).z;
         float divisor = max(materialParams.depthRange.x - materialParams.depthRange.y, 0.0001);
         float fog = materialParams.depthCueEnabled * clamp((materialParams.depthRange.x - viewDepth) / divisor, 0.0, 1.0);
         color.rgb = mix(color.rgb, materialParams.backgroundColor, fog);
-        // Occupancy sector cutout: fade the wedge past the occupancy fraction,
-        // measured clockwise from twelve o'clock on the view-space normal.
-        vec3 worldN = normalize(variable_customNormal.xyz);
-        vec3 viewN = normalize(mat3(getViewFromWorldMatrix()) * worldN);
-        float clockwiseFromTwelve = fract(atan(viewN.x, viewN.y) / 6.28318530 + 1.0);
-        color.a *= mix(0.15, 1.0, step(clockwiseFromTwelve, clamp(materialParams.occupancy, 0.0, 1.0)));
         material.baseColor = color;
         vec3 L = normalize(materialParams.lightDirection);
         vec3 H = normalize(L + vec3(0.0, 0.0, -1.0));
@@ -44,7 +50,7 @@ fragment {
         float rim = pow(clamp(1.0 - max(-viewN.z, 0.0), 0.0, 1.0), mix(12.0, 2.5, spread))
             * sqrt(NdotL);
         float highlight = clamp(materialParams.reflectionEnabled * materialParams.highlightIntensity
-            * (0.68 * spot + 0.32 * rim) * color.a * (1.0 - fog), 0.0, 0.82);
+            * (0.68 * spot + 0.32 * rim) * (1.0 - fog), 0.0, 0.82);
         vec3 atomColor = color.rgb * (0.72 + 0.18 * materialParams.highlightIntensity * NdotL);
         material.baseColor = vec4(0.0, 0.0, 0.0, color.a);
         material.emissive = vec4(mix(atomColor, vec3(0.98), highlight), 0.0);

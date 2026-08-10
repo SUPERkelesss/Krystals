@@ -244,7 +244,7 @@ object CrystalImageExporter {
         // Per v0.3.41: boundary images are displayed by default; only external shell atoms remain
         // hidden unless a bond rule opts in to "extend across cell".
         val visibleExternalShellAtomIds = mutableSetOf<Long>()
-        // Per v0.8.1: build an id→atom map once so the bond loop below is O(bonds) instead of the
+        // Per v0.7.0: build an id→atom map once so the bond loop below is O(bonds) instead of the
         // previous O(bonds × atoms) linear scan per endpoint.
         val atomById = snapshot.atoms.associateBy { it.id }
         if (visibility.showBonds) {
@@ -319,14 +319,14 @@ object CrystalImageExporter {
                 )
             }
         }
-        // Per v0.8.2: gathered-atom groups rendered as pie-chart spheres.
+        // Per v0.7.0: gathered-atom groups rendered as pie-chart spheres.
         val groupByMemberId = GatheredAtomGrouper.groupByAtomId(snapshot.atoms, linkedMapOf())
 
         val renderables = buildList<RenderPrimitive> {
             addAll(dihedralPlanes)
             sceneGathered.forEach { gInst ->
                 val g = gInst.gathered
-                // Per v0.8.9: must subtract center like atom projection (L283).
+                // Per v0.7.0: must subtract center like atom projection (L283).
                 val depth = legacyCameraDepth(controller.rotation * (g.center - center))
                 val screen = screen(controller.rotation * (g.center - center))
                 val r = ((gInst.radius * scale).coerceIn(9.0, 84.0)).toFloat()
@@ -339,14 +339,14 @@ object CrystalImageExporter {
                 snapshot.bonds.forEach { bond ->
                     val a = byId[bond.atomA] ?: return@forEach
                     val b = byId[bond.atomB] ?: return@forEach
-                    // Per v0.8.8: skip radius clip for gathered group endpoints.
+                    // Per v0.7.0: skip radius clip for gathered group endpoints.
                     val ca = if (bond.atomA in groupByMemberId) a.copy(radius = 0f) else a
                     val cb = if (bond.atomB in groupByMemberId) b.copy(radius = 0f) else b
                     if (bond.rule.key in visibility.hiddenBondPairs) return@forEach
                     val externalBond = b.isExternalShell
                     if (externalBond && !bond.rule.shouldExtendAcrossCell(ca.siteId, true)) return@forEach
                     val width = (appearance.bondRadius * scale * 0.65f).coerceIn(3f, 32f)
-                    // Per v0.8.1: H-bonds are a single gray dotted line (no split-cylinder).
+                    // Per v0.7.0: H-bonds are a single gray dotted line (no split-cylinder).
                     if (bond.rule.isHBond) {
                         add(BondPrimitive(ca, cb, width, isHBond = true))
                     } else {
@@ -587,7 +587,7 @@ private fun drawBond(canvas: Canvas, a: Point, b: Point, width: Float, isHBond: 
         val clippedDx = endX - startX
         val clippedDy = endY - startY
         if (sqrt(clippedDx * clippedDx + clippedDy * clippedDy) < 0.001f) return
-        // Per v0.8.1: H-bonds are drawn as a single gray dotted line instead of split cylinders.
+        // Per v0.7.0: H-bonds are drawn as a single gray dotted line instead of split cylinders.
         if (isHBond) {
             val paint = android.graphics.Paint().apply {
                 color = android.graphics.Color.GRAY
@@ -953,7 +953,7 @@ val ez = if (useExpansion) snapshot.expansion.z else 1
 
     private fun drawAtomInfo(canvas: Canvas, points: List<Point>, inspectedAtomId: Long?, locked: Boolean, bondValenceBySite: Map<String, Double> = emptyMap(), gatheredMemberIds: List<Long> = emptyList()) {
         val label: String; val anchorX: Float; val anchorY: Float; val anchorR: Float
-        // Per v0.8.2: gathered group info window — up to 3 member sites, "---" separated.
+        // Per v0.7.0: gathered group info window — up to 3 member sites, "---" separated.
         if (gatheredMemberIds.isNotEmpty()) {
             val members = gatheredMemberIds.mapNotNull { id -> points.firstOrNull { it.atomId == id } }
             val first = members.firstOrNull() ?: return

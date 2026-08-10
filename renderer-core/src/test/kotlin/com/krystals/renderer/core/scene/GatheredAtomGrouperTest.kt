@@ -97,6 +97,16 @@ class GatheredAtomGrouperTest {
     }
 
     @Test
+    fun groupWithIndexReturnsTheSameGroupInstances() {
+        val atoms = listOf(atom(1L, "A1", 0.0, 0.0, 0.0), atom(2L, "A2", 0.0, 0.0, 0.0))
+        val result = GatheredAtomGrouper.groupWithIndex(atoms, emptyMap())
+
+        val group = result.groups.single()
+        assertTrue(result.byMemberId[1L] === group)
+        assertTrue(result.byMemberId[2L] === group)
+    }
+
+    @Test
     fun singleAtomAtPositionDoesNotFormGroup() {
         val atoms = listOf(atom(1L, "A1", 0.5, 0.0, 0.0))
         val groups = GatheredAtomGrouper.group(atoms, emptyMap())
