@@ -436,6 +436,9 @@ fun KrystalsRoot(
         // computing → skip (the original single-flight semantics, per tab).
         val targetTab = viewModel.current ?: return
         if (targetTab.id in computingTabIds) return
+        // Per v0.8.x: captured inside the gate lambda below; read after the computation in
+        // result.onSuccess to sync the radius-source indicator with the effective source.
+        var smartIonicResult: BondValence.SmartIonicResult? = null
         debugLog(CIF_OPEN_TAG) { "BondCompute: tab ${targetTab.id} enqueued (${computingTabIds.size} in flight)" }
         computingTabIds += targetTab.id
         computingCount++
@@ -453,12 +456,15 @@ fun KrystalsRoot(
                             // expanded for the large-cell check) — re-expanding here doubled the
                             // expansion cost on big cells.
                             // Per v0.8.26: dispatch by user-selected bond-rule mode.
-                            when (settingsValues.bondRuleMode) {
-                                BondRuleMode.AUTO -> {
+                            // Per v0.8.x: capture the smart-ionic attempt up front so the radius-source
+                            // indicator can be synced with the effective rule source after the computation
+                            // (AUTO 分流或智能离子失败回退时,提示必须与实际生效来源——键合半径——一致)。
+                            smartIonicResult = when (settingsValues.bondRuleMode) {
+                                BondRuleMode.AUTO ->
                                     if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
-                                        CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null, settingsValues.autoComputeHbonds)
+                                        null
                                     } else {
-                                        val smartIonic = kotlinx.coroutines.withTimeoutOrNull(15000L) {
+                                        kotlinx.coroutines.withTimeoutOrNull(15000L) {
                                             runCatching {
                                                 BondValence.smartIonicRules(
                                                     structure, bondConfiguration, epsilon,
@@ -472,11 +478,9 @@ fun KrystalsRoot(
                                                 )
                                             }.getOrNull()
                                         }
-                                        CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)
                                     }
-                                }
-                                BondRuleMode.SMART_IONIC -> {
-                                    val smartIonic = kotlinx.coroutines.withTimeoutOrNull(15000L) {
+                                BondRuleMode.SMART_IONIC ->
+                                    kotlinx.coroutines.withTimeoutOrNull(15000L) {
                                         runCatching {
                                             BondValence.smartIonicRules(
                                                 structure, bondConfiguration, epsilon,
@@ -485,8 +489,19 @@ fun KrystalsRoot(
                                             )
                                         }.getOrNull()
                                     }
-                                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonic, settingsValues.autoComputeHbonds)
+                                BondRuleMode.BONDING -> null
+                            }
+                            // Per v0.8.26: dispatch by user-selected bond-rule mode.
+                            when (settingsValues.bondRuleMode) {
+                                BondRuleMode.AUTO -> {
+                                    if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) {
+                                        CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, null, settingsValues.autoComputeHbonds)
+                                    } else {
+                                        CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonicResult, settingsValues.autoComputeHbonds)
+                                    }
                                 }
+                                BondRuleMode.SMART_IONIC ->
+                                    CrystalEditor.fromSmartIonicAttempt(structure, bondConfiguration, epsilon, smartIonicResult, settingsValues.autoComputeHbonds)
                                 BondRuleMode.BONDING -> CrystalEditor.rebuildBondRules(structure, bondConfiguration, RadiusSource.BONDING, epsilon, settingsValues.autoComputeHbonds)
                             }
                         }
@@ -519,6 +534,17 @@ fun KrystalsRoot(
                 job?.let { j -> computationJobs -= ActiveComputation(j, targetTab.id, computeStart) }
             }
             result.onSuccess { editResult ->
+                // Per v0.8.x: 模式提示与实际生效来源同步——AUTO 分流/智能离子失败回退都落到键合半径。
+                targetTab.lastRadiusSource = when (settingsValues.bondRuleMode) {
+                    BondRuleMode.BONDING -> RadiusSource.BONDING
+                    BondRuleMode.AUTO ->
+                        if (CrystalEditor.isAllNonMetals(structure) || expandedSize > BondValence.SMART_IONIC_ATOM_LIMIT) RadiusSource.BONDING
+                        else if (smartIonicResult?.success == true) RadiusSource.SMART_IONIC
+                        else RadiusSource.BONDING
+                    BondRuleMode.SMART_IONIC ->
+                        if (smartIonicResult?.success == true) RadiusSource.SMART_IONIC
+                        else RadiusSource.BONDING
+                }
                 // Per v0.8.35: apply the user's default cross-cell bond-extension preference to
                 // every generated rule on open — ALL extends both directions, METALS_ONLY extends
                 // only the metal atom's direction, NEVER extends nothing. (Polyhedra defaults
