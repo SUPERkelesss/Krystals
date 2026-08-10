@@ -80,7 +80,7 @@ data class EditResult(
 )
 
 object CrystalEditor {
-    /** Per v0.8.36: hbond-path neighbour scan radius. Covers the widest hbond window
+    /** Per v0.7.0: hbond-path neighbour scan radius. Covers the widest hbond window
      *  (H + Cl vdW x 0.95 ≈ 2.8 Å) and all covalent windows (≤ ~1.55 Å) with margin. */
     private const val HBOND_NEIGHBOUR_CUTOFF: Double = 3.5
     const val SMART_IONIC_UNAVAILABLE: String = "smart-ionic-unavailable"
@@ -154,12 +154,12 @@ object CrystalEditor {
         is EditCommand.Transform -> transform(structure, bondConfiguration, command.rows, command.translation)
     }
 
-    /** Per v0.8.35: default cross-cell bond-extension mode applied when opening a file. */
+    /** Per v0.7.0: default cross-cell bond-extension mode applied when opening a file. */
     enum class ExtendBondDefaultMode { ALL, METALS_ONLY, NEVER }
 
-    /** Per v0.8.35: set every rule's extendAtoB/extendBtoA per the user's default-extension
+    /** Per v0.7.0: set every rule's extendAtoB/extendBtoA per the user's default-extension
      *  preference: ALL → both directions always extend; NEVER → no direction extends.
-     *  Per v0.8.43: METALS_ONLY → for metal-nonmetal bonds only the metal side extends;
+     *  Per v0.7.0: METALS_ONLY → for metal-nonmetal bonds only the metal side extends;
      *  metal-metal bonds do not extend at all. */
     fun applyExtendPreference(
         structure: CrystalStructure,
@@ -178,7 +178,7 @@ object CrystalEditor {
         }
     }
 
-    /** Per v0.8.43: the metal site ids that participate in at least one metal-NONmetal bond
+    /** Per v0.7.0: the metal site ids that participate in at least one metal-NONmetal bond
      *  rule — the METALS_ONLY scope for the polyhedra default and bond extension. Metal-metal
      *  bonds are excluded, so a metal bonded only to other metals yields no ids here. */
     fun metalNonmetalMetalIds(structure: CrystalStructure, rules: List<BondRule>): Set<String> {
@@ -221,7 +221,7 @@ object CrystalEditor {
         return EditResult(structure, bondConfiguration.copy(rules = filtered))
     }
 
-    /** Per v0.8.7: all-ASU-sites-non-metal structures default to the bonding rule path
+    /** Per v0.7.0: all-ASU-sites-non-metal structures default to the bonding rule path
      *  regardless of cell size (ignoring SMART_IONIC_ATOM_LIMIT). Metals keep the existing
      *  size-gated smart-ionic / bonding fallback logic. */
     fun isAllNonMetals(structure: CrystalStructure): Boolean =
@@ -236,7 +236,7 @@ object CrystalEditor {
     ): EditResult {
         val atoms = SymmetryExpander.expand(structure)
         val sizeGuarded = atoms.size > BondValence.SMART_IONIC_ATOM_LIMIT
-        // Per v0.8.7: all-non-metal structures skip smartIonic entirely.
+        // Per v0.7.0: all-non-metal structures skip smartIonic entirely.
         val useBonding = isAllNonMetals(structure) || sizeGuarded
         var timedOut = false
         val generatedRaw = if (!useBonding && smartIonic != null && smartIonic.success) {
@@ -245,7 +245,7 @@ object CrystalEditor {
             if (!useBonding && smartIonic == null) timedOut = true
             bondingRulesWithHbonds(structure, atoms, bondingRules(structure, epsilon), includeHbonds)
         }
-        // Per v0.8.27: unified hbond gate — any H-bond rules from any source are dropped
+        // Per v0.7.0: unified hbond gate — any H-bond rules from any source are dropped
         // when auto-compute-hbonds is off (belt-and-braces on top of the per-path gate).
         val generated = if (includeHbonds) generatedRaw else generatedRaw.filterNot { it.isHBond }
         val warnings = if (timedOut) listOf(SMART_IONIC_TIMEOUT) else emptyList()
@@ -262,22 +262,22 @@ object CrystalEditor {
         includeHbonds: Boolean = true,
     ): List<BondRule> {
         val atoms = SymmetryExpander.expand(structure)
-        // Per v0.8.7: all-non-metal structures skip smartIonic, go to bonding rules directly.
+        // Per v0.7.0: all-non-metal structures skip smartIonic, go to bonding rules directly.
         if (!isAllNonMetals(structure) && atoms.size <= BondValence.SMART_IONIC_ATOM_LIMIT) {
             val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon, atoms, includeHbonds)
             if (result.success) return result.rules
         }
-        // Per v0.8.6: the bonding-radius fallback path also gets hbond detection.
+        // Per v0.7.0: the bonding-radius fallback path also gets hbond detection.
         val rules = bondingRules(structure, epsilon)
         return bondingRulesWithHbonds(structure, atoms, rules, includeHbonds)
     }
 
-    /** Per v0.8.6: append hbond rules to the bonding-radius rule set.
+    /** Per v0.7.0: append hbond rules to the bonding-radius rule set.
      *  Proton criterion for the bonding path: an expanded H atom whose Voronoi
      *  neighbours within the covalent (bonding-radius) window include exactly
      *  ONE O/N/F/S/P/Cl partner. Site-level rules count every site pair
-     *  (even distant ones), so we use Voronoi distances instead. Per v0.8.16:
-     *  C was added to the proton-partner set (C–H donors qualify); per v0.8.39
+     *  (even distant ones), so we use Voronoi distances instead. Per v0.7.0:
+     *  C was added to the proton-partner set (C–H donors qualify); per v0.7.0
      *  this is reverted — C–H bonds no longer produce hydrogen bonds. */
     private fun bondingRulesWithHbonds(
         structure: CrystalStructure,
@@ -285,30 +285,30 @@ object CrystalEditor {
         rules: List<BondRule>,
         includeHbonds: Boolean = true,
     ): List<BondRule> {
-        // Per v0.8.27: auto-compute-hbonds preference OFF → skip the whole H-bond pass.
-        // Per v0.8.x: hbond generation core lives in [hbondRulesFor]; the hard-coded 0.45
-        // epsilon here keeps the pre-v0.8.x behaviour of this path byte-identical.
+        // Per v0.7.0: auto-compute-hbonds preference OFF → skip the whole H-bond pass.
+        // Per v0.7.0: hbond generation core lives in [hbondRulesFor]; the hard-coded 0.45
+        // epsilon here keeps the pre-v0.7.0 behaviour of this path byte-identical.
         if (!includeHbonds) return rules
         return rules + hbondRulesFor(structure, atoms, rules, 0.45)
     }
 
-    /** Per v0.8.x: bonding-path hbond detection core, shared by [bondingRulesWithHbonds]
+    /** Per v0.7.0: bonding-path hbond detection core, shared by [bondingRulesWithHbonds]
      *  (which passes its freshly generated normal rules) and [rebuildHbondRules] (which
      *  passes the user's existing normal rules). Computes hbond rules for the given
      *  [normalRules] WITHOUT touching them; returns an empty list when no H-bond can form.
      *
-     *  Per v0.8.12: cheap gates BEFORE the distance scan — it is the dominant cost of this
+     *  Per v0.7.0: cheap gates BEFORE the distance scan — it is the dominant cost of this
      *  path and ran unconditionally, so H-free structures or structures without any acceptor
      *  element (O/N/F/S/P/Cl) paid a full periodic scan for nothing.
-     *  Per v0.8.16: the proton-partner set includes C (C–H donors); the H-bond ACCEPTOR set
+     *  Per v0.7.0: the proton-partner set includes C (C–H donors); the H-bond ACCEPTOR set
      *  (what an H-bond points at) is unchanged — C is not a hydrogen-bond acceptor.
-     *  Per v0.8.36: the gate tests the ACCEPTOR set, not the proton-partner set — an H-bond
+     *  Per v0.7.0: the gate tests the ACCEPTOR set, not the proton-partner set — an H-bond
      *  needs an acceptor, so a structure with C–H donors but no O/N/F/S/P/Cl can never form
      *  one and must skip the scan entirely.
-     *  Per v0.8.39: C is removed from the proton-partner set — C–H bonds are not H-bond
+     *  Per v0.7.0: C is removed from the proton-partner set — C–H bonds are not H-bond
      *  donors any more (the acceptor set is untouched, C remains a non-acceptor).
      *
-     *  Per v0.8.36: H neighbours via periodic distance scan instead of a periodic Voronoi
+     *  Per v0.7.0: H neighbours via periodic distance scan instead of a periodic Voronoi
      *  pass. The proton scan and HbondChecking only look at atoms within covalent/hbond
      *  windows (<= ~2.8 AA); any atom inside such a window is necessarily a Voronoi
      *  neighbour of the H (min-image proximity), so the distance scan is equivalent for the
@@ -390,7 +390,7 @@ object CrystalEditor {
         includeHbonds: Boolean = true,
         cancelCheck: (() -> Boolean)? = null,
     ): EditResult {
-        // Per v0.8.7: all-non-metal structures skip smartIonic entirely.
+        // Per v0.7.0: all-non-metal structures skip smartIonic entirely.
         if (source == RadiusSource.SMART_IONIC && !isAllNonMetals(structure)) {
             val result = BondValence.smartIonicRules(structure, bondConfiguration, epsilon, includeHbonds = includeHbonds, cancelCheck = cancelCheck)
             if (result.success) {
@@ -398,7 +398,7 @@ object CrystalEditor {
                 return EditResult(structure, bondConfiguration.copy(rules = filtered))
             }
             val fallback = bondingRules(structure, epsilon)
-            // Per v0.8.6: append hbond rules on the bonding fallback path.
+            // Per v0.7.0: append hbond rules on the bonding fallback path.
             val atoms = SymmetryExpander.expand(structure)
             val withHbonds = bondingRulesWithHbonds(structure, atoms, fallback, includeHbonds)
             val filteredFallback = withHbonds.filter { it.key !in bondConfiguration.disabledPairs }
@@ -430,7 +430,7 @@ object CrystalEditor {
         return EditResult(structure, bondConfiguration.copy(rules = filteredRules))
     }
 
-    /** Per v0.8.x: recompute ONLY the H-bond rules for [source] — existing normal
+    /** Per v0.7.0: recompute ONLY the H-bond rules for [source] — existing normal
      *  (non-H-bond) rules are kept exactly as-is. The normal rules act as the covalent
      *  window input for the bonding/vdW paths; the SMART_IONIC path runs the full
      *  smart-ionic analysis and keeps only its H-bond rules. When that analysis fails
@@ -511,7 +511,7 @@ Vec3(0.0, 0.0, sz.toDouble()),
 // P = R * S (Mat3 stores by columns, so R*S scales R's columns)
 val P = Mat3(R.a * sx.toDouble(), R.b * sy.toDouble(), R.c * sz.toDouble())
 val Pinv = P.inverse()
-// Per v0.8.43 (issue #6): T is added DIRECTLY — the dialog formula R' = XR + T and the
+// Per v0.7.0 (issue #6): T is added DIRECTLY — the dialog formula R' = XR + T and the
 // fallback path (x' = P⁻¹x + T) both treat it as a translation in the new coordinate
 // system. Premultiplying by P⁻¹ scaled it (2×2×1 expansion + T=(0.5,0,0) moved 0.25).
 val tVec = translation.toVec3()
@@ -628,10 +628,10 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         return ensureAutoBondRules(newStructure, BondConfiguration())
     }
 
-    // ── Per v0.8.0: Clear symmetry (P1 fallback) ──────────────────────────────
+    // ── Per v0.7.0: Clear symmetry (P1 fallback) ──────────────────────────────
 
     /**
-     * Per v0.8.0: Remove symmetry by expanding all atoms to their full set, then setting
+     * Per v0.7.0: Remove symmetry by expanding all atoms to their full set, then setting
      * the space group to P1 with identity operations. The lattice is preserved unchanged.
      * Bond rules are regenerated so the displayed bonds remain identical.
      */
@@ -650,15 +650,15 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         // expanded atom (previously a full scan of `expanded` for every atom — O(N²) overall).
         val siteIdCounts = expanded.groupingBy { it.siteId }.eachCount()
         // 2. Create new Site objects from expanded atoms (dedup by position+species).
-        val seen = mutableSetOf<Pair<String, Triple<Double, Double, Double>>>()
+        val seen = mutableSetOf<Triple<String, Long, Triple<Double, Double, Double>>>()
         val labelCounts = HashMap<String, Int>()
         val newSites = expanded.mapNotNull { atom ->
             val fc = atom.fractionalCoordinate
-            val key = atom.species.symbol to Triple(
-                Math.round(fc.x * 1e4) / 1e4,
-                Math.round(fc.y * 1e4) / 1e4,
-                Math.round(fc.z * 1e4) / 1e4,
-            )
+        val key = Triple(atom.species.symbol, atom.occupancy.toBits(), Triple(
+            Math.round(fc.x * 1e4) / 1e4,
+            Math.round(fc.y * 1e4) / 1e4,
+            Math.round(fc.z * 1e4) / 1e4,
+        ))
             if (key in seen) return@mapNotNull null
             seen.add(key)
             val n = labelCounts.getOrDefault(atom.species.symbol, 0) + 1
@@ -683,18 +683,78 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         return ensureAutoBondRules(newStructure, BondConfiguration())
     }
 
-    // ── Per v0.8.0: Primitive ↔ Conventional cell conversion ──────────────────
+    // ── Per v0.7.0: Primitive ↔ Conventional cell conversion ──────────────────
 
     /**
-     * Per v0.8.40: cell conversion is matrix-based via [convertToConventional] /
-     * [convertToPrimitive] (BravaisLatticeData tables). The spglib-first raw-data
-     * path (convertToPrimitiveWithSpglib / convertToConventionalWithSpglib) was
-     * REMOVED: it rebuilt sites with per-species counters under the id prefix
-     * "spg:P" which collided across species (Na1 and Cl1 both "spg:P1" ->
-     * LazyColumn "Key already used" crash) and its species handling was
-     * unreliable. spglib now contributes only the space-group number for
-     * correcting a mislabelled cell; the caller applies the matrix conversion.
+     * Per v0.7.0: rebuild a CrystalStructure from spglib cell data. Used when
+     * the declared space group is unrecognisable: spglib derives the symmetry
+     * from the atomic coordinates, standardizes to conventional, and refines;
+     * this function then maps the result back into Krystals.
+     *
+     * v0.7.0 removed the earlier spglib raw-data path because it built site ids
+     * with per-species counters under the prefix "spg:P" (Na1 and Cl1 both
+     * "spg:P1" -> LazyColumn "Key already used" crash). This rebuild fixes that:
+     * ids are "$symbol$n" (species-qualified, globally unique) and species come
+     * from the spglib atomic numbers via the standard Z->symbol table.
+     *
+     * Symmetry operations come from the resolved space-group catalog (not from
+     * spglib's rotation/translation tables), so downstream expansion/rendering
+     * stays consistent with Krystals' own symmetry implementation. The
+     * asymmetric unit is derived by removing symmetry-equivalent duplicates.
      */
+    fun rebuildFromSpglib(
+        structure: CrystalStructure,
+        cell: SpglibCellData,
+    ): CrystalStructure {
+        // 1. Full-cell sites from spglib positions/numbers, deduped by species+position.
+        val seen = mutableSetOf<Triple<String, Long, Triple<Double, Double, Double>>>()
+        val labelCounts = HashMap<String, Int>()
+        val fullSites = (0 until cell.numbers.size).mapNotNull { i ->
+            // Placeholder species (>= 119, e.g. CIF "X" guest sites) map via
+            // symbolMap; real elements via the standard Z->symbol table.
+            val symbol = cell.symbolMap[cell.numbers[i]]
+                ?: PeriodicTableData.symbols.getOrNull(cell.numbers[i] - 1)
+                ?: return@mapNotNull null
+            val fc = FractionalCoordinate(
+                cell.positions[i * 3], cell.positions[i * 3 + 1], cell.positions[i * 3 + 2],
+            )
+            val occupancy = cell.occupancyMap[cell.numbers[i]] ?: 1.0
+            val key = Triple(symbol, occupancy.toBits(), Triple(
+                Math.round(fc.x * 1e4) / 1e4,
+                Math.round(fc.y * 1e4) / 1e4,
+                Math.round(fc.z * 1e4) / 1e4,
+            ))
+            if (key in seen) return@mapNotNull null
+            seen.add(key)
+            val n = labelCounts.getOrDefault(symbol, 0) + 1
+            labelCounts[symbol] = n
+            Site(
+                id = "$symbol$n",
+                label = "$symbol$n",
+                species = Species(symbol),
+                fractionalCoordinate = fc,
+                occupancy = occupancy,
+            )
+        }
+        // 2. Resolve the space group from the spglib number (fall back to input).
+        val sg = SpaceGroupCatalog.all.getOrNull(cell.spaceGroupNumber - 1) ?: structure.spaceGroup
+        val ops = SpaceGroupCatalog.operations(sg.symbol)
+        // 3. Asymmetric unit: remove symmetry-equivalent duplicates, symmetrize.
+        val asu = findAsymmetricUnit(fullSites, ops).map { site ->
+            site.copy(fractionalCoordinate = symmetrizePosition(site.fractionalCoordinate, ops))
+        }
+        // 4. Rebuild with the refined conventional lattice.
+        return structure.copy(
+            lattice = Lattice(
+                cell.latticeParams[0], cell.latticeParams[1], cell.latticeParams[2],
+                cell.latticeParams[3], cell.latticeParams[4], cell.latticeParams[5],
+            ),
+            spaceGroup = sg,
+            symmetryOperations = ops,
+            sites = asu,
+            isConventional = true,
+        )
+    }
 
     /**
      * Per v0.6.5: Convert from conventional to primitive cell.
@@ -766,7 +826,7 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
     }
 
     /**
-     * Per v0.8.0: Convert from primitive to conventional cell.
+     * Per v0.7.0: Convert from primitive to conventional cell.
      * Applies the prim→conv matrix, generates centering-related atoms, finds the asymmetric
      * unit, and restores the full symmetry operations for the space group.
      */
@@ -778,7 +838,7 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         if (centering == BravaisLatticeData.CenteringType.PRIMITIVE) {
             return EditResult(structure, bondConfiguration)
         }
-        // Per v0.8.0: guard against double-conventionalization. If the structure is already
+        // Per v0.7.0: guard against double-conventionalization. If the structure is already
         // conventional (centering ops present or lattice metric matches the crystal system),
         // leave it unchanged rather than applying the prim→conv matrix again.
         if (isConventionalCell(structure)) {
@@ -838,7 +898,7 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
         return ensureAutoBondRules(newStructure, BondConfiguration())
     }
 
-    // ── Per v0.8.0: Matrix analysis helpers ───────────────────────────────────
+    // ── Per v0.7.0: Matrix analysis helpers ───────────────────────────────────
 
     /**
      * Per v0.6.5: Returns true if the matrix is a shear (cannot be decomposed into
@@ -855,7 +915,7 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
     }
 
     /**
-     * Per v0.8.0: Apply a shear transformation by first clearing symmetry, then transforming.
+     * Per v0.7.0: Apply a shear transformation by first clearing symmetry, then transforming.
      * Used when the user confirms a shear-matrix operation that would reduce crystal symmetry.
      */
     fun transformAfterClearingSymmetry(
@@ -940,7 +1000,7 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
     /** Result of transform decomposition: rotation matrix R and diagonal scales (sx, sy, sz). */
     data class Mat3Decomposition(val rotation: Mat3, val sx: Int, val sy: Int, val sz: Int)
 
-    // ── Per v0.8.0: Bravais conversion helpers ────────────────────────────────
+    // ── Per v0.7.0: Bravais conversion helpers ────────────────────────────────
 
     /** Centering translation vectors for each centering type. */
     private fun centeringTranslations(centering: BravaisLatticeData.CenteringType): List<Vec3> = when (centering) {
@@ -962,7 +1022,7 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
      * from another atom via a symmetry operation.
      * Per v0.7.1: uses 1e-4 tolerance (≈0.001 Å) so symmetry-mate atoms with DFT-relaxation
      * noise (e.g. Materials Project coordinates, ~1e-6 fractional) still merge into one site.
-     * Only same-species atoms are merged.
+     * Only atoms with the same species and occupancy are merged.
      */
     private fun findAsymmetricUnit(atoms: List<Site>, operations: List<SymmetryOperation>): List<Site> {
         val asu = mutableListOf<Site>()
@@ -975,6 +1035,7 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
                 for (j in atoms.indices) {
                     if (!used[j] && j != i &&
                         atoms[j].species.symbol == atoms[i].species.symbol &&
+                        atoms[j].occupancy.toBits() == atoms[i].occupancy.toBits() &&
                         generated.almostEquals(atoms[j].fractionalCoordinate, 1e-4)
                     ) {
                         used[j] = true

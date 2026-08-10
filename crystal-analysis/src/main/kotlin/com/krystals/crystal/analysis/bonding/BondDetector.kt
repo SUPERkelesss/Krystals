@@ -4,7 +4,6 @@ import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.*
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
-import com.krystals.crystal.core.math.Mat3
 import com.krystals.crystal.core.math.Vec3
 import com.krystals.crystal.core.math.angleDegrees
 import com.krystals.crystal.core.math.distance
@@ -169,7 +168,7 @@ object BondDetector {
 
         val centers = primaryAtoms + boundaryImages
         val custom = bondConfiguration.rules.associateBy { it.key }
-        // Per v0.8.1: Hbond rules carry a discriminated key ("pair\0hbond") so plain-key
+        // Per v0.7.0: Hbond rules carry a discriminated key ("pair\0hbond") so plain-key
         // lookups below don't find them. Index hbond rules separately and consult them
         // alongside custom when the normal-rule lookup returns null for a pair.
         val hbondByPair = bondConfiguration.rules
@@ -277,9 +276,9 @@ object BondDetector {
                         if (d > autoMaxD) {
                             val key = if (c.siteId < q.siteId) "${c.siteId}\u0000${q.siteId}" else "${q.siteId}\u0000${c.siteId}"
                             if (key in disabledPairs) continue
-// Per v0.8.4: an existing pair rule is authoritative — it is selected regardless of
+// Per v0.7.0: an existing pair rule is authoritative — it is selected regardless of
                             // whether d falls inside its window (the window is enforced below).
-                            // v0.8.2's window-gated lookup made customRule null when d was outside
+                            // v0.7.0's window-gated lookup made customRule null when d was outside
                             // the rule window, which let the covalent auto fallback resurrect
                             // out-of-window pairs (e.g. Al–Al in corundum: rule window 1.52 A,
                             // contact 2.68 A, covalent fallback 2.97 A caught it).
@@ -295,11 +294,11 @@ object BondDetector {
                         // legacy path built the same key inline — a plain-space join would miss rules).
                         val key = if (c.siteId < q.siteId) "${c.siteId}\u0000${q.siteId}" else "${q.siteId}\u0000${c.siteId}"
                         if (key in disabledPairs) continue
-// Per v0.8.4: the hbond rule wins when its window covers d (covalent distances still
+// Per v0.7.0: the hbond rule wins when its window covers d (covalent distances still
                             // match the normal rule); otherwise an existing pair rule is
                             // authoritative — the window check below rejects out-of-window
                             // distances instead of letting the covalent auto fallback resurrect
-                            // them (v0.8.2 regression: Al–Al in corundum).
+                            // them (v0.7.0 regression: Al–Al in corundum).
                             val hbondCand = hbondByPair[key]
                             val normalCand = custom[key]
                             val customRule = when {
@@ -312,6 +311,11 @@ object BondDetector {
                         val isPeriodicSameSite = c.siteId == q.siteId &&
                             PeriodicBoundary.isIntegerTranslation(c.fractionalCoordinate - (q.fractionalCoordinate + offB))
                         if (customRule == null && isPeriodicSameSite) continue
+                        // Per 2026-08-09: with auto bond rules disabled (allowAutoFallback=false)
+                        // a missing rule pair means "no bond", not "fall back to the element
+                        // covalent-radius window" — otherwise opening a cell with cleared rules
+                        // still renders bonds.
+                        if (customRule == null && !bondConfiguration.allowAutoFallback) continue
                         val rule = customRule ?: BondRule(
                             c.siteId, q.siteId, 0.1,
                             PeriodicTable.covalentRadius(c.species.symbol) +
@@ -335,7 +339,7 @@ object BondDetector {
             }
         }
 
-        // Per v0.8.5: post-filter hbond bonds — rule-level one-hbond-per-proton is per-SITE,
+        // Per v0.7.0: post-filter hbond bonds — rule-level one-hbond-per-proton is per-SITE,
         // but BondDetector materialises a bond for EVERY atom pair inside the window. Re-apply
         // the per-ATOM constraints: angle X-H-Y > hbondAngleThreshold (parameterized per
         // v0.8.x so the UI angle slider controls detection AND display) and keep only the
@@ -351,7 +355,11 @@ object BondDetector {
                 if (a.species.symbol == "H") covalentPartners.getOrPut(b.atomA) { mutableListOf() } += p
                 if (p.species.symbol == "H") covalentPartners.getOrPut(b.atomB) { mutableListOf() } += a
             }
-            // Angle re-check for each hbond bond.
+            // Angle re-check for each concrete hbond image. At this point shell/boundary atoms
+            // have already been materialised at their real Cartesian positions, so wrapping both
+            // vectors back to the minimum image is incorrect: two different O images can collapse
+            // onto the same direction and an image on the wrong side of H may pass the angle cut.
+            // Use the actual D-H and H...A image vectors instead.
             val anglePassed = HashSet<Bond>()
             for (b in result) {
                 if (!b.rule.isHBond) continue
@@ -360,19 +368,14 @@ object BondDetector {
                 val (h, x) = if (a.species.symbol == "H") a to c else c to a
                 if (h.species.symbol != "H") continue
                 val partners = covalentPartners[h.id].orEmpty()
-                // If H has no covalent partner found from normal bonds (edge case: hbond-only
-                // rules in tests), skip the angle check — the hbond passes. In production
-                // smartIonic always generates normal rules first, so partners is non-empty.
-                val ok = if (partners.isEmpty()) true else {
-                    // Per v0.8.17: angle via periodic shortest displacements (same fix as the
-                    // rule layer) — a boundary proton's covalent partner sits across the cell
-                    // boundary and its main-cell coordinate gives a wrong ~60° angle.
+                // Auto-generated rules always have a covalent donor. Preserve manual hbond-rule
+                // behaviour when a document omits that normal bond, but never bypass the angle
+                // check once a concrete D-H partner has been found.
+                val ok = if (partners.isEmpty()) b.rule.source != BondRuleSource.AUTO else {
                     val hPos = h.cartesianCoordinate.toVec3()
-                    val xPos = x.cartesianCoordinate.toVec3()
-                    val lattice = structure.lattice.matrix
-                    val toX = periodicDisplacement(hPos, xPos, lattice)
+                    val toX = x.cartesianCoordinate.toVec3() - hPos
                     partners.any { y ->
-                        val toY = periodicDisplacement(hPos, y.cartesianCoordinate.toVec3(), lattice)
+                        val toY = y.cartesianCoordinate.toVec3() - hPos
                         angleDegrees(toX, com.krystals.crystal.core.math.Vec3(0.0, 0.0, 0.0), toY) > hbondAngleThreshold
                     }
                 }
@@ -514,7 +517,7 @@ object BondDetector {
     ): List<Bond> {
         if (atoms.size < 2) return emptyList()
         val custom = bondConfiguration.rules.associateBy { it.key }
-        // Per v0.8.1: Hbond rules carry a discriminated key ("pair\u0000hbond") so plain-key
+        // Per v0.7.0: Hbond rules carry a discriminated key ("pair\u0000hbond") so plain-key
         // lookups below don't find them; index them separately alongside custom.
         val hbondByPair = bondConfiguration.rules
             .filter { it.isHBond }
@@ -561,16 +564,4 @@ object BondDetector {
         return result
     }
 
-    /** Per v0.8.17: shortest periodic displacement from [from] to [to] (cartesian). Used by the
-     *  hbond angle re-check so a boundary proton's cross-boundary covalent partner yields the
-     *  correct ~1 Å displacement instead of the ~cell-length main-cell difference. */
-    private fun periodicDisplacement(from: Vec3, to: Vec3, lattice: Mat3): Vec3 {
-        val frac = lattice.inverse() * (to - from)
-        val wrapped = Vec3(
-            frac.x - kotlin.math.round(frac.x),
-            frac.y - kotlin.math.round(frac.y),
-            frac.z - kotlin.math.round(frac.z),
-        )
-        return lattice * wrapped
-    }
 }

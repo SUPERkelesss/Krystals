@@ -31,3 +31,8 @@ activation-secrets.gradle.kts
 # Hermes agent plans/session artifacts
 .hermes/
 .worktrees/
+
+# CIF downloader workspace — data, logs and API keys must never be committed.
+.cifs-downloader/
+# JVM crash dumps.
+hs_err_pid*.log

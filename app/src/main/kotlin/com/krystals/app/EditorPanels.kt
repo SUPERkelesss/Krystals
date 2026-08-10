@@ -96,7 +96,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.setValue
 
-// Per v0.8.x: H-bonds live in their own independent tab (after BONDS), shown only
+// Per v0.7.0: H-bonds live in their own independent tab (after BONDS), shown only
 // when the structure contains hydrogen — no longer a sub-section inside BONDS.
 private enum class EditorTab { BASIC, ATOMS, BONDS, HBONDS, EXPANSION }
 
@@ -118,7 +118,7 @@ fun EditorPanel(
                 tab.pendingEditorTab == "bonds" -> EditorTab.BONDS
                 tab.pendingEditorTab == "hbonds" -> EditorTab.HBONDS
                 tab.pendingEditorTab == "expansion" -> EditorTab.EXPANSION
-                // Per v0.8.27: otherwise remember this tab's last sub-menu; a new tab
+                // Per v0.7.0: otherwise remember this tab's last sub-menu; a new tab
                 // (or never-opened) falls through to the first sub-menu (BASIC).
                 tab.rememberedEditorTab != null -> runCatching {
                     EditorTab.valueOf(tab.rememberedEditorTab!!)
@@ -130,7 +130,7 @@ fun EditorPanel(
     // Per v0.7.1: consume the pending tab hint once the editor opens.
     LaunchedEffect(Unit) {
         tab.pendingEditorTab = null
-        // Per v0.8.27: an explicit intent (double-tap atom, add-bond, ...) is also a
+        // Per v0.7.0: an explicit intent (double-tap atom, add-bond, ...) is also a
         // sub-menu switch — sync the remembered tab so reopening shows what the user
         // actually last saw, not a stale memory.
         if (tab.rememberedEditorTab != selectedTab.name) {
@@ -143,7 +143,7 @@ fun EditorPanel(
         onDismiss = onDismiss,
     ) { closePanel ->
         Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
-            // Per v0.8.27: sub-menu selector is a fixed-height horizontally-scrollable
+            // Per v0.7.0: sub-menu selector is a fixed-height horizontally-scrollable
             // row; the close button stays pinned at the right edge (outside the scroll).
             Row(
                 Modifier.fillMaxWidth().height(52.dp).padding(start = 8.dp, end = 4.dp),
@@ -153,7 +153,7 @@ fun EditorPanel(
                     Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // Per v0.8.x: the "氢键" tab appears only when the structure contains H —
+                    // Per v0.7.0: the "氢键" tab appears only when the structure contains H —
                     // an independent tab, not a sub-section of BONDS.
                     val hbondsTab = if (tab.structure.sites.any { it.species.symbol == "H" }) {
                         listOf(EditorTab.HBONDS to localized("氢键", "H-bonds"))
@@ -166,7 +166,7 @@ fun EditorPanel(
                             selectedTab == kind,
                             onClick = {
                                 selectedTab = kind
-                                // Per v0.8.27: remember per-tab so reopening the editor
+                                // Per v0.7.0: remember per-tab so reopening the editor
                                 // restores the sub-menu the user last had open.
                                 tab.rememberedEditorTab = kind.name
                             },
@@ -256,9 +256,9 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
             }.mapCatching { CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.SetLattice(it)) }
                 .onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid cell parameters") }
         }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("应用晶胞", "Apply cell")) }
-        // Per v0.8.1: swapped order — primitive/conventional conversion comes before 3×3 transform.
+        // Per v0.7.0: swapped order — primitive/conventional conversion comes before 3×3 transform.
         val centering = BravaisLatticeData.centeringFromSymbol(tab.structure.spaceGroup.symbol)
-        // Per v0.8.43 (issue #6): after any 3×3 transform the conversion button is hidden —
+        // Per v0.7.0 (issue #6): after any 3×3 transform the conversion button is hidden —
         // converting a custom-transformed cell would discard the transform's intent.
         if (centering != BravaisLatticeData.CenteringType.PRIMITIVE && !tab.cellTransformed) {
             OutlinedButton(
@@ -273,10 +273,10 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
                         val result = if (tab.savedConventionalStructure != null) {
                             EditResult(tab.savedConventionalStructure!!, tab.savedConventionalBondConfig!!)
                         } else {
-                            // Per v0.8.40: spglib contributes ONLY the space-group number
+                            // Per v0.7.0: spglib contributes ONLY the space-group number
                             // (correcting a mislabelled cell); the actual matrix conversion
                             // runs through CrystalEditor.convertToConventional (BravaisLatticeData
-                            // tables). The v0.8.39 spglib-raw-data path was removed — it built
+                            // tables). The v0.7.0 spglib-raw-data path was removed — it built
                             // sites with per-species ids ("spg:P1" for both Na1 and Cl1) which
                             // crashed LazyColumn with "Key already used", and its species
                             // handling was unreliable.
@@ -302,10 +302,10 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
                         val result = if (tab.savedPrimitiveStructure != null) {
                             EditResult(tab.savedPrimitiveStructure!!, tab.savedPrimitiveBondConfig!!)
                         } else {
-                            // Per v0.8.40: spglib contributes ONLY the space-group number;
+                            // Per v0.7.0: spglib contributes ONLY the space-group number;
                             // matrix conversion runs through CrystalEditor.convertToPrimitive
                             // (BravaisLatticeData tables). See conventional branch for why the
-                            // v0.8.39 spglib-raw-data path was removed.
+                            // v0.7.0 spglib-raw-data path was removed.
                             val sgNumber = runCatching { SpglibStructure.toPrimitiveCell(tab.structure) }
                                 .getOrNull()?.spaceGroupNumber?.takeIf { it > 0 }
                             val corrected = sgNumber?.let { n ->
@@ -327,7 +327,7 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
             }
         }
         OutlinedButton(onClick = { transformOpen = true }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("3×3 变换矩阵", "3×3 Transform")) }
-        // Per v0.8.0: Clear symmetry button.
+        // Per v0.7.0: Clear symmetry button.
         OutlinedButton(
             onClick = { clearSymmetryOpen = true },
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -348,7 +348,7 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
 // Per v0.7.1: 3×3 matrix transform no longer affects expansion. The scaling is
 // handled by symmetry operations within the structure itself.
                 tab.isPrimitiveCell = false
-                // Per v0.8.43 (issue #6): hide the primitive/conventional conversion button
+                // Per v0.7.0 (issue #6): hide the primitive/conventional conversion button
                 // only after a real EXPANSION (|det| > 1) — the original requirement
                 // "应用3×3矩阵扩胞后". det = 1 transforms (rotation / axis swap / inversion)
                 // keep the button, and a later expansion still sets it (never cleared here).
@@ -403,13 +403,13 @@ private fun AtomEditor(tab: DocumentTab, onDismiss: () -> Unit, onStructure: (Ed
             OutlinedButton(onClick = { tab.recordHistory(); tab.atomEditMode = AtomEditMode.MODIFY_NEXT; onPersistentMessage(atomEditHint); onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Text(localized("修改", "Modify")) }
             OutlinedButton(onClick = { tab.recordHistory(); tab.atomEditMode = AtomEditMode.DELETE_NEXT; onPersistentMessage(atomEditHint); onDismiss() }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Text(localized("删除", "Delete")) }
         }
-        // Per v0.8.11: compute co-located site groups for border coloring.
+        // Per v0.7.0: compute co-located site groups for border coloring.
         val siteGroups = remember(tab.structure) { computeGatheredSiteInfo(tab.structure.sites, tab.renderConfiguration) }
         LazyColumn(Modifier.fillMaxSize()) {
             items(tab.structure.sites, key = { it.id }) { site ->
                 val groupInfo = siteGroups[site.id]
                 val borderMod = if (groupInfo != null) {
-                    // Per v0.8.11: co-located (same-position) site groups get a mixedColor border;
+                    // Per v0.7.0: co-located (same-position) site groups get a mixedColor border;
                     // raw Σocc > 1 gets a thicker RED border.
                     val borderColor = if (groupInfo.wasNormalized) Color(0xFFFF4444) else Color(groupInfo.mixedColor ?: 0xFFCCCCCC)
                     Modifier.border(if (groupInfo.wasNormalized) 3.dp else 2.dp, borderColor, RoundedCornerShape(8.dp))
@@ -484,7 +484,7 @@ private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, Fr
     val matrixLabels = listOf("xx", "xy", "xz", "yx", "yy", "yz", "zx", "zy", "zz")
     val matrixValues = remember { List(9) { index -> mutableStateOf(if (index % 4 == 0) "1" else "0") } }
     val translationValues = remember { List(3) { mutableStateOf("0") } }
-    // Per v0.8.0: warning state for handedness change and shear matrix.
+    // Per v0.7.0: warning state for handedness change and shear matrix.
     var pendingRows by remember { mutableStateOf<List<List<Int>>?>(null) }
     var pendingTranslation by remember { mutableStateOf(FractionalCoordinate.ZERO) }
     var showHandednessWarning by remember { mutableStateOf(false) }
@@ -530,7 +530,7 @@ private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, Fr
         }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
-    // Per v0.8.0: Handedness warning — matrix changes right-handed to left-handed or vice versa.
+    // Per v0.7.0: Handedness warning — matrix changes right-handed to left-handed or vice versa.
     if (showHandednessWarning) {
         AlertDialog(
             onDismissRequest = { showHandednessWarning = false },
@@ -543,7 +543,7 @@ private fun TransformDialog(onDismiss: () -> Unit, onApply: (List<List<Int>>, Fr
             dismissButton = { TextButton(onClick = { showHandednessWarning = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
-    // Per v0.8.0: Shear warning — matrix will reduce crystal symmetry. Clear symmetry first.
+    // Per v0.7.0: Shear warning — matrix will reduce crystal symmetry. Clear symmetry first.
     if (showShearWarning) {
         AlertDialog(
             onDismissRequest = { showShearWarning = false },
@@ -681,11 +681,10 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
     )
     val computingMessage = localized("计算中...", "Computing...")
     val epsilonHint = localized("max = rA + rB + ε，建议在 0.35–0.45 之间", "max = rA + rB + ε, suggested 0.35–0.45")
-    // Per v0.8.x: an H-bond rule must include at least one hydrogen atom.
+    // Per v0.7.0: an H-bond rule must include at least one hydrogen atom.
     val hbondMustIncludeHydrogenMessage = localized("氢键必须包含一个氢原子", "An H-bond must include a hydrogen atom")
     // Per v0.2.3: hide rules that produce no bond in the current structure (no atom pair within
     // the distance window), not just rules whose sites are gone.
-    // Per v0.5.2b/v0.8.x: shared by BondEditor and HbondEditor via [visibleBondRules].
     val visibleRules = visibleBondRules(tab)
 
     // Rebuild rules off the UI thread, showing a "computing" dialog while it runs.
@@ -733,7 +732,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
     }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        // Per v0.8.x: BONDS is covalent-only now — H-bonds live in their own independent
+        // Per v0.7.0: BONDS is covalent-only now — H-bonds live in their own independent
         // tab (HbondEditor). Draw/delete therefore always target the normal-bond type
         // (bondDrawTargetIsHbond stays false).
         val drawHint = localized("点击成键的两个目标原子", "Tap two atoms to bond")
@@ -762,8 +761,16 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
         // Auto-apply is a compact row with a mode button + ε slider.
         // Per v0.7.1: label on first line, mode button + slider on second line.
         var sliderEpsilon by remember(tab.bondEpsilon) { mutableFloatStateOf(tab.bondEpsilon.toFloat().coerceIn(0.1f, 0.6f)) }
+        val radiusSourceLabel = when (tab.lastRadiusSource) {
+            RadiusSource.SMART_IONIC -> localized("智能离子", "Smart ionic")
+            RadiusSource.BONDING -> localized("键合半径", "Bonding radius")
+            RadiusSource.VDW -> localized("vdW 半径", "vdW radius")
+        }
         Text(
-            localized("自动应用规则：容忍度 ε = ", "Auto-apply rules: tolerance ε = ") + "%.2f".format(sliderEpsilon.toDouble()),
+            localized("自动应用规则：", "Auto-apply rules: ") +
+                radiusSourceLabel +
+                localized(" 容忍度 ε = ", ", tolerance ε = ") +
+                "%.2f".format(sliderEpsilon.toDouble()),
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
         )
@@ -813,9 +820,9 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
         }
         Text(epsilonHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        // Per v0.8.2: compute co-located site groups for border coloring.
+        // Per v0.7.0: compute co-located site groups for border coloring.
         val gatheredSiteInfo = remember(tab.structure) { computeGatheredSiteInfo(sites, tab.renderConfiguration) }
-        // Per v0.8.x: this editor lists only normal (covalent) rules — hbonds have their
+        // Per v0.7.0: this editor lists only normal (covalent) rules — hbonds have their
         // own tab. Rows no longer carry the hbond grey frame/label.
         val sectionRules = visibleRules.filter { !it.isHBond }
         LazyColumn(Modifier.fillMaxSize()) {
@@ -842,7 +849,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
                 previousEpsilon?.let { tab.bondEpsilon = it }
                 previousEpsilon = null
             },
-            // Per v0.8.36: loading dialogs dismiss only via the system back button,
+            // Per v0.7.0: loading dialogs dismiss only via the system back button,
             // never by tapping outside.
             properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
         ) {
@@ -882,7 +889,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
     LaunchedEffect(tab.pendingBondDrawRule) {
         if (tab.pendingBondDrawRule != null) { addOpen = true }
     }
-    // Per v0.8.x: the dialog's hbond mode follows the edit target — the draw preset's rule type,
+    // Per v0.7.0: the dialog's hbond mode follows the edit target — the draw preset's rule type,
     // the edited rule's type, or the section the user pressed New in (bondDrawTargetIsHbond).
     if (addOpen) BondRuleDialog(
         sites,
@@ -892,7 +899,7 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
         onDismiss = { addOpen = false; tab.pendingBondDrawRule = null },
     ) { siteA, siteB, min, max, extendAtoB, extendBtoA, isHBond ->
         tab.pendingBondDrawRule = null
-        // Per v0.8.x: reject H-bond rules whose two ends are both non-hydrogen — the
+        // Per v0.7.0: reject H-bond rules whose two ends are both non-hydrogen — the
         // dialog stays open so the user can pick another site pair.
         if (!hbondEndsContainHydrogen(sites, siteA, siteB, isHBond)) {
             onMessage(hbondMustIncludeHydrogenMessage)
@@ -918,27 +925,33 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
  *  Shared by [BondEditor] and [HbondEditor]. */
 @Composable
 private fun visibleBondRules(tab: DocumentTab): List<BondRule> {
-    val bondGrid = remember(tab.structure) {
-        val atoms = SymmetryExpander.expand(tab.structure)
-        BondGrid(atoms, tab.structure, BondRuleMatching.estimateCellSize(tab.structure)) to atoms
+    val structure = tab.structure
+    val bondConfiguration = tab.bondConfiguration
+    val bondGrid = remember(structure) {
+        val atoms = SymmetryExpander.expand(structure)
+        BondGrid(atoms, structure, BondRuleMatching.estimateCellSize(structure)) to atoms
     }
-    return tab.bondConfiguration.rules.filter { rule ->
-        BondRuleMatching.hasMatchingBond(
-            rule,
-            tab.structure,
-            tab.bondConfiguration,
-            bondGrid.second,
-            bondGrid.first,
-        )
-    }.distinctBy { it.key } // Per v0.5.4b: bondRules can carry duplicate site-pair keys (e.g. a large
+    // Matching every rule may expand periodic atoms and is expensive for large structures. Keep
+    // the result stable while local slider values change during a drag.
+    return remember(structure, bondConfiguration) {
+        bondConfiguration.rules.filter { rule ->
+            BondRuleMatching.hasMatchingBond(
+                rule,
+                structure,
+                bondConfiguration,
+                bondGrid.second,
+                bondGrid.first,
+            )
+        }.distinctBy { it.key }
+    } // Per v0.5.4b: bondRules can carry duplicate site-pair keys (e.g. a large
     // cell whose ASU has repeated site ids, or a smart-ionic regen that re-emitted a pair). The
     // renderer dedups via associateBy, but LazyColumn's key must be unique — collapse duplicates
     // here so opening the rule list on a large cell no longer crashes with "Key was already used".
 }
 
-/** Per v0.8.x: shared rule list row for [BondEditor] and [HbondEditor]. Border — red
+/** Per v0.7.0: shared rule list row for [BondEditor] and [HbondEditor]. Border — red
  *  (Σocc>1) warning only; the gathered-atom grey placeholder border was removed per
- *  v0.8.43, and the hbond grey frame + "氢键" label are gone because each list holds
+ *  v0.7.0, and the hbond grey frame + "氢键" label are gone because each list holds
  *  only one rule type. */
 @Composable
 private fun BondRuleRow(
@@ -950,7 +963,7 @@ private fun BondRuleRow(
 ) {
     val labelA = sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
     val labelB = sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB
-    // Per v0.8.43: gathered-atom rows no longer get a border; only the red Σocc>1
+    // Per v0.7.0: gathered-atom rows no longer get a border; only the red Σocc>1
     // (normalized) warning border remains.
     val gatherA = gatheredSiteInfo[rule.siteA]
     val gatherB = gatheredSiteInfo[rule.siteB]
@@ -970,7 +983,7 @@ private fun BondRuleRow(
     HorizontalDivider()
 }
 
-/** Per v0.8.x: an H-bond rule must have at least one hydrogen atom on either end. */
+/** Per v0.7.0: an H-bond rule must have at least one hydrogen atom on either end. */
 private fun hbondEndsContainHydrogen(sites: List<Site>, siteA: String, siteB: String, isHBond: Boolean): Boolean {
     if (!isHBond) return true
     val aSymbol = sites.firstOrNull { it.id == siteA }?.species?.symbol
@@ -978,7 +991,7 @@ private fun hbondEndsContainHydrogen(sites: List<Site>, siteA: String, siteB: St
     return aSymbol == "H" || bSymbol == "H"
 }
 
-/** Per v0.8.x: independent H-bond editor tab (EditorTab.HBONDS). New/Draw/Delete always
+/** Per v0.7.0: independent H-bond editor tab (EditorTab.HBONDS). New/Draw/Delete always
  *  target the hbond rule type (tab.bondDrawTargetIsHbond = true); the angle threshold
  *  slider sits next to a "计算" button (settings icon) that recomputes only the H-bond rules for the
  *  current radius source, leaving the covalent rules untouched. */
@@ -992,12 +1005,11 @@ private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
     var autoJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val scope = rememberCoroutineScope()
     val computingMessage = localized("计算中...", "Computing...")
-    val autoHint = localized("按当前模式重算氢键规则", "Recompute H-bond rules with the current mode")
     val hbondMustIncludeHydrogenMessage = localized("氢键必须包含一个氢原子", "An H-bond must include a hydrogen atom")
     val visibleRules = visibleBondRules(tab)
     val sectionRules = visibleRules.filter { it.isHBond }
 
-    // Per v0.8.x: the "计算" button recomputes ONLY the H-bond rules (rebuildHbondRules keeps the
+    // Per v0.7.0: the "计算" button recomputes ONLY the H-bond rules (rebuildHbondRules keeps the
     // normal rules verbatim) off the UI thread, showing a loading dialog while it runs.
     fun autoRecompute() {
         // Per v0.8.x: cancel the in-flight recompute before starting a new one — the old
@@ -1058,7 +1070,7 @@ private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
                 onDismiss()
             }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Text(localized("删除", "Delete")) }
         }
-        // Per v0.8.x: angle threshold (display filter, 0–180°, default 110°) with the
+        // Per v0.7.0: angle threshold (display filter, 0–180°, default 110°) with the
         // "计算" button to its right. The scene rebuilds on commit (tab.hbondAngleThreshold
         // keys the scene-build effect in ViewerScreen), so dragging only updates the local
         // slider value.
@@ -1084,9 +1096,9 @@ private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
                 Text(localized("计算", "Compute"), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(start = 4.dp))
             }
         }
-        Text(autoHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // Per 2026-08-09: 删除"按当前模式重算氢键规则"提示行(用户要求)。
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        // Per v0.8.2: compute co-located site groups for border coloring.
+        // Per v0.7.0: compute co-located site groups for border coloring.
         val gatheredSiteInfo = remember(tab.structure) { computeGatheredSiteInfo(sites, tab.renderConfiguration) }
         LazyColumn(Modifier.fillMaxSize()) {
             items(sectionRules, key = { it.key }) { rule ->
@@ -1110,7 +1122,7 @@ private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
                 loading = false
                 autoJob = null
             },
-            // Per v0.8.36: loading dialogs dismiss only via the system back button,
+            // Per v0.7.0: loading dialogs dismiss only via the system back button,
             // never by tapping outside.
             properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
         ) {
@@ -1126,7 +1138,7 @@ private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
     LaunchedEffect(tab.pendingBondDrawRule) {
         if (tab.pendingBondDrawRule != null) { addOpen = true }
     }
-    // Per v0.8.x: everything in this editor is an H-bond — the dialog is always in hbond mode.
+    // Per v0.7.0: everything in this editor is an H-bond — the dialog is always in hbond mode.
     if (addOpen) BondRuleDialog(
         sites,
         editingRule = null,
@@ -1135,7 +1147,7 @@ private fun HbondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
         onDismiss = { addOpen = false; tab.pendingBondDrawRule = null },
     ) { siteA, siteB, min, max, extendAtoB, extendBtoA, isHBond ->
         tab.pendingBondDrawRule = null
-        // Per v0.8.x: reject rules whose two ends are both non-hydrogen — the dialog stays
+        // Per v0.7.0: reject rules whose two ends are both non-hydrogen — the dialog stays
         // open so the user can pick another site pair.
         if (!hbondEndsContainHydrogen(sites, siteA, siteB, isHBond)) {
             onMessage(hbondMustIncludeHydrogenMessage)
@@ -1162,7 +1174,7 @@ private fun BondRuleDialog(
     sites: List<Site>,
     editingRule: BondRule?,
     preset: BondRule? = null,
-    // Per v0.8.x: hbond mode — hydrogen-bond title and the isHBond flag passed back via onApply.
+    // Per v0.7.0: hbond mode — hydrogen-bond title and the isHBond flag passed back via onApply.
     hbond: Boolean = false,
     onDismiss: () -> Unit,
     onApply: (String, String, Double, Double, Boolean, Boolean, Boolean) -> Unit,
@@ -1231,9 +1243,11 @@ private fun DistanceControl(label: String, value: Float, range: ClosedFloatingPo
 
 @Composable
 private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRunBondComputation: ((suspend () -> EditResult?) -> Unit)? = null) {
+    val scope = rememberCoroutineScope()
     var x by remember(tab.expansion) { mutableIntStateOf(tab.expansion.x) }
     var y by remember(tab.expansion) { mutableIntStateOf(tab.expansion.y) }
     var z by remember(tab.expansion) { mutableIntStateOf(tab.expansion.z) }
+    var applying by remember { mutableStateOf(false) }
     // Per v0.5.3b: pre-resolved so the degrade snackbar can fire from a non-@Composable onClick.
     val degradeMessage = localized("原子数过多，已降级显示（边界多面体可能不完整）", "Many atoms; rendering in degraded mode (boundary polyhedra may be incomplete)")
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
@@ -1247,21 +1261,32 @@ private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRun
             ExpansionCluster(label, value, setter)
             Spacer(Modifier.height(10.dp))
         }
-        Button(onClick = {
-            runCatching {
+        Button(
+            onClick = {
+                if (applying) return@Button
                 val expansion = Expansion(x, y, z)
-                val base = SymmetryExpander.expand(tab.structure).size
-                require(base.toLong() * expansion.multiplier <= BondDetector.MAX_RENDERED_ATOMS) { "100,000 atom limit exceeded" }
-                // Per v0.5.3b: warn if the shell materialisation will degrade to avoid OOM.
-                val degrade = BondDetector.estimatePeakAtomCount(base, expansion) >
-                    BondDetector.SHELL_DEGRADE_THRESHOLD
-                tab.expansion = expansion
-                tab.structuralExpansion = false
-                degrade
-            }.onSuccess { degrade ->
-                if (degrade) onMessage(degradeMessage)
-            }.onFailure { onMessage(it.message ?: "Invalid expansion") }
-        }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("应用", "Apply")) }
+                val structure = tab.structure
+                applying = true
+                scope.launch {
+                    val result = runCatching {
+                        withContext(Dispatchers.Default) {
+                            val base = SymmetryExpander.expand(structure).size
+                            require(base.toLong() * expansion.multiplier <= BondDetector.MAX_RENDERED_ATOMS) { "100,000 atom limit exceeded" }
+                            BondDetector.estimatePeakAtomCount(base, expansion) > BondDetector.SHELL_DEGRADE_THRESHOLD
+                        }
+                    }
+                    applying = false
+                    result.onSuccess { degrade ->
+                        if (tab.structure != structure) return@onSuccess
+                        tab.expansion = expansion
+                        tab.structuralExpansion = false
+                        if (degrade) onMessage(degradeMessage)
+                    }.onFailure { onMessage(it.message ?: "Invalid expansion") }
+                }
+            },
+            enabled = !applying,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        ) { Text(localized("应用", "Apply")) }
     }
 }
 
@@ -1293,13 +1318,13 @@ private fun eval(value: String) = ExpressionParser(value).evaluate()
 
 private fun fmt(value: Double) = "%.4f".format(value)
 
-/** Per v0.8.2/v0.8.11: identifies sites sharing the same fractional coordinates (disorder).
+/** Per v0.7.0/v0.7.0: identifies sites sharing the same fractional coordinates (disorder).
  *  mixedColor = occ-weighted ARGB blend of all member site colors (null when unavailable);
  *  wasNormalized = true when raw Σocc > 1 → red border. */
 
 private data class GatheredSiteInfo(val wasNormalized: Boolean, val mixedColor: Long?)
 
-/** Per v0.8.2/v0.8.11: compute co-located site groups and their border info for both the AtomEditor
+/** Per v0.7.0/v0.7.0: compute co-located site groups and their border info for both the AtomEditor
  *  (mixedColor border) and BondEditor (wasNormalized only) lists. */
 
 private fun computeGatheredSiteInfo(sites: List<com.krystals.crystal.core.model.Site>, config: com.krystals.renderer.core.style.RenderConfiguration): Map<String, GatheredSiteInfo> {
@@ -1339,4 +1364,4 @@ private fun computeGatheredSiteInfo(sites: List<com.krystals.crystal.core.model.
 
 internal fun colorFromArgb(value: Long) = Color(value)
 
-/** Per v0.8.27: rainbow hue order shared by the background/bond colour wheels and the colour picker. */
+/** Per v0.7.0: rainbow hue order shared by the background/bond colour wheels and the colour picker. */

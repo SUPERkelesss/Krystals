@@ -48,7 +48,7 @@ private fun orderedSites(siteA: Site, siteB: Site): Pair<Site, Site> {
 object BondValence {
 
     /** Above this expanded-atom count the default path skips smart-ionic and uses bonding radii.
-     *  Per v0.8.43: tripled from 100 (auto-detection scope + cap both ×3). */
+     *  Per v0.7.0: tripled from 100 (auto-detection scope + cap both ×3). */
     const val SMART_IONIC_ATOM_LIMIT: Int = 300
 
     /** Outcome of a smart-ionic analysis. [rules] are the generated rules; [success] is false when
@@ -106,7 +106,7 @@ object BondValence {
 
         val rules = structure.sites.flatMapIndexed { i, siteA ->
             structure.sites.drop(i).mapNotNull { siteB ->
-                // Per v0.8.43 (issue #7): anion–anion pairs (O–O, S–S, …) have no ionic bond,
+                // Per v0.7.0 (issue #7): anion–anion pairs (O–O, S–S, …) have no ionic bond,
                 // but the blanket skip also dropped REAL bonded pairs — disulfide S–S in pyrite,
                 // peroxide O–O — bonds the renderer draws through its covalent auto fallback,
                 // leaving the rule window empty while the bond rendered. Skip only pairs without
@@ -129,9 +129,9 @@ object BondValence {
             }
         }
 
-        // Per v0.8.1: collect H sites whose BVS resolved to valence 1 (protons) and append
+        // Per v0.7.0: collect H sites whose BVS resolved to valence 1 (protons) and append
         // H-bond rules for proton···acceptor contacts beyond the normal covalent windows.
-        // Per v0.8.27: gated by the auto-compute-hbonds preference (includeHbonds).
+        // Per v0.7.0: gated by the auto-compute-hbonds preference (includeHbonds).
         val protonSiteIds = analysis.siteValence
             .filter { (_, sv) -> sv.valence == 1 && !sv.isAnion && !sv.isNeutral }
             .keys.filter { siteId -> structure.sites.any { it.id == siteId && it.species.symbol == "H" } }
@@ -145,7 +145,7 @@ object BondValence {
         return SmartIonicResult(rules + hbondRules, success = true)
     }
 
-    /** Per v0.8.43 (issue #7): true when any expanded pair of the two sites sits within
+    /** Per v0.7.0 (issue #7): true when any expanded pair of the two sites sits within
      *  [maxDist] under the minimum-image convention — the renderer's covalent auto-fallback
      *  threshold. Lets genuinely bonded anion–anion pairs (disulfide S–S in pyrite, peroxide
      *  O–O) generate rules while keeping the ionic-model skip for non-bonded anions. */
@@ -229,7 +229,7 @@ object BondValence {
         // symmetry-equivalent and share the same environment, so this just picks a representative
         // value while tolerating any edge-case variation).
         // Per v0.6.5: for anion sites, negate the BVS so the displayed s is negative.
-        // Per v0.8.43: a site with no BVS contribution (missing bvparm pair, e.g. Ca-C in CaC2)
+        // Per v0.7.0: a site with no BVS contribution (missing bvparm pair, e.g. Ca-C in CaC2)
         // falls back to its resolved nominal valence so the atom-info window still shows s.
         val bySite = HashMap<String, Double>()
         for ((siteId, siteAtoms) in analysis.atomsBySiteId) {
@@ -369,7 +369,7 @@ object BondValence {
         if (candidates.isEmpty()) {
             // No BVPARM pair exists for this (cation, anion) combination, so the BVS cannot be
             // estimated (e.g. Ca in CaC2 — bvparm2020 has C4- anion parameters for As/B/Cu/Pd/Si/Sn
-            // but not for the alkaline-earth cations). Per v0.8.43: fall back to the cation's lowest
+            // but not for the alkaline-earth cations). Per v0.7.0: fall back to the cation's lowest
             // tabulated valence so the atom-info window can still show a nominal s instead of
             // omitting the line; radius stays null so smart-ionic rules keep the bonding radius
             // and bond geometry is unchanged.

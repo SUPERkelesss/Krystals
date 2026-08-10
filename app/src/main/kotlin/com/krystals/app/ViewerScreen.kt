@@ -122,6 +122,7 @@ import com.krystals.crystal.analysis.bonding.VoronoiAbortedException
 import com.krystals.crystal.analysis.bonding.isMolecularCrystal
 import com.krystals.crystal.analysis.bonding.toMolecules
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
+import com.krystals.crystal.core.model.Molecule
 import com.krystals.crystal.core.periodic.Int3
 import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.state.InteractionReducer
@@ -152,6 +153,13 @@ internal sealed class ViewerPanel {
     object Settings : ViewerPanel()
 }
 
+private data class MoleculeBuildState(
+    val isMolecularCrystal: Boolean,
+    val molecules: List<Molecule>,
+    val moleculeSiteIds: List<Set<String>>,
+    val moleculeExtend: Boolean,
+)
+
 
 @Composable
 internal fun ViewerScreen(
@@ -161,7 +169,7 @@ internal fun ViewerScreen(
     onOpen: () -> Unit,
     onOpenPreset: () -> Unit,
     onSaveToPreset: () -> Unit,
-    // Per v0.8.44: share goes through the file-name rename dialog (handled in KrystalsRoot).
+    // Per v0.7.0: share goes through the file-name rename dialog (handled in KrystalsRoot).
     onShare: (DocumentTab) -> Unit,
     onNew: () -> Unit,
     onOnlineSource: () -> Unit,
@@ -205,7 +213,7 @@ internal fun ViewerScreen(
     }
     var menuOpen by remember { mutableStateOf(false) }
     var toolOpen by remember(tab.id) { mutableStateOf(false) }
-    // Per v0.8.1: single state for the mutually-exclusive full-screen panels.
+    // Per v0.7.0: single state for the mutually-exclusive full-screen panels.
     var activePanel by remember { mutableStateOf<ViewerPanel>(ViewerPanel.None) }
     // Per v0.7.1: persistent overlay message shown during atom-edit / bond-draw flows.
     var persistentMessage by remember { mutableStateOf<String?>(null) }
@@ -216,13 +224,13 @@ internal fun ViewerScreen(
             // Priority is higher than floating-ball secondary menu retraction.
             tab.bondDrawMode != BondDrawMode.NONE || tab.atomEditMode != AtomEditMode.NONE || persistentMessage != null -> {
                 tab.pendingEditorTab = when {
-                    // Per v0.8.x: return to the tab matching the draw target type.
+                    // Per v0.7.0: return to the tab matching the draw target type.
                     tab.bondDrawMode != BondDrawMode.NONE -> if (tab.bondDrawTargetIsHbond) "hbonds" else "bonds"
                     tab.atomEditMode != AtomEditMode.NONE -> "atoms"
                     else -> null
                 }
                 tab.bondDrawMode = BondDrawMode.NONE
-                // Per v0.8.x: exiting draw/delete mode resets the target type flag so the next
+                // Per v0.7.0: exiting draw/delete mode resets the target type flag so the next
                 // entry (from the covalent or hbond sub-menu) starts from a clean state.
                 tab.bondDrawTargetIsHbond = false
                 tab.bondDrawFirstSiteId = null
@@ -311,7 +319,7 @@ internal fun ViewerScreen(
     // Per v0.7.1: scene rebuild loading dialog — shows after 300ms delay to avoid flicker
     // on fast rebuilds. Back button undoes the last change.
     var sceneRebuilding by remember(tab.id) { mutableStateOf(false) }
-    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility, tab.moleculeExtend, tab.hbondAngleThreshold) {
+    LaunchedEffect(tab.id, tab.structure, tab.expansion, tab.bondConfiguration, renderedAppearance, tab.renderConfiguration, tab.visibility, tab.moleculeExtend, tab.hbondAngleThreshold, settingsValues.showSecondaryExtendBonds) {
         // Per v0.6.3: removed currentOrientation key + delay — the Filament viewport already
         // handles size changes via onSizeChanged → SetViewport, so rebuilding the entire scene on
         // rotation was unnecessary and caused the freeze. The renderer's updateInteraction handles
@@ -321,46 +329,45 @@ internal fun ViewerScreen(
         // as a failure. Previously runCatching swallowed it, briefly showing "the coroutine
         // scope … was cancelled" in the error Text below whenever tab.structure changed.
         // Per v0.7.1: delayed dialog — only show if rebuild takes > 300ms.
-        // Per v0.8.1: launch in this effect's scope (cancelled on key change / leaving composition)
+        // Per v0.7.0: launch in this effect's scope (cancelled on key change / leaving composition)
         // instead of GlobalScope, so a stale dialog can't mutate a disposed composition.
         val dialogJob = launch {
             kotlinx.coroutines.delay(300)
             sceneRebuilding = true
         }
+        val analyzeMolecules = tab.moleculeAnalysisPending
+        val applyMoleculeDefault = tab.moleculeExtendDefaultPending
+        val defaultMoleculeExtend = settingsValues.defaultMoleculeExtend
+        val previousIsMolecularCrystal = tab.isMolecularCrystal
+        val previousMolecules = tab.molecules
+        val previousMoleculeSiteIds = tab.moleculeSiteIds
+        val previousMoleculeExtend = tab.moleculeExtend
         sceneResult = try {
             val sceneStart = System.currentTimeMillis()
-            val scene = withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
-                // Per v0.8.43 (issue #11): the open pipeline (network build + scene build) runs
+            val build = withTimeoutOrNull(BUILD_SCENE_TIMEOUT_MS) {
+                // Per v0.7.0 (issue #11): the open pipeline (network build + scene build) runs
                 // on openDispatcher — its own small pool, isolated from heavy bond computations.
                 withContext(openDispatcher) {
                     val analysis = BondDetector.buildNetwork(
                         tab.structure, tab.bondConfiguration, tab.expansion,
                         hbondAngleThreshold = tab.hbondAngleThreshold,
                     )
-                    // 分子晶体分析(打开晶体、原子与键加载完毕后):检查一次 isMolecularCrystal,
-                    // 为 false 走固定流程;为 true 则 parse 得到分子列表(与原子/键并列储存),
-                    // 供后续分子接口使用。惰性:仅首次(或结构变更后)计算一次,复用本次键网络。
-                    if (tab.moleculeAnalysisPending) {
-                        tab.isMolecularCrystal = analysis.isMolecularCrystal()
-                        tab.molecules = if (tab.isMolecularCrystal) analysis.toMolecules() else emptyList()
-                        // 分子 → 原胞原子 siteId 集合:先建 cellOffset==(0,0,0) 原子 id→siteId
-                        // 映射,再逐分子查询(避免对每个分子重复扫描全部原子)。
-                        tab.moleculeSiteIds = if (tab.isMolecularCrystal) {
-                            val cellAtomSiteByAtomId = analysis.atoms
-                                .filter { !it.isShell && it.cellOffset == Int3(0, 0, 0) }
-                                .associate { it.id.toInt() to it.siteId }
-                            tab.molecules.map { m -> m.atoms.mapNotNull { cellAtomSiteByAtomId[it.id] }.toSet() }
-                        } else emptyList()
-                        // 分子晶体默认启用"按分子展开"：仅新打开/结构变更(undo/redo、自动键规则)
-                        // 后分析时重置一次;编辑(含"扩展到晶胞外"全选)不再联动 moleculeExtend。
-                        // Per v0.8.27: 由偏好设置"分子晶体默认按分子延伸"决定(默认 true)。
-                        if (tab.moleculeExtendDefaultPending) {
-                            tab.moleculeExtend = tab.isMolecularCrystal && settingsValues.defaultMoleculeExtend
-                            tab.moleculeExtendDefaultPending = false
+                    // Calculate molecule-derived data locally. Compose-observed tab state is
+                    // committed only after this background build returns to the main thread.
+                    val isMolecularCrystal = if (analyzeMolecules) analysis.isMolecularCrystal() else previousIsMolecularCrystal
+                    val molecules = if (analyzeMolecules && isMolecularCrystal) analysis.toMolecules() else previousMolecules
+                    val moleculeSiteIds = if (analyzeMolecules && isMolecularCrystal) {
+                        val cellAtomSiteByAtomId = analysis.atoms
+                            .filter { !it.isShell && it.cellOffset == Int3(0, 0, 0) }
+                            .associate { it.id.toInt() to it.siteId }
+                        molecules.map { molecule ->
+                            molecule.atoms.mapNotNull { cellAtomSiteByAtomId[it.id] }.toSet()
                         }
-                        tab.moleculeAnalysisPending = false
-                    }
-                    CrystalRenderSceneFactory.build(
+                    } else if (analyzeMolecules) emptyList() else previousMoleculeSiteIds
+                    val moleculeExtend = if (applyMoleculeDefault) {
+                        isMolecularCrystal && defaultMoleculeExtend
+                    } else previousMoleculeExtend
+                    val scene = CrystalRenderSceneFactory.build(
                         analysis = analysis,
                         appearance = renderedAppearance,
                         renderConfiguration = tab.renderConfiguration,
@@ -369,15 +376,28 @@ internal fun ViewerScreen(
                         showBonds = tab.visibility.showBonds,
                         polyhedronSiteIds = tab.visibility.polyhedronSites,
                         structuralExpansion = tab.structuralExpansion,
-                        moleculeExtend = tab.moleculeExtend,
-                        molecules = tab.molecules,
+                        moleculeExtend = moleculeExtend,
+                        molecules = molecules,
+                        showSecondaryExtendBonds = settingsValues.showSecondaryExtendBonds,
                         hbondAngleThreshold = tab.hbondAngleThreshold,
                     )
+                    scene to MoleculeBuildState(isMolecularCrystal, molecules, moleculeSiteIds, moleculeExtend)
                 }
             }
             dialogJob.cancel()
             sceneRebuilding = false
-            if (scene != null) {
+            if (build != null) {
+                val (scene, moleculeState) = build
+                if (analyzeMolecules) {
+                    tab.isMolecularCrystal = moleculeState.isMolecularCrystal
+                    tab.molecules = moleculeState.molecules
+                    tab.moleculeSiteIds = moleculeState.moleculeSiteIds
+                    tab.moleculeAnalysisPending = false
+                }
+                if (applyMoleculeDefault) {
+                    tab.moleculeExtend = moleculeState.moleculeExtend
+                    tab.moleculeExtendDefaultPending = false
+                }
                 debugLog(CIF_OPEN_TAG) { "Scene build done (${scene.atoms.size} atoms, ${scene.bonds.size} bonds, ${scene.meshes.size} meshes) [scene +${System.currentTimeMillis() - sceneStart}ms]" }
                 Result.success(scene)
             }
@@ -448,7 +468,7 @@ internal fun ViewerScreen(
                     DropdownMenuItem(text = { Text(stringResource(R.string.save_to_presets)) }, leadingIcon = { Icon(Icons.Default.Bookmark, null) }, onClick = { menuOpen = false; onSaveToPreset() })
                     DropdownMenuItem(text = { Text(shareLabel) }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
                         menuOpen = false
-                        // Per v0.8.44: share first confirms the file name (rename window like save).
+                        // Per v0.7.0: share first confirms the file name (rename window like save).
                         onShare(tab)
                     })
                     DropdownMenuItem(text = { Text(stringResource(R.string.export_image)) }, leadingIcon = { Icon(Icons.Default.Photo, null) }, onClick = {
@@ -459,7 +479,7 @@ internal fun ViewerScreen(
                                 try {
                                     debugLog(EXPORT_IMAGE_TAG) { "ExportImage 1/4: export started (${scene.atoms.size} atoms, ${scene.bonds.size} bonds)" }
                                     val renderer = activeFilamentRenderer
-                                    // HIGH uses a larger aspect-preserving offscreen target. Keep
+                                    // HIGH uses a 4x supersampled, aspect-preserving offscreen target. Keep
                                     // it single-sampled: multisampled readPixels crashes on some
                                     // Android GPU drivers, while supersampling already smooths edges.
                                     val useHigh = settingsValues.exportQuality == ExportQuality.HIGH
@@ -483,7 +503,7 @@ internal fun ViewerScreen(
                                         onMessage("Unable to export current crystal")
                                     } else {
                                         debugLog(EXPORT_IMAGE_TAG) { "ExportImage 2/4: render done (${bitmap.width}x${bitmap.height})" }
-                                        // Per v0.8.43 (issue #9): the readback bitmap is already mutable —
+                                        // Per v0.7.0 (issue #9): the readback bitmap is already mutable —
                                         // draw the overlay directly on it instead of copy()ing a third
                                         // 64MB (4096²) bitmap on the main thread.
                                         if (settingsValues.exportShowAxes || settingsValues.exportShowMeasurements) {
@@ -500,7 +520,7 @@ internal fun ViewerScreen(
                                         onExport(bitmap)
                                     }
                                 } catch (error: Throwable) {
-                                    // Per v0.8.43 (issue #9): catch Throwable (was Exception) — an
+                                    // Per v0.7.0 (issue #9): catch Throwable (was Exception) — an
                                     // OutOfMemoryError during export used to crash the process instead
                                     // of degrading to the failure message.
                                     if (error !is CancellationException) onMessage(error.message ?: "Export failed")
@@ -514,7 +534,7 @@ internal fun ViewerScreen(
                 },
             ) } },
             actions = {
-                // Per v0.8.1: reading historyVersion subscribes this lambda to undo/redo changes
+                // Per v0.7.0: reading historyVersion subscribes this lambda to undo/redo changes
                 // so the buttons' enablement recomposes without re-running the whole ViewerScreen.
                 tab.historyVersion
                 IconButton(onClick = { tab.undo() }, enabled = tab.history.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, localized("撤回", "Undo")) }
@@ -546,7 +566,7 @@ internal fun ViewerScreen(
                                 } else {
                                     val firstCartesian = tab.bondDrawFirstCartesian!!
                                     val dist = (atom.cartesianCoordinate.toVec3() - firstCartesian).length()
-                                    // Per v0.8.x: capture the target type before the flag resets,
+                                    // Per v0.7.0: capture the target type before the flag resets,
                                     // then auto-navigate to the matching tab.
                                     val drawTargetIsHbond = tab.bondDrawTargetIsHbond
                                     tab.pendingBondDrawRule = BondRule(
@@ -577,9 +597,9 @@ internal fun ViewerScreen(
                                 } else {
                                     val siteA = tab.bondDrawFirstSiteId!!
                                     val siteB = atom.siteId
-                                    // Per v0.8.x: capture the target type before the flag resets.
+                                    // Per v0.7.0: capture the target type before the flag resets.
                                     val deleteTargetIsHbond = tab.bondDrawTargetIsHbond
-                                    // Per v0.8.x: hbond rules carry the "\u0000hbond" key suffix -
+                                    // Per v0.7.0: hbond rules carry the "\u0000hbond" key suffix -
                                     // match by the draw target type so deleting an H-bond never
                                     // hits a normal rule for the same site pair (or vice versa).
                                     val key = listOf(siteA, siteB).sorted().joinToString("\u0000") +
@@ -670,14 +690,14 @@ internal fun ViewerScreen(
             }
 
             // Per v0.7.0: lock button at viewer top-right.
-            // Per v0.8.1: inactive = 50% opacity; active = solid circular background + hollow icon.
-            // Per v0.8.26: hidden when the user hides it, unless already locked (to prevent lock-in).
+            // Per v0.7.0: inactive = 50% opacity; active = solid circular background + hollow icon.
+            // Per v0.7.0: hidden when the user hides it, unless already locked (to prevent lock-in).
             if (settingsValues.showLockButton || tab.interactionState.session.locked) {
                 IconButton(
                     onClick = { dispatchViewerCommand(ViewerCommand.ToggleLock) },
                     modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
                 ) {
-                    // Per v0.8.33: animated lock ↔ unlock transition (scale + fade), so the
+                    // Per v0.7.0: animated lock ↔ unlock transition (scale + fade), so the
                     // state change reads clearly instead of snapping. (The initial 180° rotation
                     // idea was dropped: it rendered the unlock state upside down.)
                     AnimatedContent(
@@ -729,7 +749,7 @@ internal fun ViewerScreen(
                 sceneRebuilding = false
                 tab.undo()
             },
-            // Per v0.8.36: loading dialogs dismiss only via the system back button.
+            // Per v0.7.0: loading dialogs dismiss only via the system back button.
             properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
         ) {
             androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
@@ -775,7 +795,7 @@ internal fun ViewerScreen(
             }
 
             // Legend groups by element, sourced from the edited structure (not the
-            // rendered atoms) so it doesn't churn as visibility changes. Per v0.8.30: when every
+            // rendered atoms) so it doesn't churn as visibility changes. Per v0.7.0: when every
             // site of an element shares the same color, the element collapses into one row
             // {X  [color]}; otherwise each site gets its own row labeled by site.label (X1, X2...).
             val legendEntries = remember(tab.structure, tab.visibility) {
@@ -794,7 +814,7 @@ internal fun ViewerScreen(
                         }
                     }
             }
-            // Per v0.8.26: legend toggle respects user preference.
+            // Per v0.7.0: legend toggle respects user preference.
             if (settingsValues.showLegend) {
                 ElementLegend(
                     entries = legendEntries,
@@ -822,7 +842,7 @@ internal fun ViewerScreen(
                 }
             }
 
-            // Per v0.8.26: use user-configured collapsed alpha.
+            // Per v0.7.0: use user-configured collapsed alpha.
             val floatingAlpha by animateFloatAsState(targetValue = if (toolOpen) 1f else settingsValues.ballCollapsedAlpha, label = "floatingAlpha")
             // Per v0.2.2: floating-ball palette uses the project's two purples. Dark mode = deep
             // bg + light icon; light mode = light bg + deep icon. (see AppPalette.floatingBall)
