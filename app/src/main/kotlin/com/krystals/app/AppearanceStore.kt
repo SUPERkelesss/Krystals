@@ -5,6 +5,7 @@ import com.krystals.renderer.core.style.BondColorMode
 import com.krystals.renderer.core.style.FrameMode
 import com.krystals.renderer.core.style.LineStyle
 import com.krystals.renderer.core.style.ViewerAppearance
+import com.krystals.renderer.core.style.MAX_LIGHT_ELEVATION_DEGREES
 import org.json.JSONObject
 
 /**
@@ -15,9 +16,11 @@ import org.json.JSONObject
  */
 object AppearanceStore {
     const val KEY = "appearance_json"
+    private const val LIGHTING_MODEL_VERSION = 3
 
     fun ViewerAppearance.toJson(): String = JSONObject().apply {
         put("backgroundArgb", backgroundArgb.toString())
+        put("lightingModelVersion", LIGHTING_MODEL_VERSION)
         put("reflectionEnabled", reflectionEnabled)
         put("lightAzimuth", lightAzimuth)
         put("lightElevation", lightElevation)
@@ -52,11 +55,18 @@ object AppearanceStore {
         val rawDofNear = o.optDouble("dofNear", d.dofNear.toDouble()).toFloat()
         val rawDofFar = o.optDouble("dofFar", d.dofFar.toDouble()).toFloat()
         val legacyDof = rawDofNear < rawDofFar
+        val rawLightElevation = o.optDouble("lightElevation", d.lightElevation.toDouble()).toFloat()
+        val migratedElevation = if (
+            o.optInt("lightingModelVersion", 1) < LIGHTING_MODEL_VERSION &&
+            (kotlin.math.abs(rawLightElevation - 60f) < 0.001f ||
+                kotlin.math.abs(rawLightElevation - 45f) < 0.001f)
+        ) 30f else rawLightElevation
+        val lightElevation = migratedElevation.coerceIn(0f, MAX_LIGHT_ELEVATION_DEGREES)
         ViewerAppearance(
             backgroundArgb = o.optString("backgroundArgb", d.backgroundArgb.toString()).toLong(),
             reflectionEnabled = o.optBoolean("reflectionEnabled", d.reflectionEnabled),
             lightAzimuth = o.optDouble("lightAzimuth", d.lightAzimuth.toDouble()).toFloat(),
-            lightElevation = o.optDouble("lightElevation", d.lightElevation.toDouble()).toFloat(),
+            lightElevation = lightElevation,
             lightIntensity = o.optDouble("lightIntensity", d.lightIntensity.toDouble()).toFloat(),
             diffusion = o.optDouble("diffusion", d.diffusion.toDouble()).toFloat(),
             atomOpacity = o.optDouble("atomOpacity", d.atomOpacity.toDouble()).toFloat(),

@@ -1,7 +1,7 @@
 package com.krystals.app.ui
 
 /**
- * Per v0.8.38: single home for every app-level colour dependency. Theme-dependent values are
+ * Per v0.7.0: single home for every app-level colour dependency. Theme-dependent values are
  * resolved via [floatingBall]/[highlight]; the rest are plain constants. Rebranching the brand
  * or re-tuning a theme touches exactly this file (Theme.kt derives its schemes from it).
  */
@@ -13,7 +13,7 @@ object AppPalette {
     const val BRAND_LIGHT = 0xFFCFA7F5L
     /** 中紫:theme secondary、锁定测量面板/单色键预设。 */
     const val BRAND_MID = 0xFF9966CCL
-    /** 预览球体固定灰(v0.8.36 起与主题无关)。 */
+    /** 预览球体固定灰(v0.7.0 起与主题无关)。 */
     const val SPHERE_GRAY = 0xFF5A5A60L
 
     // ── Viewer background ──

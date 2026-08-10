@@ -16,10 +16,10 @@ enum class PresetSource { BUNDLED, USER }
 
 data class PresetEntry(val name: String, val source: PresetSource, val assetPath: String? = null, val file: File? = null, val category: String? = null)
 
-/** Per v0.8.34: a first-level group in the preset library (a bundled asset subdirectory or a user folder). */
+/** Per v0.7.0: a first-level group in the preset library (a bundled asset subdirectory or a user folder). */
 data class PresetGroup(val name: String, val isUserGroup: Boolean, val entries: List<PresetEntry>)
 
-/** Per v0.8.34: filter metadata extracted from a preset CIF. */
+/** Per v0.7.0: filter metadata extracted from a preset CIF. */
 data class PresetMeta(
     val formula: String,
     val elementCount: Int,
@@ -32,10 +32,10 @@ object PresetRepository {
     private const val ASSET_DIR = "cifs_example"
     private const val USER_DIR = "presets"
 
-    /** Per v0.8.34: the default user group, created on first save/open. */
+    /** Per v0.7.0: the default user group, created on first save/open. */
     const val MY_PRESETS_GROUP = "我的预设"
 
-    /** Per v0.8.35: persistent filter-metadata cache file (filesDir), so the library opens
+    /** Per v0.7.0: persistent filter-metadata cache file (filesDir), so the library opens
      *  without re-parsing every CIF. Values are `lastModified|formula|elementCount|crystalSystem|pointGroup|spaceGroup`. */
     private const val META_CACHE_FILE = "preset_meta_cache.json"
 
@@ -96,7 +96,7 @@ object PresetRepository {
         if (cache.size != before) saveMetaCache(context, cache)
     }
 
-    /** Per v0.8.35: rename a user preset file. */
+    /** Per v0.7.0: rename a user preset file. */
     suspend fun renamePreset(context: Context, entry: PresetEntry, newName: String): Boolean = withContext(Dispatchers.IO) {
         if (entry.source != PresetSource.USER) return@withContext false
         val file = entry.file ?: return@withContext false
@@ -124,17 +124,17 @@ object PresetRepository {
         return result
     }
 
-    /** Per v0.8.34: `presets/` root directory, created on demand. */
+    /** Per v0.7.0: `presets/` root directory, created on demand. */
     private fun userRoot(context: Context): File =
         File(context.filesDir, USER_DIR).apply { if (!exists()) mkdirs() }
 
-    /** Per v0.8.34: the `presets/我的预设/` directory (default save target), created on demand. */
+    /** Per v0.7.0: the `presets/我的预设/` directory (default save target), created on demand. */
     suspend fun myPresetsDir(context: Context): File = withContext(Dispatchers.IO) {
         File(userRoot(context), MY_PRESETS_GROUP).apply { if (!exists()) mkdirs() }
     }
 
     /**
-     * Per v0.8.34: list the library as first-level groups, each with its files.
+     * Per v0.7.0: list the library as first-level groups, each with its files.
      * User groups are the first-level directories under `presets/`; loose `.cif`
      * files (legacy flat saves) are folded into the "我的预设" group.
      */
@@ -164,7 +164,7 @@ object PresetRepository {
         return@withContext userGroups + bundledGroups
     }
 
-    /** Per v0.8.34: create a new first-level user group; returns the directory or null on conflict/failure. */
+    /** Per v0.7.0: create a new first-level user group; returns the directory or null on conflict/failure. */
     suspend fun createGroup(context: Context, name: String): File? = withContext(Dispatchers.IO) {
         val safe = name.trim()
         if (safe.isEmpty()) return@withContext null
@@ -172,7 +172,7 @@ object PresetRepository {
         return@withContext if (dir.exists() || dir.mkdirs()) dir else null
     }
 
-    /** Per v0.8.34: rename a first-level user group. */
+    /** Per v0.7.0: rename a first-level user group. */
     suspend fun renameGroup(context: Context, oldName: String, newName: String): Boolean = withContext(Dispatchers.IO) {
         val safe = newName.trim()
         if (safe.isEmpty() || safe == oldName) return@withContext false
@@ -180,12 +180,12 @@ object PresetRepository {
         val target = File(userRoot(context), safe)
         if (!old.isDirectory || target.exists()) return@withContext false
         val ok = old.renameTo(target)
-        // Per v0.8.35: cached metas keyed by the old folder path are stale now.
+        // Per v0.7.0: cached metas keyed by the old folder path are stale now.
         if (ok) invalidateMetaCachePrefix(context, "u:" + old.path + File.separator)
         return@withContext ok
     }
 
-    /** Per v0.8.34: move a user preset file into another first-level group. */
+    /** Per v0.7.0: move a user preset file into another first-level group. */
     suspend fun movePreset(context: Context, entry: PresetEntry, targetGroup: String): Boolean = withContext(Dispatchers.IO) {
         if (entry.source != PresetSource.USER) return@withContext false
         val file = entry.file ?: return@withContext false
@@ -205,7 +205,7 @@ object PresetRepository {
         }
         debugLog(CIF_OPEN_TAG) { "OpenCIF 1/6: file read done (${text.length} chars)" }
         val parsed = CifCodec.parseStructure(text, autoConvertConventional = autoConvertConventional)
-        // Per v0.8.43: keep the 6-step open trace complete — the file-picker path logs
+        // Per v0.7.0: keep the 6-step open trace complete — the file-picker path logs
         // 1/6..3/6 in loadUri; preset opens parse here, so log the same three steps.
         debugLog(CIF_OPEN_TAG) { "OpenCIF 2/6: document parsed (${CifCodec.structuralBlockIndices(parsed.document).size} blocks)" }
         debugLog(CIF_OPEN_TAG) { "OpenCIF 3/6: structure parsed (${parsed.structure.sites.size} sites, sg ${parsed.structure.spaceGroup.symbol})" }
@@ -215,7 +215,7 @@ object PresetRepository {
         return@withContext parsed
     }
 
-    /** Per v0.8.34: parse a preset CIF's filter metadata (formula/element count/space group info). */
+    /** Per v0.7.0: parse a preset CIF's filter metadata (formula/element count/space group info). */
     fun parseMeta(text: String): PresetMeta? {
         return runCatching {
             val parsed = CifCodec.parseStructure(text, autoConvertConventional = true)
@@ -243,8 +243,8 @@ object PresetRepository {
         comments: String = "",
         targetGroup: String = MY_PRESETS_GROUP,
     ): File = withContext(Dispatchers.IO) {
-        // Per v0.8.34: user presets are saved into a user group directory.
-        // Per v0.8.36: the group is selectable (default "我的预设").
+        // Per v0.7.0: user presets are saved into a user group directory.
+        // Per v0.7.0: the group is selectable (default "我的预设").
         val userDir = if (targetGroup.isBlank() || targetGroup == MY_PRESETS_GROUP) myPresetsDir(context)
         else File(userRoot(context), targetGroup).apply { if (!exists()) mkdirs() }
         val safeName = name.ifBlank { "structure.cif" }.let { if (it.endsWith(".cif", true)) it else "$it.cif" }
@@ -253,7 +253,7 @@ object PresetRepository {
         // Per v0.7.0: inject user comments into CIF before saving to preset.
         val contentWithComments = CifComments.inject(content, comments)
         target.writeText(contentWithComments, Charsets.UTF_8)
-        // Per v0.8.35: refresh the metadata cache for this file right away (saved/modified).
+        // Per v0.7.0: refresh the metadata cache for this file right away (saved/modified).
         runCatching {
             PresetRepository.parseMeta(contentWithComments)?.let { meta ->
                 val cache = loadMetaCache(context)
@@ -274,7 +274,7 @@ object PresetRepository {
         return@withContext ok
     }
 
-    /** Per v0.8.36: delete a user group (whole directory). The default "我的预设" group is
+    /** Per v0.7.0: delete a user group (whole directory). The default "我的预设" group is
      *  protected and cannot be deleted. Returns false when the group is protected/missing. */
     suspend fun deleteGroup(context: Context, name: String): Boolean = withContext(Dispatchers.IO) {
         if (name.isBlank() || name == MY_PRESETS_GROUP) return@withContext false

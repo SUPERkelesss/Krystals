@@ -77,7 +77,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
         val atoms = SymmetryExpander.expand(tab.structure)
         BondGrid(atoms, tab.structure, BondRuleMatching.estimateCellSize(tab.structure)) to atoms
     }
-    // Per v0.8.43 (issue #12): O(1) site lookup map — rule rows used to scan `sites` linearly per
+    // Per v0.7.0 (issue #12): O(1) site lookup map — rule rows used to scan `sites` linearly per
     // row (O(rows × sites)); shared by the BONDS/HBONDS rows and the color picker.
     val siteById = remember(sites) { sites.associateBy { it.id } }
     val allSitesVisible = siteIds.isNotEmpty() && tab.visibility.hiddenSites.intersect(siteIds).isEmpty()
@@ -88,19 +88,19 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
     val allPolyhedraEnabled = siteIds.isNotEmpty() && siteIds.all { it in tab.visibility.polyhedronSites }
     var selected by remember(tab.isMolecularCrystal) {
         mutableStateOf(
-            // Per v0.8.27: restore this tab's last display sub-menu; a new tab
+            // Per v0.7.0: restore this tab's last display sub-menu; a new tab
             // (or never-opened) falls back to MOLECULES when the 分子 sub-menu exists
-            // (molecular crystal, v0.8.43), else ATOMS.
+            // (molecular crystal, v0.7.0), else ATOMS.
             tab.rememberedDisplayTab?.let { remembered ->
                 runCatching { DisplayTab.valueOf(remembered) }.getOrNull()
             } ?: if (tab.isMolecularCrystal) DisplayTab.MOLECULES else DisplayTab.ATOMS
         )
     }
-    // Per v0.8.1: if HBONDS tab is selected but no hbond rules exist anymore, fall back to BONDS.
+    // Per v0.7.0: if HBONDS tab is selected but no hbond rules exist anymore, fall back to BONDS.
     if (selected == DisplayTab.HBONDS && hbondRules.isEmpty()) selected = DisplayTab.BONDS
     // Per v0.3.44: per-group collapse state for the ATOMS/POLYHEDRA/BONDS grouped lists. Keyed by
     // element (ATOMS/POLYHEDRA) or element-pair (BONDS). A group is expanded when its key is absent
-    // (default expanded); toggling inserts/removes the key. Per v0.8.43 (issue #12): BONDS groups
+    // (default expanded); toggling inserts/removes the key. Per v0.7.0 (issue #12): BONDS groups
     // default COLLAPSED (expanded only when the key holds true) — see the BONDS branch.
     val collapsedGroups = remember { mutableStateMapOf<String, Boolean>() }
     ResizableSlidePanel(
@@ -109,7 +109,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
         onDismiss = onDismiss,
     ) { closePanel ->
         Column(Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}) {
-                    // Per v0.8.27: sub-menu selector is a fixed-height horizontally-scrollable
+                    // Per v0.7.0: sub-menu selector is a fixed-height horizontally-scrollable
                     // row; the close button stays pinned at the right edge (outside the scroll).
                     Row(
                         Modifier.fillMaxWidth().height(52.dp).padding(start = 8.dp, end = 4.dp),
@@ -127,7 +127,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                 add(DisplayTab.POLYHEDRA to localized("多面体", "Polyhedra"))
                                 if (hbondRules.isNotEmpty()) add(DisplayTab.HBONDS to localized("氢键", "H-Bonds"))
                             }
-                            // Per v0.8.27: if the remembered sub-menu is not available for
+                            // Per v0.7.0: if the remembered sub-menu is not available for
                             // this tab (e.g. MOLECULES on a non-molecular crystal, HBONDS with
                             // no hbond rules), fall back to the first available sub-menu.
                             if (selected !in tabEntries.map { it.first }) {
@@ -138,7 +138,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                     selected == kind,
                                     onClick = {
                                         selected = kind
-                                        // Per v0.8.27: remember per-tab so reopening the
+                                        // Per v0.7.0: remember per-tab so reopening the
                                         // display panel restores the last sub-menu.
                                         tab.rememberedDisplayTab = kind.name
                                     },
@@ -149,7 +149,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                         }
                         IconButton(onClick = { closePanel() }) { Icon(Icons.Default.Close, null) }
                     }
-                    // Per v0.8.43 (issue #12): hoisted per-tab computations — LazyListScope (the
+                    // Per v0.7.0 (issue #12): hoisted per-tab computations — LazyListScope (the
                     // LazyColumn body) is not a @Composable scope, so everything that needs
                     // remember() lives here, gated on the selected tab. `normalWithMatch` was
                     // recomputed on EVERY recomposition before (checkbox toggles re-ran the whole
@@ -228,7 +228,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                 }.toSortedMap(compareBy { it })
                             }
                         } else emptyMap()
-                    // Per v0.8.43 (issue #12): the panel body is a LazyColumn — atom/bond rows are
+                    // Per v0.7.0 (issue #12): the panel body is a LazyColumn — atom/bond rows are
                     // composed lazily, so 1k+ rows no longer freeze the panel on open/scroll.
                     // All list keys are prefixed per section (A:/B:/H:/P:top/hdr) to stay unique.
                     LazyColumn(Modifier.fillMaxSize().padding(12.dp)) {
@@ -314,7 +314,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                 // Per v0.3.44: group sites by element. Each group is a collapsible header
                                 // (expand/collapse + group checkbox + element label + group color swatch +
                                 // count) followed by the per-site rows when expanded.
-                                // Per v0.8.43: groups default COLLAPSED (consistent with the BONDS tab).
+                                // Per v0.7.0: groups default COLLAPSED (consistent with the BONDS tab).
                                 groupedSites.forEach { (element, groupSites) ->
                                     item(key = "A:hdr_$element") {
                                         val expanded = collapsedGroups["A:$element"] == true
@@ -323,7 +323,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                             title = "$element (${groupSites.size})",
                                             expanded = expanded,
                                             // Default-collapsed toggle: store the inverted value so clicking
-                                            // flips the derived expanded state (see BONDS, v0.8.43).
+                                            // flips the derived expanded state (see BONDS, v0.7.0).
                                             onToggle = { collapsedGroups["A:$element"] = !expanded },
                                             checked = allGroupVisible,
                                             onCheckChange = { checked ->
@@ -367,7 +367,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                 }
                             }
                             DisplayTab.BONDS -> {
-                                // Per v0.8.1: BONDS tab lists only non-hbond rules; hbonds have their own tab.
+                                // Per v0.7.0: BONDS tab lists only non-hbond rules; hbonds have their own tab.
                                 // Per v0.6.5: removed top-level "extend across cell" checkbox;
                                 // directional extend controls are now per-rule and per-group.
                                 item(key = "B:top") {
@@ -409,7 +409,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                 } else {
                                     // Per v0.3.44: group bond rules by element pair (e.g. C-O, Cs-Cl). Each
                                     // group is a collapsible header (group visibility checkbox) + per-rule rows.
-                                    // Per v0.8.43 (issue #12): BONDS groups default COLLAPSED — only the
+                                    // Per v0.7.0 (issue #12): BONDS groups default COLLAPSED — only the
                                     // headers (with group three-state checkbox + extend controls) show by
                                     // default; the rule rows appear after tapping a header.
                                     groupedBondRules.forEach { (pairLabel, groupRules) ->
@@ -536,7 +536,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                 }
                             }
                             DisplayTab.HBONDS -> {
-                                // Per v0.8.1: simplified bond-rule list for hbonds (no extend-outside-cell controls).
+                                // Per v0.7.0: simplified bond-rule list for hbonds (no extend-outside-cell controls).
                                 item(key = "H:top") {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Checkbox(allHbondsVisible, onCheckedChange = { checked ->
@@ -616,7 +616,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                 item(key = "P:div1") { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
                                 // Per v0.3.44: polyhedra sites grouped by element, same collapse/group-toggle
                                 // pattern as ATOMS but without a color swatch.
-                                // Per v0.8.43: groups default COLLAPSED (consistent with the BONDS tab).
+                                // Per v0.7.0: groups default COLLAPSED (consistent with the BONDS tab).
                                 groupedSites.forEach { (element, groupSites) ->
                                     item(key = "P:hdr_$element") {
                                         val expanded = collapsedGroups["P:$element"] == true
@@ -625,7 +625,7 @@ internal fun DisplayPanel(tab: DocumentTab, viewModel: KrystalsViewModel, onDism
                                             title = "$element (${groupSites.size})",
                                             expanded = expanded,
                                             // Default-collapsed toggle: store the inverted value so clicking
-                                            // flips the derived expanded state (see BONDS, v0.8.43).
+                                            // flips the derived expanded state (see BONDS, v0.7.0).
                                             onToggle = { collapsedGroups["P:$element"] = !expanded },
                                             checked = allGroupEnabled,
                                             onCheckChange = { checked ->
@@ -716,7 +716,10 @@ private fun CollapsibleGroupHeader(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 2.dp),
     ) {
         Icon(
-            if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+            // Per 2026-08-09: 方向修正 —— 展开状态显示向上箭头(可收起)、
+            // 收起状态显示向下箭头(可展开);旧逻辑恰好相反,BONDS 组 v0.7.0
+            // 改为默认收起后图标与状态明显不符。
+            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
             null,
             modifier = Modifier.size(20.dp),
         )

@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Help
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenu
@@ -88,7 +89,7 @@ internal fun AppMenu(
             fileActions()
             HorizontalDivider()
         }
-        // Per v0.8.36: tighter 2x2 grid (12dp gap) and icons tinted like the other menu items.
+        // Per v0.7.0: tighter 2x2 grid (12dp gap) and icons tinted like the other menu items.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)) {
             TextButton(onClick = { onDismissMenu(); onHelp() }) { Icon(Icons.Default.Help, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             TextButton(onClick = { onDismissMenu(); onFeedback() }) { Icon(Icons.Default.Feedback, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -113,6 +114,9 @@ internal fun HomeScreen(
     onTheme: (ThemeMode) -> Unit,
     language: String,
     onLanguage: (String) -> Unit,
+    settingsValues: SettingsValues,
+    onSettingsChange: (SettingsValues) -> Unit,
+    onRestoreDefaults: (() -> Unit)? = null,
     onHelp: () -> Unit,
     onAbout: () -> Unit,
     onSponsor: () -> Unit,
@@ -120,6 +124,14 @@ internal fun HomeScreen(
     onExit: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    // Per v0.7.0: preferences reachable directly from the home screen.
+    var settingsOpen by remember { mutableStateOf(false) }
+    if (settingsOpen) SettingsPanel(
+        settings = settingsValues,
+        onChange = onSettingsChange,
+        onDismiss = { settingsOpen = false },
+        onRestoreDefaults = onRestoreDefaults,
+    )
     Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
         Box(Modifier.align(Alignment.TopStart)) {
             IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.Menu, null) }
@@ -136,6 +148,10 @@ internal fun HomeScreen(
                 onSponsor = onSponsor,
                 onExit = onExit,
             )
+        }
+        // Per v0.7.0: preferences in the top-right corner, same position as the editor page.
+        Box(Modifier.align(Alignment.TopEnd)) {
+            IconButton(onClick = { settingsOpen = true }) { Icon(Icons.Default.Settings, null) }
         }
         // Per v0.4.3: in landscape the four import buttons span the full (very wide) screen and
         // look stretched; cap their width to half the screen there. Portrait keeps fillMaxWidth.
@@ -163,7 +179,7 @@ internal fun HomeScreen(
     }
 }
 
-/** Per v0.8.1: mutually-exclusive full-screen viewer panels. Consolidates five independent
+/** Per v0.7.0: mutually-exclusive full-screen viewer panels. Consolidates five independent
  *  booleans (align/measure/display/info/appearance) into one state so only a single write is
  *  needed per panel switch. menuOpen (dropdown) and toolOpen (floating-ball fan) stay as plain
  *  booleans because they can be open simultaneously with a full-screen panel. */

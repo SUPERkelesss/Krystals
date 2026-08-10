@@ -17,9 +17,11 @@ import com.krystals.interaction.measure.DistanceTool
 import com.krystals.interaction.measure.MeasurementMode
 import com.krystals.interaction.measure.MeasurementSelection
 import com.krystals.interaction.state.InteractionState
+import com.krystals.renderer.core.scene.GatheredAtomGrouper
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.core.scene.SceneProjection
 import com.krystals.renderer.core.style.AxisMode
+import com.krystals.renderer.core.style.SelectionColors
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -27,12 +29,12 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Per v0.8.38: shared native-Canvas drawing for the viewer-style overlay (axes + measurement
+ * Per v0.7.0: shared native-Canvas drawing for the viewer-style overlay (axes + measurement
  * labels). Used by the on-screen overlay (ViewerBackendHost) and the export-image overlay
  * (ExportOverlay) so both stay pixel-identical. Pure android.graphics — no Compose dependency.
  *
  * Behaviour notes (unified from the two former copies): axis labels carry no text shadow, arrows
- * start at the centre-sphere surface (v0.8.27 on-screen behaviour), dihedral planes use the
+ * start at the centre-sphere surface (v0.7.0 on-screen behaviour), dihedral planes use the
  * native gradient stops, and the measurement panel colours come from [AppPalette].
  */
 object OverlayDraw {
@@ -69,7 +71,7 @@ object OverlayDraw {
         val camera = state.session.camera
         val axisPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = 30f
-            // v0.8.27: no text shadow on axis labels (a/b/c, X/Y/Z).
+            // v0.7.0: no text shadow on axis labels (a/b/c, X/Y/Z).
             clearShadowLayer()
         }
         val rotatedDirs = directions.mapIndexed { index, axis ->
@@ -82,7 +84,7 @@ object OverlayDraw {
             val visibleLength = arrowLength * projectedLength
             val ux = if (projectedLength > 0.0001f) dx / projectedLength else 0f
             val uy = if (projectedLength > 0.0001f) dy / projectedLength else 0f
-            // v0.8.27: arrow starts at the centre-sphere surface (hub radius 12f).
+            // v0.7.0: arrow starts at the centre-sphere surface (hub radius 12f).
             val startX = originX + ux * 12f
             val startY = originY + uy * 12f
             val endX = startX + ux * visibleLength
@@ -222,6 +224,124 @@ object OverlayDraw {
         }
         return hits
     }
+
+    // ── inspection panels ──
+
+    /**
+     * Per v0.7.0: draws inspection info panels (element, site label, occupancy, bond-valence
+     * sum, fractional coordinates) next to inspected atoms, expanding gathered groups like the
+     * on-screen overlay (ViewerBackendHost). Canvas port of the former renderer-internal
+     * composeOverlay inspection section so exports match the viewer.
+     */
+    fun drawInspections(
+        canvas: Canvas,
+        w: Int,
+        h: Int,
+        scene: RenderScene,
+        state: InteractionState,
+        projection: SceneProjection,
+        bondValenceBySite: Map<String, Double> = emptyMap(),
+    ) {
+        val atoms = scene.atoms.associateBy { it.atom.id }
+        if (atoms.isEmpty()) return
+        val inspectionIds = state.document.inspection.lockedInspectedAtomIds +
+            listOfNotNull(state.document.inspection.inspectedAtomId)
+                .filterNot { it in state.document.inspection.lockedInspectedAtomIds }
+        if (inspectionIds.isEmpty()) return
+        val scale = (w / 1080f).coerceIn(0.5f, 1.0f)
+        fun project(id: Long): Pair<Float, Float>? {
+            val atom = atoms[id]?.atom ?: return null
+            val (px, py) = projection.project(atom.cartesianCoordinate.toVec3())
+            return px.toFloat() to py.toFloat()
+        }
+        // Gathered group membership (same data path as ViewerBackendHost).
+        val atomImages = atoms.values.map { it.atom }
+        val colorBySite = atoms.values.associate { it.atom.siteId to it.material.argb }
+        val groupByMemberId = GatheredAtomGrouper.groupByAtomId(atomImages, colorBySite)
+        val infoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 40f * scale
+            setShadowLayer(5f * scale, scale, scale, Color.BLACK)
+        }
+        inspectionIds.forEach { id ->
+            val atom = atoms[id]?.atom ?: return@forEach
+            val anchor = project(id) ?: return@forEach
+            val locked = id in state.document.inspection.lockedInspectedAtomIds
+            val group = groupByMemberId[id]
+            val displayIds = group?.memberAtomIds ?: listOf(id)
+            val displayMembers = displayIds.take(3).mapNotNull { mid -> atoms[mid]?.atom }
+            if (displayMembers.isEmpty()) return@forEach
+            val allLines = displayMembers.flatMapIndexed { index, m ->
+                val bvs = bondValenceBySite[m.siteId]?.let { "  s = %.2f".format(it) }.orEmpty()
+                val f = m.fractionalCoordinate
+                val memberLines = listOf(
+                    "${m.species.symbol}  ${m.siteLabel}  occ ${m.occupancy}$bvs",
+                    "(${f.x.formatFract()}, ${f.y.formatFract()}, ${f.z.formatFract()})",
+                )
+                if (index > 0) listOf("---") + memberLines else memberLines
+            } + if (displayIds.size > 3) listOf("...") else emptyList()
+            val lineHeight = infoPaint.fontMetrics.run { descent - ascent }
+            val dividerHeight = lineHeight * 0.3f
+            val maxWidth = allLines.maxOf(infoPaint::measureText)
+            val pad = 16f * scale
+            val atomRadius = projection.screenRadius(atoms.getValue(id).radius).toFloat()
+            val totalHeight = allLines.size * lineHeight + (displayMembers.size - 1) * dividerHeight
+            val left = anchor.first + atomRadius + 14f * scale
+            val top = anchor.second - atomRadius - 14f * scale - totalHeight - pad
+            val bottom = anchor.second - atomRadius - 14f * scale + pad
+            val panel = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = if (locked) Color.argb(209, 153, 102, 204) else Color.argb(166, 0, 0, 0)
+            }
+            canvas.drawRoundRect(left, top, left + maxWidth + pad * 2f, bottom, 14f * scale, 14f * scale, panel)
+            var currentY = top + pad + lineHeight - infoPaint.fontMetrics.descent
+            allLines.forEach { line ->
+                canvas.drawText(line, left + pad, currentY, infoPaint)
+                currentY += if (line == "---") dividerHeight + lineHeight else lineHeight
+            }
+        }
+    }
+
+    // ── selection rings ──
+
+    /**
+     * Per v0.7.0: draws selection/lock/inspection rings around highlighted atoms (Canvas port
+     * of the former renderer-internal composeOverlay rings). Ring radius tracks the Filament
+     * visual sphere (world radius × screen scale) so rings hug the rendered sphere at any zoom.
+     */
+    fun drawSelectionRings(
+        canvas: Canvas,
+        w: Int,
+        h: Int,
+        scene: RenderScene,
+        state: InteractionState,
+        projection: SceneProjection,
+    ) {
+        val atoms = scene.atoms.associateBy { it.atom.id }
+        if (atoms.isEmpty()) return
+        val lockedIds = state.document.lockedMeasurements.flatMap { it.atomIds }.toSet() +
+            state.document.inspection.lockedInspectedAtomIds
+        val highlightedIds = state.document.selection.selectedAtomIds.toSet() + lockedIds +
+            listOfNotNull(state.document.inspection.inspectedAtomId)
+        if (highlightedIds.isEmpty()) return
+        val scale = (w / 1080f).coerceIn(0.5f, 1.0f)
+        fun project(id: Long): Pair<Float, Float>? {
+            val atom = atoms[id]?.atom ?: return null
+            val (px, py) = projection.project(atom.cartesianCoordinate.toVec3())
+            return px.toFloat() to py.toFloat()
+        }
+        val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        highlightedIds.forEach { id ->
+            val atomInstance = atoms[id] ?: return@forEach
+            val anchor = project(id) ?: return@forEach
+            val isLocked = id in lockedIds
+            ringPaint.color = if (isLocked) SelectionColors.LOCKED_ARGB.toInt() else SelectionColors.SELECTED_ARGB.toInt()
+            ringPaint.strokeWidth = (if (isLocked) 6f else 5f) * scale
+            val r = projection.screenRadius(atomInstance.radius).toFloat()
+            canvas.drawCircle(anchor.first, anchor.second, r + 4f * scale, ringPaint)
+        }
+    }
+
+    private fun Double.formatFract() = "%.4f".format(this)
 
     // ── color helpers ──
 

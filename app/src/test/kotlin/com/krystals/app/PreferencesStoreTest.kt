@@ -88,6 +88,7 @@ class PreferencesStoreTest {
         assertEquals(ExportQuality.HIGH, d.exportQuality)
         assertTrue(d.exportShowAxes)
         assertTrue(d.exportShowMeasurements)
+        assertTrue(d.showSecondaryExtendBonds)
     }
 
     @Test
@@ -115,6 +116,7 @@ class PreferencesStoreTest {
             exportQuality = ExportQuality.LOW,
             exportShowAxes = true,
             exportShowMeasurements = true,
+            showSecondaryExtendBonds = false,
         )
         PreferencesStore.save(prefs, original)
         val loaded = PreferencesStore.load(prefs)
@@ -131,7 +133,11 @@ class PreferencesStoreTest {
     @Test
     fun clearAllRemovesAllKeys() {
         val prefs = FakePrefs()
-        val settings = SettingsValues(language = "zh", theme = ThemeMode.LIGHT)
+        val settings = SettingsValues(
+            language = "zh",
+            theme = ThemeMode.LIGHT,
+            showSecondaryExtendBonds = false,
+        )
         PreferencesStore.save(prefs, settings)
         PreferencesStore.clearAll(prefs)
         assertEquals(SettingsValues.defaults(), PreferencesStore.load(prefs))

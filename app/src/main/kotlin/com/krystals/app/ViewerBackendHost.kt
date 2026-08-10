@@ -129,7 +129,7 @@ fun FilamentViewport(
     LaunchedEffect(renderer, scene) { renderer.submit(scene) }
     LaunchedEffect(renderer, interactionState) { renderer.updateInteraction(interactionState) }
     LaunchedEffect(renderer, bondValenceBySite) { renderer.updateOverlayData(bondValenceBySite) }
-    // Per v0.8.25: pause frame scheduling while the app is in the background (the Surface may
+    // Per v0.7.0: pause frame scheduling while the app is in the background (the Surface may
     // survive lock screen / split view) and resume with one refresh frame on return.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(renderer, lifecycleOwner) {
@@ -294,7 +294,7 @@ private fun FilamentLegacyStyleOverlay(
             textSize = 40f
             setShadowLayer(5f, 1f, 1f, android.graphics.Color.BLACK)
         }
-        // Per v0.8.2: compute gathered group membership from the AtomInstance atoms.
+        // Per v0.7.0: compute gathered group membership from the AtomInstance atoms.
         val atomImages = atomsById.values.map { it.atom }
         val colorBySite = atomsById.values.associate { it.atom.siteId to it.material.argb }
         val groupByMemberId = GatheredAtomGrouper.groupByAtomId(atomImages, colorBySite)
@@ -303,7 +303,7 @@ private fun FilamentLegacyStyleOverlay(
             val atom = atomsById[id]?.atom ?: return@forEach
             val anchor = point(id) ?: return@forEach
             val locked = id in state.document.inspection.lockedInspectedAtomIds
-            // Per v0.8.2: if atom belongs to a gathered group, show up to 3 members.
+            // Per v0.7.0: if atom belongs to a gathered group, show up to 3 members.
             val group = groupByMemberId[id]
             val displayIds = group?.memberAtomIds ?: listOf(id)
             val displayMembers = displayIds.take(3).mapNotNull { mid -> atomsById[mid]?.atom }

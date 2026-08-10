@@ -22,7 +22,7 @@ data class CodSearchResult(
     val sgNumber: String,
     val name: String,
     val nel: Int,
-    // Per v0.8.27: bibliographic fields parsed from the CSV when the mirror provides them
+    // Per v0.7.0: bibliographic fields parsed from the CSV when the mirror provides them
     // (used by the title/author/journal/year filters). Empty when unavailable.
     val title: String = "",
     val author: String = "",
@@ -97,7 +97,7 @@ object CrystallographyOpenDatabase {
         selectedMirror = mirror
     }
 
-    /** Per v0.8.26: set mirror from user preference. Per v0.8.36: URLs are normalized the same
+    /** Per v0.7.0: set mirror from user preference. Per v0.7.0: URLs are normalized the same
      *  way as [testCustomMirror] (scheme defaults to https, and the /cod API path is appended
      *  when missing), so the tested URL is exactly the URL search will use. */
     fun setMirrorMode(mode: CodMirrorMode, customUrl: String = "", fixedIndex: Int = 0) {
@@ -113,7 +113,7 @@ object CrystallographyOpenDatabase {
         }
     }
 
-    /** Per v0.8.26: test a single custom mirror URL (2xx = ok). Per v0.8.36: the URL is
+    /** Per v0.7.0: test a single custom mirror URL (2xx = ok). Per v0.7.0: the URL is
      *  normalized (https scheme + /cod API path) exactly like [setMirrorMode] uses it, so a
      *  passing test means search will work; timeout raised to 10s for slow COD mirrors. */
     suspend fun testCustomMirror(url: String): Boolean {
@@ -389,7 +389,7 @@ object CrystallographyOpenDatabase {
                 if (!cif.contains(Regex("(?im)^\\s*data_"))) error("COD did not return a CIF for $fileId")
                 target.parentFile?.mkdirs()
                 target.writeText(cif, Charsets.UTF_8)
-                // Per v0.8.43: keep the 6-step open trace complete — network opens parse
+                // Per v0.7.0: keep the 6-step open trace complete — network opens parse
                 // here, so log the same 1/6..3/6 steps the file-picker path logs in loadUri.
                 debugLog(CIF_OPEN_TAG) { "OpenCIF 1/6: CIF text retrieved (${cif.length} chars)" }
                 val parsed = CifCodec.parseStructure(cif, autoConvertConventional = autoConvertConventional)

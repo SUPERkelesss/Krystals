@@ -136,18 +136,15 @@ fun ColorPickerDialog(initialArgb: Long, onDismiss: () -> Unit, onColorSelected:
     )
 }
 
-
 private fun argbToHsv(argb: Long): FloatArray {
     val hsv = FloatArray(3)
     android.graphics.Color.colorToHSV(argb.toInt(), hsv)
     return hsv
 }
 
-
 private fun hsvToArgb(alpha: Int, hsv: FloatArray): Long {
     return android.graphics.Color.HSVToColor(alpha, hsv).toLong() and 0xFFFFFFFFL
 }
-
 
 @Composable
 internal fun DropdownField(label: String, value: String, options: List<String>, onValue: (String) -> Unit) {
@@ -158,7 +155,6 @@ internal fun DropdownField(label: String, value: String, options: List<String>, 
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) { options.forEach { option -> DropdownMenuItem(text = { Text(option) }, onClick = { open = false; onValue(option) }) } }
     }
 }
-
 
 internal val RAINBOW_SWEEP_COLORS = listOf(
     Color.Red, Color(0xFFFFA500), Color.Yellow,

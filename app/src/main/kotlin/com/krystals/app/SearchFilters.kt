@@ -49,18 +49,18 @@ internal enum class SearchFilterType {
     TITLE, AUTHOR, JOURNAL, YEAR, ELEMENT_COMPOSITION, STABLE,
 }
 
-// Per v0.8.36: the formula filter is removed everywhere — its option list (hundreds of
+// Per v0.7.0: the formula filter is removed everywhere — its option list (hundreds of
 // formulas) crashes the DropdownMenu-based chip on some devices, so the filter bar keeps the
 // four low-cardinality filters only.
-/** Per v0.8.27: default visible filters. Per v0.8.36: formula filter removed. */
+/** Per v0.7.0: default visible filters. Per v0.7.0: formula filter removed. */
 
 internal val DEFAULT_VISIBLE_FILTERS = setOf(
     SearchFilterType.ELEMENT_COUNT, SearchFilterType.CRYSTAL_SYSTEM,
     SearchFilterType.POINT_GROUP, SearchFilterType.SPACE_GROUP,
 )
 
-/** Per v0.8.27: the full filter set offered by each search page. Per v0.8.29: COD has no
- * composition/stability filters; MP has no bibliographic filters. Per v0.8.36: formula removed. */
+/** Per v0.7.0: the full filter set offered by each search page. Per v0.7.0: COD has no
+ * composition/stability filters; MP has no bibliographic filters. Per v0.7.0: formula removed. */
 
 internal val COD_FILTER_TYPES = setOf(
     SearchFilterType.ELEMENT_COUNT, SearchFilterType.CRYSTAL_SYSTEM,
@@ -81,7 +81,7 @@ internal data class SearchFilterState(
     val crystalSystem: String? = null,
     val pointGroup: String? = null,
     val spaceGroup: String? = null,
-    // Per v0.8.27: extended filters.
+    // Per v0.7.0: extended filters.
     val title: String? = null,
     val author: String? = null,
     val journal: String? = null,
@@ -101,7 +101,7 @@ internal data class SearchResultMeta(
     val crystalSystem: String?,
     val pointGroup: String?,
     val spaceGroup: String?,
-    // Per v0.8.27: bibliographic fields for the extended filters (COD), empty for MP.
+    // Per v0.7.0: bibliographic fields for the extended filters (COD), empty for MP.
     val formula: String = "",
     val title: String = "",
     val author: String = "",
@@ -109,7 +109,7 @@ internal data class SearchResultMeta(
     val year: String = "",
 )
 
-/** Per v0.8.27: distinct element symbols in a formula like "Fe2O3" → {Fe, O}. Single shared
+/** Per v0.7.0: distinct element symbols in a formula like "Fe2O3" → {Fe, O}. Single shared
  *  implementation for element parsing (count + composition filter) across the app. */
 
 internal fun elementsInFormula(formula: String): Set<String> =
@@ -165,32 +165,30 @@ internal fun buildFilterOptions(metas: List<SearchResultMeta>): SearchFilterOpti
     val crystalSystems = metas.mapNotNull { it.crystalSystem }.distinct().sorted()
     val pointGroups = metas.mapNotNull { it.pointGroup }.distinct().sorted()
     val spaceGroups = metas.mapNotNull { it.spaceGroup }.distinct().sorted()
-    // Per v0.8.27: extended filter options (empty when the source provides no values).
+    // Per v0.7.0: extended filter options (empty when the source provides no values).
     val titles = metas.map { it.title }.filter { it.isNotBlank() }.distinct().sorted()
     val authors = metas.map { it.author }.filter { it.isNotBlank() }.distinct().sorted()
     val journals = metas.map { it.journal }.filter { it.isNotBlank() }.distinct().sorted()
     val years = metas.map { it.year }.filter { it.isNotBlank() }.distinct().sorted()
-    // Per v0.8.29: element-composition options = distinct sorted element sets (e.g. "Fe O").
+    // Per v0.7.0: element-composition options = distinct sorted element sets (e.g. "Fe O").
     val elementCompositions = metas.map { elementsInFormula(it.formula).sorted().joinToString(" ") }
         .filter { it.isNotBlank() }.distinct().sorted()
     return SearchFilterOptions(elementCounts, crystalSystems, pointGroups, spaceGroups, titles, authors, journals, years, elementCompositions)
 }
-
 
 internal data class SearchFilterOptions(
     val elementCounts: List<Int>,
     val crystalSystems: List<String>,
     val pointGroups: List<String>,
     val spaceGroups: List<String>,
-    // Per v0.8.27: extended filter options.
+    // Per v0.7.0: extended filter options.
     val titles: List<String> = emptyList(),
     val authors: List<String> = emptyList(),
     val journals: List<String> = emptyList(),
     val years: List<String> = emptyList(),
-    // Per v0.8.29: element-composition options (distinct sorted element sets).
+    // Per v0.7.0: element-composition options (distinct sorted element sets).
     val elementCompositions: List<String> = emptyList(),
 )
-
 
 private fun normalizeSgSymbol(s: String) = s.replace(" ", "").replace("_", "").lowercase()
 
@@ -200,7 +198,6 @@ private fun pointGroupsForCrystalSystem(cs: String?): List<String> {
     if (cs == null) return SpaceGroupCatalog.all.mapNotNull { it.pointGroup }.distinct().sorted()
     return SpaceGroupCatalog.all.filter { it.crystalSystem == cs }.mapNotNull { it.pointGroup }.distinct().sorted()
 }
-
 
 private fun spaceGroupsForPointGroup(pg: String?): List<String> {
     if (pg == null) return SpaceGroupCatalog.all.map { it.symbol }.distinct().sorted()
@@ -218,7 +215,7 @@ internal fun filterMpResults(results: List<MpSearchResult>, filter: SearchFilter
         (filter.crystalSystem == null || meta.crystalSystem == filter.crystalSystem) &&
         (filter.pointGroup == null || meta.pointGroup == filter.pointGroup) &&
         (filter.spaceGroup == null || meta.spaceGroup == filter.spaceGroup) &&
-        // Per v0.8.27: extended filters.
+        // Per v0.7.0: extended filters.
         (filter.elementComposition == null || elementsInFormula(item.formula).containsAll(elementsInFormula(filter.elementComposition))) &&
         (filter.stable == null || stableOf(item) == filter.stable)
     }
@@ -234,7 +231,7 @@ internal fun filterCodResults(results: List<CodSearchResult>, filter: SearchFilt
         (filter.crystalSystem == null || meta.crystalSystem == filter.crystalSystem) &&
         (filter.pointGroup == null || meta.pointGroup == filter.pointGroup) &&
         (filter.spaceGroup == null || meta.spaceGroup == filter.spaceGroup) &&
-        // Per v0.8.27: extended filters.
+        // Per v0.7.0: extended filters.
         (filter.title == null || item.title.contains(filter.title, ignoreCase = true)) &&
         (filter.author == null || item.author.contains(filter.author, ignoreCase = true)) &&
         (filter.journal == null || item.journal.contains(filter.journal, ignoreCase = true)) &&
@@ -242,7 +239,7 @@ internal fun filterCodResults(results: List<CodSearchResult>, filter: SearchFilt
     }
 }
 
-/** Per v0.8.27: true when the material is on the hull (stable). Null when no hull data. */
+/** Per v0.7.0: true when the material is on the hull (stable). Null when no hull data. */
 
 private fun stableOf(item: MpSearchResult): Boolean? = item.energyAboveHull?.let { it <= 0.0 }
 
@@ -275,7 +272,7 @@ private fun FilterDropdownChip(
                 }
             } else null,
         )
-        // Per v0.8.36: DropdownMenu scrolls its content internally. A plain Column keeps that
+        // Per v0.7.0: DropdownMenu scrolls its content internally. A plain Column keeps that
         // scrolling working — the earlier heightIn(max 360dp) capped the list and clipped long
         // option sets, and the earlier inner verticalScroll nested a second scroll container
         // which crashed with "infinity maximum height constraints".
@@ -321,7 +318,7 @@ private fun IntFilterDropdownChip(
                 }
             } else null,
         )
-        // Per v0.8.36: plain Column, DropdownMenu scrolls internally (see FilterDropdownChip).
+        // Per v0.7.0: plain Column, DropdownMenu scrolls internally (see FilterDropdownChip).
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             Column {
                 options.forEach { option ->
@@ -335,7 +332,7 @@ private fun IntFilterDropdownChip(
     }
 }
 
-/** Per v0.8.27: localized label for a filter type. */
+/** Per v0.7.0: localized label for a filter type. */
 
 @Composable
 private fun filterTypeLabel(type: SearchFilterType): String = when (type) {
@@ -351,7 +348,7 @@ private fun filterTypeLabel(type: SearchFilterType): String = when (type) {
     SearchFilterType.STABLE -> localized("是否稳定", "Stability")
 }
 
-/** Per v0.8.27: dialog to pick which filter chips are visible in the filter bar. */
+/** Per v0.7.0: dialog to pick which filter chips are visible in the filter bar. */
 
 @Composable
 private fun FilterPickerDialog(
@@ -426,7 +423,7 @@ internal fun SearchFilterBar(
 
     var pickerOpen by remember { mutableStateOf(false) }
     Surface(
-        // Per v0.8.36: the filter bar blends with the page background (no elevation tint).
+        // Per v0.7.0: the filter bar blends with the page background (no elevation tint).
         tonalElevation = 0.dp,
         color = MaterialTheme.colorScheme.background,
         modifier = Modifier.fillMaxWidth(),
@@ -436,7 +433,7 @@ internal fun SearchFilterBar(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Per v0.8.27: "+" button opens the filter-item picker.
+            // Per v0.7.0: "+" button opens the filter-item picker.
             item {
                 IconButton(onClick = { pickerOpen = true }, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Default.Add, localized("筛选项目", "Filter items"), tint = MaterialTheme.colorScheme.primary)

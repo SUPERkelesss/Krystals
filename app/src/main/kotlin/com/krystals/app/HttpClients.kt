@@ -3,7 +3,7 @@ package com.krystals.app
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 
-/** Per v0.8.39: shared OkHttp clients grouped by timeout profile (was 6 ad-hoc builders). */
+/** Per v0.7.0: shared OkHttp clients grouped by timeout profile (was 6 ad-hoc builders). */
 object HttpClients {
     /** 15s/30s: COD/MP query traffic. */
     val default: OkHttpClient by lazy {

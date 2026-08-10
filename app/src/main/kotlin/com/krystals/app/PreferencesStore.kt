@@ -4,7 +4,7 @@ import androidx.core.content.edit
 import android.content.SharedPreferences
 import com.krystals.app.ui.ThemeMode
 
-/** Per v0.8.26: bond-rule strategy applied when opening a file. */
+/** Per v0.7.0: bond-rule strategy applied when opening a file. */
 enum class BondRuleMode { AUTO, SMART_IONIC, BONDING }
 
 /** Default "extend bonds across cell" behaviour for new tabs. */
@@ -37,20 +37,23 @@ data class SettingsValues(
     val autoConvertCell: Boolean = true,
     val defaultShowBonds: Boolean = true,
     val defaultExtendBonds: ExtendBondsDefault = ExtendBondsDefault.METALS_ONLY,
-    // Per v0.8.27: 自动计算键规则开启时,是否一并计算氢键(默认开=现状行为)。
+    // Per v0.7.0: 自动计算键规则开启时,是否一并计算氢键(默认开=现状行为)。
     val autoComputeHbonds: Boolean = true,
-    // Per v0.8.27: 新 tab 默认显示氢键(默认开=现状行为)。
+    // Per v0.7.0: 新 tab 默认显示氢键(默认开=现状行为)。
     val defaultShowHbonds: Boolean = true,
-    // Per v0.8.27: 分子晶体新 tab 默认按分子延伸(默认开=现状硬编码行为)。
+    // Per v0.7.0: 分子晶体新 tab 默认按分子延伸(默认开=现状硬编码行为)。
     val defaultMoleculeExtend: Boolean = true,
     val defaultPolyhedra: PolyhedraDefault = PolyhedraDefault.NEVER,
     val codMirrorMode: CodMirrorMode = CodMirrorMode.AUTO,
     val codFixedIndex: Int = 0,
     val codCustomUrl: String = "",
     val exportQuality: ExportQuality = ExportQuality.HIGH,
-    // Per v0.8.30: axes/measurements export overlays default to ON.
+    // Per v0.7.0: axes/measurements export overlays default to ON.
     val exportShowAxes: Boolean = true,
     val exportShowMeasurements: Boolean = true,
+    // Secondary bonds connect atoms that are already visible through first-order bond extension.
+    // They never introduce additional external atoms and are enabled by default.
+    val showSecondaryExtendBonds: Boolean = true,
 ) {
     companion object {
         fun defaults() = SettingsValues()
@@ -82,7 +85,8 @@ object PreferencesStore {
     const val KEY_EXPORT_QUALITY = "export_quality"
     const val KEY_EXPORT_SHOW_AXES = "export_show_axes"
     const val KEY_EXPORT_SHOW_MEASUREMENTS = "export_show_measurements"
-    // Per v0.8.39: keys for runtime prefs written outside SettingsValues (moved from ad-hoc
+    const val KEY_SHOW_SECONDARY_EXTEND_BONDS = "show_secondary_extend_bonds"
+    // Per v0.7.0: keys for runtime prefs written outside SettingsValues (moved from ad-hoc
     // string literals scattered across KrystalsRoot/Dialogs/MainActivity/PresetLibrary/MaterialsProject).
     const val KEY_MP_CAUTION_DISMISSED = "mp_caution_dismissed"
     const val KEY_BG_FOLLOW_THEME = "bg_follow_theme"
@@ -130,6 +134,7 @@ object PreferencesStore {
             } catch (_: IllegalArgumentException) { defaults.exportQuality },
             exportShowAxes = prefs.getBoolean(KEY_EXPORT_SHOW_AXES, defaults.exportShowAxes),
             exportShowMeasurements = prefs.getBoolean(KEY_EXPORT_SHOW_MEASUREMENTS, defaults.exportShowMeasurements),
+            showSecondaryExtendBonds = prefs.getBoolean(KEY_SHOW_SECONDARY_EXTEND_BONDS, defaults.showSecondaryExtendBonds),
         )
     }
 
@@ -157,6 +162,7 @@ object PreferencesStore {
             putString(KEY_EXPORT_QUALITY, settings.exportQuality.name)
             putBoolean(KEY_EXPORT_SHOW_AXES, settings.exportShowAxes)
             putBoolean(KEY_EXPORT_SHOW_MEASUREMENTS, settings.exportShowMeasurements)
+            putBoolean(KEY_SHOW_SECONDARY_EXTEND_BONDS, settings.showSecondaryExtendBonds)
         }
     }
 
@@ -168,7 +174,7 @@ object PreferencesStore {
             remove(KEY_AUTO_CONVERT_CELL); remove(KEY_DEFAULT_SHOW_BONDS); remove(KEY_DEFAULT_EXTEND_BONDS); remove(KEY_DEFAULT_POLYHEDRA)
             remove(KEY_AUTO_COMPUTE_HBONDS); remove(KEY_DEFAULT_SHOW_HBONDS); remove(KEY_DEFAULT_MOLECULE_EXTEND)
             remove(KEY_COD_MIRROR_MODE); remove(KEY_COD_FIXED_INDEX); remove(KEY_COD_CUSTOM_URL); remove(KEY_EXPORT_QUALITY)
-            remove(KEY_EXPORT_SHOW_AXES); remove(KEY_EXPORT_SHOW_MEASUREMENTS)
+            remove(KEY_EXPORT_SHOW_AXES); remove(KEY_EXPORT_SHOW_MEASUREMENTS); remove(KEY_SHOW_SECONDARY_EXTEND_BONDS)
         }
     }
 }

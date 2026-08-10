@@ -126,6 +126,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("org.junit.jupiter:junit-jupiter:5.13.1")
     testImplementation("org.junit.platform:junit-platform-launcher:1.13.1")
+    testImplementation("org.json:json:20250517")
     testImplementation(kotlin("test"))
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

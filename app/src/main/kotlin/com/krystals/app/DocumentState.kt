@@ -113,7 +113,7 @@ class DocumentTab(
     var interactionState by mutableStateOf(InteractionState())
     var visibility: ViewerVisibility
         get() = interactionState.document.visibility
-        // Per v0.8.39: F4 — plain state setter, same as the other interaction properties; the
+        // Per v0.7.0: F4 — plain state setter, same as the other interaction properties; the
         // reducer stays reserved for user-gesture command flow (ViewerBackendHost).
         set(value) { interactionState = interactionState.copy(document = interactionState.document.copy(visibility = value)) }
     var selectedAtomIds: List<Long>
@@ -140,14 +140,14 @@ class DocumentTab(
     // reapply when adjusted (default smart-ionic).
     var bondEpsilon by mutableDoubleStateOf(0.45)
     var lastRadiusSource by mutableStateOf(RadiusSource.SMART_IONIC)
-    // Per v0.8.x: 氢键角度阈值(D–H···A 夹角,度)。UI 设置,不持久化;默认 110 与检测一致。
+    // Per v0.7.0: 氢键角度阈值(D–H···A 夹角,度)。UI 设置,不持久化;默认 110 与检测一致。
     var hbondAngleThreshold by mutableDoubleStateOf(110.0)
     // Per v0.7.0: user crystal comments stored in CIF as "# Krystals Comments" block.
     var comments by mutableStateOf("")
     var commentsOpen by mutableStateOf(false)
-    // Per v0.8.0: tracks whether the cell is currently in primitive form (after convertToPrimitive).
+    // Per v0.7.0: tracks whether the cell is currently in primitive form (after convertToPrimitive).
     var isPrimitiveCell by mutableStateOf(false)
-    // Per v0.8.1: remember the original conventional/primitive cell so converting back restores
+    // Per v0.7.0: remember the original conventional/primitive cell so converting back restores
     // the exact data without matrix rounding errors.
     var savedConventionalStructure by mutableStateOf<CrystalStructure?>(null)
     var savedConventionalBondConfig by mutableStateOf<BondConfiguration?>(null)
@@ -157,7 +157,7 @@ class DocumentTab(
 // not a display-only supercell. Controls whether SINGLE_CELL frame mode shows the
 // entire supercell frame or just one cell.
     var structuralExpansion by mutableStateOf(false)
-    // Per v0.8.43 (issue #6): true after any 3×3 matrix transform — hides the
+    // Per v0.7.0 (issue #6): true after any 3×3 matrix transform — hides the
     // primitive/conventional conversion button (conversion after a custom transform
     // would discard the transform's intent). Snapshot-integrated so undo restores it.
     var cellTransformed by mutableStateOf(false)
@@ -172,16 +172,16 @@ class DocumentTab(
     // 按分子展开:仅分子晶体有效,分子晶体默认启用;启用时"扩展到晶胞外"规则失效(UI 灰显)。
     var moleculeExtend by mutableStateOf(false)
     var moleculeAnalysisPending by mutableStateOf(true)
-    // Per v0.8.43: 分子展开默认值是否待应用——仅新打开/结构变更(undo/redo、自动键规则)后置位;
+    // Per v0.7.0: 分子展开默认值是否待应用——仅新打开/结构变更(undo/redo、自动键规则)后置位;
     // 编辑路径(updateAnalysis、绘制/删除键)不置位,故"扩展到晶胞外"全选等编辑不再自动触发"按分子展开"。
     var moleculeExtendDefaultPending by mutableStateOf(true)
     // Per v0.7.1: when non-null, EditorPanel opens on this tab ("atoms", "bonds", etc.)
     var pendingEditorTab by mutableStateOf<String?>(null)
-    // Per v0.8.27: last sub-menu the user opened in the EDITOR panel for THIS tab.
+    // Per v0.7.0: last sub-menu the user opened in the EDITOR panel for THIS tab.
     // null = never opened / new tab → EditorPanel falls back to the first sub-menu.
     // Stored as enum name ("BASIC", "ATOMS", ...) so DocumentTab stays UI-agnostic.
     var rememberedEditorTab by mutableStateOf<String?>(null)
-    // Per v0.8.27: last sub-menu the user opened in the DISPLAY panel for THIS tab.
+    // Per v0.7.0: last sub-menu the user opened in the DISPLAY panel for THIS tab.
     // null = never opened / new tab → DisplayPanel falls back to the first sub-menu.
     var rememberedDisplayTab by mutableStateOf<String?>(null)
     // Per v0.7.1: bond draw state — when DRAWING, atom taps are intercepted to pick two atoms
@@ -189,7 +189,7 @@ class DocumentTab(
     var bondDrawMode by mutableStateOf(BondDrawMode.NONE)
     var bondDrawFirstSiteId by mutableStateOf<String?>(null)
     var bondDrawFirstCartesian by mutableStateOf<Vec3?>(null)
-    // Per v0.8.x: bond draw/delete target type — true when the user is drawing/deleting an
+    // Per v0.7.0: bond draw/delete target type — true when the user is drawing/deleting an
     // H-BOND (normal-bond keys lack the "\u0000hbond" suffix and would match the wrong rule).
     var bondDrawTargetIsHbond by mutableStateOf(false)
     var pendingBondDrawRule by mutableStateOf<BondRule?>(null)

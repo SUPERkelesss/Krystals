@@ -109,7 +109,7 @@ object MaterialsProject {
     }
 
     /**
-     * Per v0.8.0: Search uses only the new API. Legacy API support has been removed.
+     * Per v0.7.0: Search uses only the new API. Legacy API support has been removed.
      */
     suspend fun search(context: Context, query: String, fuzzy: Boolean = false): Result<List<MpSearchResult>> = withContext(Dispatchers.IO) {
         val key = getKey(context) ?: return@withContext Result.failure(IllegalStateException("API key not set"))
@@ -150,7 +150,7 @@ object MaterialsProject {
     }
 
     /**
-     * Per v0.8.0: Download uses the new API. The next-gen `structure` field is the
+     * Per v0.7.0: Download uses the new API. The next-gen `structure` field is the
      * conventional standard cell, written here with identity symmetry operations so the
      * CIF is self-consistent. After parsing, if the cell is already conventional (cubic
      * metric for Im-3m, orthorhombic metric for Cmce, etc.), restore the full space-group
@@ -166,7 +166,7 @@ object MaterialsProject {
             val mpNumber = symmetry?.optInt("number", 0)?.takeIf { it > 0 }
             val mpSymbol = symmetry?.optString("symbol")?.takeIf { it.isNotBlank() }
 
-            // Per v0.8.27: route the MP cell through spglib first — standardize to
+            // Per v0.7.0: route the MP cell through spglib first — standardize to
             // conventional (idealized) then refine — so downstream computation and
             // rendering see a symmetrized conventional cell with exact special
             // positions. Falls back to the raw MP structure when spglib fails.
@@ -183,16 +183,16 @@ object MaterialsProject {
             val cif = buildCif(materialId, structureJson, sgSymbol, sgNumber)
             target.parentFile?.mkdirs()
             target.writeText(cif, Charsets.UTF_8)
-            // Per v0.8.43: keep the 6-step open trace complete — MP opens build+parse
+            // Per v0.7.0: keep the 6-step open trace complete — MP opens build+parse
             // here, so log the same 1/6..3/6 steps the file-picker path logs in loadUri.
             debugLog(CIF_OPEN_TAG) { "OpenCIF 1/6: CIF text built (${cif.length} chars)" }
 
-            // Per v0.8.27 (spglib path): when spglib succeeded the cell is already the
+            // Per v0.7.0 (spglib path): when spglib succeeded the cell is already the
             // conventional+refined result, so the legacy conversion/restore pipeline is
             // temporarily DISABLED — CifCodec must not re-convert (autoConvertConventional
             // forced off) and the isConventionalCell restore branch is skipped, letting
             // spglib's output flow straight through to Krystals. Only on spglib failure do
-            // we fall back to the v0.8.0 legacy behavior.
+            // we fall back to the v0.7.0 legacy behavior.
             val parsed = CifCodec.parseStructure(
                 cif,
                 autoConvertConventional = refined == null && autoConvertConventional,
@@ -236,7 +236,7 @@ object MaterialsProject {
 
     /**
      * Build a self-contained CIF from a summary-endpoint material object.
-     * Per v0.8.27: consumes the (spglib-refined) `structure` JSON directly; writes
+     * Per v0.7.0: consumes the (spglib-refined) `structure` JSON directly; writes
      * the refined space group (not P1) so CifCodec can detect the Bravais
      * lattice type. Symmetry operations are set to identity because the cell has
      * all atoms listed explicitly — no expansion is wanted at this stage.

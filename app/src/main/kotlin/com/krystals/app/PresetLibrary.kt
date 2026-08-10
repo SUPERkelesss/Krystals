@@ -2,11 +2,12 @@
 
 package com.krystals.app
 
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.activity.compose.BackHandler
 import androidx.core.content.edit
 import com.krystals.crystal.analysis.editing.*
 import com.krystals.crystal.analysis.model.*
-import android.content.Context
-import android.content.SharedPreferences
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -72,11 +73,11 @@ internal fun PresetLibraryScreen(
     onMessage: (String) -> Unit,
     onOpenParsed: (ParsedStructure, String) -> Unit,
 ) {
-    // Per v0.8.34: COD-search-like library — first-level groups (folders) expand to files, a
+    // Per v0.7.0: COD-search-like library — first-level groups (folders) expand to files, a
     // 5-filter bar (formula/element count/crystal system/point group/space group), per-file
     // checkboxes with a batch toolbar (open / move to / delete), and user groups
     // ("我的预设" plus groups created via 新建组) that can be renamed.
-    // Per v0.8.39: groups load off the UI thread (listGroups is a suspend disk scan).
+    // Per v0.7.0: groups load off the UI thread (listGroups is a suspend disk scan).
     var groups by remember { mutableStateOf(emptyList<PresetGroup>()) }
     LaunchedEffect(Unit) { groups = PresetRepository.listGroups(context) }
     var metas by remember { mutableStateOf<Map<PresetEntry, PresetMeta>>(emptyMap()) }
@@ -88,9 +89,9 @@ internal fun PresetLibraryScreen(
     var renameFileTarget by remember { mutableStateOf<PresetEntry?>(null) }
     var moveOpen by remember { mutableStateOf(false) }
     var deleteConfirmOpen by remember { mutableStateOf(false) }
-    // Per v0.8.36: delete a whole user group (not the protected default group).
+    // Per v0.7.0: delete a whole user group (not the protected default group).
     var deleteGroupTarget by remember { mutableStateOf<PresetGroup?>(null) }
-    // Per v0.8.36: the default group's display name follows the UI language.
+    // Per v0.7.0: the default group's display name follows the UI language.
     @Composable fun groupLabel(name: String): String =
         if (name == PresetRepository.MY_PRESETS_GROUP) localized("我的预设", "My Presets") else name
     val scope = rememberCoroutineScope()
@@ -106,8 +107,8 @@ internal fun PresetLibraryScreen(
     }
     fun refresh() { scope.launch { groups = PresetRepository.listGroups(context) } }
 
-    // Per v0.8.34: parse filter metadata for every preset off the UI thread.
-    // Per v0.8.35: cache-first — only files whose last-modified stamp is missing/stale get
+    // Per v0.7.0: parse filter metadata for every preset off the UI thread.
+    // Per v0.7.0: cache-first — only files whose last-modified stamp is missing/stale get
     // re-parsed, and fresh results are persisted so the library opens instantly next time.
     LaunchedEffect(groups) {
         val cache = PresetRepository.loadMetaCache(context)
@@ -155,6 +156,14 @@ internal fun PresetLibraryScreen(
         })
     }
     val totalFiltered = filteredGroups.sumOf { it.entries.size }
+    // Per v0.7.0: while a search/filter is active, every group that still has matches is shown
+    // expanded automatically; the user's manual expansion state is restored once it clears.
+    val searchActive = searchQuery.isNotBlank() ||
+        elementCountFilter != null || crystalSystemFilter != null ||
+        pointGroupFilter != null || spaceGroupFilter != null
+    val effectiveExpanded = if (searchActive) {
+        filteredGroups.filter { it.entries.isNotEmpty() }.map { it.name }.toSet()
+    } else expanded
 
     fun openSelected() {
         val ordered = groups.flatMap { it.entries }.filter { it in selected }
@@ -167,7 +176,7 @@ internal fun PresetLibraryScreen(
             onDismiss()
         }
     }
-    // Per v0.8.35: a single click on a file row opens it (selection is checkbox-only now).
+    // Per v0.7.0: a single click on a file row opens it (selection is checkbox-only now).
     fun openSingle(entry: PresetEntry) {
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { PresetRepository.openPreset(context, entry, autoConvertConventional = autoConvertCell) } }
@@ -191,7 +200,20 @@ internal fun PresetLibraryScreen(
         }
     }
 
-    // Per v0.8.34: full-screen page (like the COD search screen). Per v0.8.35: rendered as a
+    // Per v0.7.0: system back closes any open dialog first, then exits the library page.
+    BackHandler {
+        when {
+            newGroupOpen -> newGroupOpen = false
+            renameTarget != null -> renameTarget = null
+            renameFileTarget != null -> renameFileTarget = null
+            moveOpen -> moveOpen = false
+            deleteConfirmOpen -> deleteConfirmOpen = false
+            deleteGroupTarget != null -> deleteGroupTarget = null
+            else -> onDismiss()
+        }
+    }
+
+    // Per v0.7.0: full-screen page (like the COD search screen). Per v0.7.0: rendered as a
     // plain page composable, NOT inside a Dialog — Compose DropdownMenus (the filter chips)
     // crash during Popup measurement when hosted inside a dialog window on some devices.
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -199,7 +221,7 @@ internal fun PresetLibraryScreen(
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MaterialTheme.colorScheme.onBackground) }
                     Text(stringResource(R.string.preset_library), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-                    // Per v0.8.36: new-group is an icon button (CreateNewFolder).
+                    // Per v0.7.0: new-group is an icon button (CreateNewFolder).
                     IconButton(onClick = { newGroupOpen = true }) { Icon(Icons.Default.CreateNewFolder, localized("新建组", "New group")) }
                 }
                 OutlinedTextField(
@@ -224,10 +246,10 @@ internal fun PresetLibraryScreen(
                     }
                     filteredGroups.forEach { group ->
                         item(key = "h_" + group.name) {
-                            // Per v0.8.36: folder icon before the group name; the protected
+                            // Per v0.7.0: folder icon before the group name; the protected
                             // default group cannot be renamed or deleted.
                             Row(Modifier.fillMaxWidth().clickable { toggle(group.name) }.padding(vertical = 4.dp, horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(if (group.name in expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
+                                Icon(if (group.name in effectiveExpanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null, modifier = Modifier.size(20.dp))
                                 Icon(Icons.Default.Folder, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                                 Text(groupLabel(group.name), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp).weight(1f))
                                 if (group.isUserGroup && group.name != PresetRepository.MY_PRESETS_GROUP) {
@@ -236,7 +258,7 @@ internal fun PresetLibraryScreen(
                                 }
                             }
                         }
-                        if (group.name in expanded) items(group.entries, key = { "e_" + group.name + "_" + it.name }) { entry ->
+                        if (group.name in effectiveExpanded) items(group.entries, key = { "e_" + group.name + "_" + it.name }) { entry ->
                             PresetRow(
                                 entry = entry,
                                 meta = metas[entry],
@@ -244,7 +266,7 @@ internal fun PresetLibraryScreen(
                                 onToggle = { selected = if (entry in selected) selected - entry else selected + entry },
                                 onOpen = { openSingle(entry) },
                                 onRename = { renameFileTarget = entry },
-                                // Per v0.8.36: the row delete button marks the file selected and
+                                // Per v0.7.0: the row delete button marks the file selected and
                                 // opens the batch-delete confirmation.
                                 onDelete = {
                                     selected = selected + entry
@@ -256,8 +278,8 @@ internal fun PresetLibraryScreen(
                 }
                 if (selected.isNotEmpty()) {
                     HorizontalDivider()
-                    // Per v0.8.35: order 删除/移动到/打开, with Open as a highlighted button.
-                    // Per v0.8.36: when the selection includes non-editable (bundled) files,
+                    // Per v0.7.0: order 删除/移动到/打开, with Open as a highlighted button.
+                    // Per v0.7.0: when the selection includes non-editable (bundled) files,
                     // Delete and Move-to are hidden entirely.
                     val hasLocked = selected.any { it.source != PresetSource.USER }
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -272,7 +294,7 @@ internal fun PresetLibraryScreen(
             }
         }
 
-    // Per v0.8.34: 新建组 — create a named first-level user group.
+    // Per v0.7.0: 新建组 — create a named first-level user group.
     if (newGroupOpen) {
         var name by remember { mutableStateOf("") }
         val createError = localized("组已存在或创建失败", "Group exists or failed to create")
@@ -296,7 +318,7 @@ internal fun PresetLibraryScreen(
             dismissButton = { TextButton(onClick = { newGroupOpen = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
-    // Per v0.8.34: rename a first-level user group.
+    // Per v0.7.0: rename a first-level user group.
     renameTarget?.let { group ->
         var name by remember(group) { mutableStateOf(group.name) }
         val renameError = localized("重命名失败", "Rename failed")
@@ -318,7 +340,7 @@ internal fun PresetLibraryScreen(
             dismissButton = { TextButton(onClick = { renameTarget = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
-    // Per v0.8.35: rename a single user preset file (per-row 重命名 button).
+    // Per v0.7.0: rename a single user preset file (per-row 重命名 button).
     renameFileTarget?.let { entry ->
         var name by remember(entry) { mutableStateOf(entry.name.removeSuffix(".cif")) }
         val renameError = localized("重命名失败", "Rename failed")
@@ -340,7 +362,7 @@ internal fun PresetLibraryScreen(
             dismissButton = { TextButton(onClick = { renameFileTarget = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
-    // Per v0.8.34: 移动到 — pick a target user group.
+    // Per v0.7.0: 移动到 — pick a target user group.
     if (moveOpen) {
         val userGroups = groups.filter { it.isUserGroup }.map { it.name }
         AlertDialog(
@@ -360,7 +382,7 @@ internal fun PresetLibraryScreen(
             dismissButton = { TextButton(onClick = { moveOpen = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
-    // Per v0.8.34: batch delete confirmation.
+    // Per v0.7.0: batch delete confirmation.
     if (deleteConfirmOpen) {
         val deletable = selected.count { it.source == PresetSource.USER }
         AlertDialog(
@@ -371,7 +393,7 @@ internal fun PresetLibraryScreen(
             dismissButton = { TextButton(onClick = { deleteConfirmOpen = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
-    // Per v0.8.36: delete a whole user group (default group protected).
+    // Per v0.7.0: delete a whole user group (default group protected).
     deleteGroupTarget?.let { group ->
         val groupDeleteTitle = localized("删除组", "Delete group")
         val groupDeleteMessage = localized("确定删除组“${groupLabel(group.name)}”及其全部文件吗？", "Delete group \"${groupLabel(group.name)}\" and all its files?")
@@ -394,8 +416,8 @@ internal fun PresetLibraryScreen(
     }
 }
 
-/** Per v0.8.34: one preset file row with a checkbox; tapping the row opens the file (v0.8.35),
- *  the checkbox toggles selection, and user files get per-row rename + delete buttons (v0.8.36). */
+/** Per v0.7.0: one preset file row with a checkbox; tapping the row opens the file (v0.7.0),
+ *  the checkbox toggles selection, and user files get per-row rename + delete buttons (v0.7.0). */
 
 @Composable
 private fun PresetRow(

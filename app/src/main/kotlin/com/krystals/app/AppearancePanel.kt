@@ -82,7 +82,7 @@ fun AppearanceDialog(
     var colorPickerOpen by remember { mutableStateOf(false) }
     var bondColorPickerOpen by remember { mutableStateOf(false) }
     var followTheme by remember { mutableStateOf(backgroundFollowTheme) }
-    // Per v0.8.34: previews are 2D Canvas again — no dedicated preview Filament engine to release.
+    // Per v0.7.0: previews are 2D Canvas again — no dedicated preview Filament engine to release.
     // Per v0.6.5: precompute dark/light for the follow-theme clickable.
     val surfaceColor = MaterialTheme.colorScheme.surface
     val isDarkSurface = !surfaceColor.isLight()
@@ -214,7 +214,7 @@ fun AppearanceDialog(
             ToggleRow(localized("多面体反射", "Polyhedron reflection"), appearance.polyhedronReflectionEnabled) { appearance = appearance.copy(polyhedronReflectionEnabled = it) }
             LabeledSlider(localized("多面体不透明度", "Polyhedron opacity"), appearance.polyhedronOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(polyhedronOpacity = it) }
             HorizontalDivider(Modifier.padding(vertical = 10.dp))
-            // Per v0.8.30: hydrogen-bond appearance section.
+            // Per v0.7.0: hydrogen-bond appearance section.
             Text(localized("氢键", "H-Bonds"), fontWeight = FontWeight.Bold)
             LabeledSlider(localized("氢键半径", "H-bond radius"), appearance.hbondRadius, 0.01f..0.15f, decimals = 2) { appearance = appearance.copy(hbondRadius = it) }
             LabeledSlider(localized("氢键不透明度", "H-bond opacity"), appearance.hbondOpacity, 0f..1f, percentage = true) { appearance = appearance.copy(hbondOpacity = it) }
@@ -223,7 +223,7 @@ fun AppearanceDialog(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     LabeledSlider(localized("光源方位角", "Light azimuth"), appearance.lightAzimuth, 0f..360f) { appearance = appearance.copy(lightAzimuth = it) }
-                    LabeledSlider(localized("光源高度角", "Light elevation"), appearance.lightElevation, 0f..90f) { appearance = appearance.copy(lightElevation = it) }
+                    LabeledSlider(localized("光源高度角", "Light elevation"), appearance.lightElevation, 0f..89.9f) { appearance = appearance.copy(lightElevation = it) }
                     LabeledSlider(localized("反射强度", "Reflection intensity"), appearance.lightIntensity, 0f..1f, percentage = true) { appearance = appearance.copy(lightIntensity = it) }
                     LabeledSlider(localized("反射扩散", "Reflection diffusion"), appearance.diffusion, 0f..1f, percentage = true) { appearance = appearance.copy(diffusion = it) }
                 }
@@ -308,7 +308,6 @@ fun AppearanceDialog(
     }
 }
 
-
 @Composable
 private fun ToggleRow(label: String, checked: Boolean, onChecked: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().clickable { onChecked(!checked) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Text(label, modifier = Modifier.weight(1f)); androidx.compose.material3.Switch(checked, onChecked) } }
 
@@ -318,16 +317,14 @@ private fun LabeledSlider(label: String, value: Float, range: ClosedFloatingPoin
     Slider(value, onValue, valueRange = range, steps = steps)
 }
 
-
 internal fun formatSliderValue(value: Float, percentage: Boolean = false, decimals: Int = 1): String =
     if (percentage) String.format(Locale.ROOT, "%.0f%%", value * 100)
     else String.format(Locale.ROOT, "%.${decimals}f", value)
 
-
 @Composable
 private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifier = Modifier) {
-    // Per v0.8.34: back to the 2D Canvas preview (the Filament off-screen render of
-    // v0.8.32 failed to display in the dialog on device). Sphere grey adapts to the
+    // Per v0.7.0: back to the 2D Canvas preview (the Filament off-screen render of
+    // v0.7.0 failed to display in the dialog on device). Sphere grey adapts to the
     // theme: light grey ball on dark surfaces, dark grey ball on light surfaces.
     val bgCompose = MaterialTheme.colorScheme.surfaceVariant
     Surface(modifier, shape = RoundedCornerShape(16.dp), color = bgCompose) {
@@ -335,7 +332,7 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
             val radius = size.minDimension * 0.38f
             val center = Offset(size.width / 2f, size.height / 2f)
             val opacity = appearance.atomOpacity.coerceIn(0f, 1f)
-            // Per v0.8.36: fixed dark grey sphere regardless of theme.
+            // Per v0.7.0: fixed dark grey sphere regardless of theme.
             val gray = Color(AppPalette.SPHERE_GRAY)
             val sphereColor = gray.copy(alpha = opacity)
             val theta = appearance.lightAzimuth / 180f * PI.toFloat()
@@ -348,7 +345,7 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
                 val highlightBrush = Brush.radialGradient(
                     listOf(Color.White.copy(alpha = appearance.lightIntensity.coerceIn(.05f, 1f) * opacity), Color.Transparent),
                     center = highlight,
-                    radius = radius * (0.35f + 0.75f * appearance.diffusion),
+                    radius = radius * (0.35f + 1.65f * appearance.diffusion),
                 )
                 drawCircle(highlightBrush, radius, center)
             }
@@ -362,8 +359,8 @@ private fun AtomAppearancePreview(appearance: ViewerAppearance, modifier: Modifi
 @Composable
 private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier = Modifier) {
     val bgCompose = MaterialTheme.colorScheme.surfaceVariant
-    // Per v0.8.34: the five spheres are drawn as 2D Canvas again (the Filament off-screen
-    // render of v0.8.32 failed to display on device); the fog curve + axis labels stay Canvas.
+    // Per v0.7.0: the five spheres are drawn as 2D Canvas again (the Filament off-screen
+    // render of v0.7.0 failed to display on device); the fog curve + axis labels stay Canvas.
     Surface(modifier, shape = RoundedCornerShape(16.dp), color = bgCompose) {
         Canvas(Modifier.fillMaxSize().padding(8.dp)) {
             val near = appearance.dofNear.coerceIn(-5f, 5f)
@@ -428,12 +425,12 @@ private fun DepthCueingPreview(appearance: ViewerAppearance, modifier: Modifier 
 
 /** Draws one lit preview sphere at [c] with radius [r], world-light highlight; colour blends
  *  toward [bg] by [fog] (opacity unchanged), mirroring the renderer's depth cueing.
- *  Per v0.8.34: sphere grey adapts to the theme (light grey on dark, dark grey on light). */
+ *  Per v0.7.0: sphere grey adapts to the theme (light grey on dark, dark grey on light). */
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
     c: Offset, r: Float, appearance: ViewerAppearance, fog: Float, bg: Color,
 ) {
-    // Per v0.8.36: fixed dark grey sphere regardless of theme.
+    // Per v0.7.0: fixed dark grey sphere regardless of theme.
     val base = Color(AppPalette.SPHERE_GRAY)
     drawCircle(base.blend(bg, fog), r, c)
     if (appearance.reflectionEnabled) {
@@ -444,7 +441,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPreviewSphere(
         val highlightBrush = Brush.radialGradient(
             listOf(Color.White.copy(alpha = appearance.lightIntensity.coerceIn(.05f, 1f) * (1f - fog)), Color.Transparent),
             center = highlight,
-            radius = r * (0.35f + 0.75f * appearance.diffusion),
+            radius = r * (0.35f + 1.65f * appearance.diffusion),
         )
         drawCircle(highlightBrush, r, c)
     }
@@ -472,7 +469,5 @@ private fun Color.blend(target: Color, t: Float) = Color(
     alpha,
 )
 
-
 private fun androidx.compose.ui.graphics.Color.isLight(): Boolean =
     (0.299f * red + 0.587f * green + 0.114f * blue) > 0.5f
-

@@ -4,38 +4,35 @@
 
 - Complete molecule images in all directions: any molecule image intersecting the display region — including negative lattice translations — is rendered whole. Fixes missing molecules that dive into the cell from negative sides in low-symmetry (monoclinic/orthorhombic) cells; C60 corner/face images are unchanged.
 - Hydrogen-bond endpoint visibility in molecule-extend mode: an hbond renders only when both endpoint spheres are visible (no dangling segments, no missed in-cell hbonds). Hbonds never trigger molecule expansion.
-- Fix image export crashes on some Android GPUs by replacing multisampled offscreen readback with aspect-preserving supersampling.
 
-## 2026/07/31 v0.6.5 化学键编辑重构、MP 数据修复与 UI 改进
+## 2026/8/7 v0.7.0 大型界面更新+逻辑优化
 
-### 化学键编辑
+本版本大幅新增了一系列功能。主要改动：
 
-- 添加或修改原子、修改晶胞参数等操作不再重置已有键规则，仅移除引用被删原子的规则。
-- 化学键面板新增"删除"按键：点按两个原子，若有键则删除，无键则提示"所选原子间没有成键"。
-- "自动应用半径"改为"模式"按键（高亮配色）+ 容忍度滑动条，布局为两行：上方显示"自动应用规则：容忍度 ε = [值]"（随滑动实时更新），下方为模式按键与滑动条。
-- 化学键"绘制"选择两个原子后自动回到化学键规则页面，无需手动切换。
-- 绘制/删除化学键时，选中的第一个原子会显示选择外框高亮提示。
-- 图例窗口取消最小高度限制，可拖动至完全隐藏；隐藏后再次点击恢复到默认高度。
+### UI
 
-### MP 数据修复
+- 取消了 Canvas 显示功能，因为其过于落后开发且在手机上体验不佳。
+- 新增“偏好设置”：允许用户根据习惯调整软件的行为；
+- "从在线源导入"页面重构：现在，软件允许更大范围的筛查搜索结果，并且 mp 搜索得到了完善。（尽管还有一小部分因为数据库问题无法正常显示的晶体）
+- “预设晶体库”页面重构：现在，软件允许用户新增组，并更好的管理和检索保存在软件下的晶体学文件。
+- 一系列逻辑优化和修复。
 
-- MP 搜索结果默认按 E_hull（能量距凸包）升序排列，稳定相优先显示。
-- 修复 F/R/I/C 点阵从 MP 下载后未正确转换为正当晶胞的问题：
-  - 移除 CIF 中错误的 `_krystals_is_conventional` 标记，使 CifCodec 正确识别原始晶胞。
-  - 修复 `convertToConventional` 中矩阵多余的 `.transposed()` 导致坐标与晶格变换方向错误。
+### 逻辑优化和新功能
 
-### 3×3 矩阵变换
+- **氢键**：在自动应用键规则下，软件将自动检测符合要求的氢键并默认显示。您可以在”显示“菜单调控具体的显示。
+- **同位原子**：现在，当原子处于同位原子或部分占据时，软件将改变该原子的显示外观。
+- **分子探测**：现在，软件会自动检测分子晶体，并按分子进行拓展显示，以获取更好的视觉体验。
+- 当前版本引入了 spglib 工具，提高了晶胞识别和转换的准确性。
 
-- 修复扩展晶胞后对称元素错误：对称操作改用完整变换矩阵 P=R×S 共轭，过滤不兼容操作，生成全部中心化平移组合。
+### 显示
 
-### UI 修复
+- 优化了 filament 的原子材质和渲染。
+- 将原子默认颜色从 VESTA 颜色调整为 CPK 颜色。
+- 延伸化学键时补齐已显示外部原子之间的二级成键，并可在“偏好设置 → 显示”中关闭。
+- 修复氢键角度筛选错误折回周期映像的问题；现在仅显示实际 D-H···A 映像满足角度阈值且具有共价供体的氢键。
+- 修复“导出图片”在部分 Android GPU 上因多采样离屏回读而崩溃的问题，高质量导出改用等比超采样。
 
-- 修复"导出图片"菜单图标固定黑色的问题，恢复为跟随主题变色。
-- 删除原子后自动回到"原子"编辑页面，而非直接返回查看器。
-
-### CIF 解析
-
-- 完全禁用从 CIF 读取键规则，防止 Cr-Cr 等异常键被加载。
+---
 
 ## 2026/07/29 v0.6.5 小型修复/优化体验
 

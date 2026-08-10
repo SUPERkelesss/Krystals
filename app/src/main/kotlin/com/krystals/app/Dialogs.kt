@@ -201,7 +201,7 @@ internal fun MpPremiumDialog(onDismiss: () -> Unit, onSponsor: () -> Unit) {
 
 
 /**
- * Per v0.8.44: restored sponsor dialog (the "投喂" cat-feeding message with three actions).
+ * Per v0.7.0: restored sponsor dialog (the "投喂" cat-feeding message with three actions).
  * The v0.6.5 unified link-confirmation dialog replaced this window; the sponsor button and the
  * launch-count prompt now open it again instead of jumping straight to the browser link.
  */
@@ -211,6 +211,7 @@ internal fun SponsorDialog(
     launchCount: Int = 0,
     onSponsor: () -> Unit = {},
     onAlreadySponsored: () -> Unit = {},
+    isActivated: Boolean = false,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -240,7 +241,11 @@ internal fun SponsorDialog(
         confirmButton = {
             Row {
                 TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) }
-                TextButton(onClick = onAlreadySponsored) { Text(localized("我已赞助", "I've sponsored!")) }
+                // Per 2026-08-09: 已激活(赞助过)的用户不再需要输入激活码,
+                // "我已赞助"按键隐藏——它只对未赞助用户有意义。
+                if (!isActivated) {
+                    TextButton(onClick = onAlreadySponsored) { Text(localized("我已赞助", "I've sponsored!")) }
+                }
                 TextButton(onClick = onDismiss) { Text(localized("狠心拒绝", "Maybe later")) }
             }
         },
@@ -337,7 +342,7 @@ internal fun AboutScreen(onBack: () -> Unit, onCheckUpdates: () -> Unit = {}, is
                     Text(
                         label,
                         color = MaterialTheme.colorScheme.primary,
-                        // Per v0.8.36: route through the external-link confirmation dialog (same
+                        // Per v0.7.0: route through the external-link confirmation dialog (same
                         // as Help/Sponsor/Feedback) instead of firing the browser intent directly.
                         modifier = Modifier.clickable { onOpenLink(url) },
                     )

@@ -118,7 +118,6 @@ internal fun MpApiKeyDialog(
     )
 }
 
-
 @Composable
 internal fun MpSearchScreen(
     context: Context,
@@ -133,7 +132,7 @@ internal fun MpSearchScreen(
     var fuzzySearch by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<MpSearchResult>?>(null) }
     var searching by remember { mutableStateOf(false) }
-    // Per v0.8.36: cancellable search — the cancel button appears 3s into a search.
+    // Per v0.7.0: cancellable search — the cancel button appears 3s into a search.
     var searchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var searchCancelVisible by remember { mutableStateOf(false) }
     LaunchedEffect(searching) {
@@ -149,9 +148,9 @@ internal fun MpSearchScreen(
     var testingConnection by remember { mutableStateOf(true) }
     var connectionError by remember { mutableStateOf(false) }
     var filterState by remember { mutableStateOf(SearchFilterState()) }
-    // Per v0.8.27: filter-item visibility (persisted for the session) + help panel state.
+    // Per v0.7.0: filter-item visibility (persisted for the session) + help panel state.
     var visibleFilters by remember { mutableStateOf(DEFAULT_VISIBLE_FILTERS) }
-    // Per v0.8.36: help hint is a standard Material3 TooltipBox (custom panel removed).
+    // Per v0.7.0: help hint is a standard Material3 TooltipBox (custom panel removed).
     val helpTooltip = rememberTooltipState(isPersistent = true)
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
@@ -205,9 +204,9 @@ internal fun MpSearchScreen(
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(fuzzySearch, onCheckedChange = { fuzzySearch = it })
                 Text(localized("模糊搜索", "Fuzzy search"), style = MaterialTheme.typography.bodyMedium)
-                // Per v0.8.36: help hint via Material3 TooltipBox (custom panel removed).
+                // Per v0.7.0: help hint via Material3 TooltipBox (custom panel removed).
                 TooltipBox(
-                    // Per v0.8.36: show the hint below the button.
+                    // Per v0.7.0: show the hint below the button.
                     positionProvider = TooltipDefaults.rememberTooltipPositionProvider(positioning = TooltipAnchorPosition.Below),
                     tooltip = {
                         PlainTooltip {
@@ -241,7 +240,7 @@ internal fun MpSearchScreen(
                     visibleFilters = visibleFilters,
                     onVisibleFiltersChange = { visibleFilters = it },
                 )
-                // Per v0.8.29: matching-count caption under the filter bar.
+                // Per v0.7.0: matching-count caption under the filter bar.
                 Text(
                     localized("符合条件的", "Matching") + " ${filtered?.size ?: 0} " + localized("个结果: ", "results: "),
                     style = MaterialTheme.typography.bodySmall,
@@ -250,7 +249,7 @@ internal fun MpSearchScreen(
                 )
             }
             when {
-                // Per v0.8.36: the search-cancel button appears below 'Searching…' after 3s.
+                // Per v0.7.0: the search-cancel button appears below 'Searching…' after 3s.
                 searching -> Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                     Text(localized("搜索中…", "Searching…"))
                     if (searchCancelVisible) {
@@ -263,7 +262,7 @@ internal fun MpSearchScreen(
                 filtered == null -> {}
                 filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                    // Per v0.8.1: stable key so filter/search updates keep item identity (scroll + reuse).
+                    // Per v0.7.0: stable key so filter/search updates keep item identity (scroll + reuse).
                     items(filtered, key = { it.materialId }) { item ->
                         Card(
                             enabled = downloadingId == null,
@@ -297,7 +296,7 @@ internal fun MpSearchScreen(
                 }
             }
         }
-        // Per v0.8.36: help hint moved to a TooltipBox above; the custom animated panel is gone.
+        // Per v0.7.0: help hint moved to a TooltipBox above; the custom animated panel is gone.
         }
         }
         if (connectionError) {
@@ -314,7 +313,6 @@ internal fun MpSearchScreen(
         }
     }
 }
-
 
 @Composable
 internal fun CodSearchScreen(
@@ -336,7 +334,7 @@ internal fun CodSearchScreen(
     var maxElements by remember { mutableIntStateOf(8) }
     var results by remember { mutableStateOf<List<CodSearchResult>?>(null) }
     var searching by remember { mutableStateOf(false) }
-    // Per v0.8.36: cancellable search — the cancel button appears 3s into a search.
+    // Per v0.7.0: cancellable search — the cancel button appears 3s into a search.
     var searchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var searchCancelVisible by remember { mutableStateOf(false) }
     LaunchedEffect(searching) {
@@ -352,13 +350,13 @@ internal fun CodSearchScreen(
     var testingMirrors by remember { mutableStateOf(true) }
     var connectionError by remember { mutableStateOf(false) }
     var filterState by remember { mutableStateOf(SearchFilterState()) }
-    // Per v0.8.27: filter-item visibility (persisted for the session) + help panel state.
+    // Per v0.7.0: filter-item visibility (persisted for the session) + help panel state.
     var visibleFilters by remember { mutableStateOf(DEFAULT_VISIBLE_FILTERS) }
-    // Per v0.8.36: help hint is a standard Material3 TooltipBox (custom panel removed).
+    // Per v0.7.0: help hint is a standard Material3 TooltipBox (custom panel removed).
     val helpTooltip = rememberTooltipState(isPersistent = true)
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
-        // Per v0.8.36: only AUTO mode re-tests mirrors on entry. FIXED/CUSTOM pick their
+        // Per v0.7.0: only AUTO mode re-tests mirrors on entry. FIXED/CUSTOM pick their
         // mirror in KrystalsRoot's setMirrorMode; testMirrors() would overwrite that choice.
         if (codMirrorMode == CodMirrorMode.AUTO) {
             val mirror = CrystallographyOpenDatabase.testMirrors()
@@ -425,9 +423,9 @@ internal fun CodSearchScreen(
                         modifier = Modifier.padding(horizontal = 3.dp),
                     )
                 }
-                // Per v0.8.36: help hint via Material3 TooltipBox (custom panel removed).
+                // Per v0.7.0: help hint via Material3 TooltipBox (custom panel removed).
                 TooltipBox(
-                    // Per v0.8.36: show the hint below the button.
+                    // Per v0.7.0: show the hint below the button.
                     positionProvider = TooltipDefaults.rememberTooltipPositionProvider(positioning = TooltipAnchorPosition.Below),
                     tooltip = {
                         PlainTooltip {
@@ -461,7 +459,7 @@ internal fun CodSearchScreen(
                     visibleFilters = visibleFilters,
                     onVisibleFiltersChange = { visibleFilters = it },
                 )
-                // Per v0.8.29: matching-count caption under the filter bar.
+                // Per v0.7.0: matching-count caption under the filter bar.
                 Text(
                     localized("符合条件的", "Matching") + " ${filtered?.size ?: 0} " + localized("个结果: ", "results: "),
                     style = MaterialTheme.typography.bodySmall,
@@ -470,7 +468,7 @@ internal fun CodSearchScreen(
                 )
             }
             when {
-                // Per v0.8.36: the search-cancel button appears below 'Searching…' after 3s.
+                // Per v0.7.0: the search-cancel button appears below 'Searching…' after 3s.
                 searching -> Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                     Text(localized("搜索中…", "Searching…"))
                     if (searchCancelVisible) {
@@ -483,7 +481,7 @@ internal fun CodSearchScreen(
                 filtered == null -> {}
                 filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(localized("搜索结果为空", "No results")) }
                 else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                    // Per v0.8.1: stable key so filter/search updates keep item identity (scroll + reuse).
+                    // Per v0.7.0: stable key so filter/search updates keep item identity (scroll + reuse).
                     items(filtered, key = { it.fileId }) { item ->
                         val isExact = CrystallographyOpenDatabase.isExactMatch(item, query, mode)
                         Card(
@@ -526,7 +524,7 @@ internal fun CodSearchScreen(
                 }
             }
         }
-        // Per v0.8.36: help hint moved to a TooltipBox above; the custom animated panel is gone.
+        // Per v0.7.0: help hint moved to a TooltipBox above; the custom animated panel is gone.
         }
         }
         if (connectionError) {
@@ -544,14 +542,13 @@ internal fun CodSearchScreen(
     }
 }
 
-
 @Composable
 internal fun OnlineSourcePickerDialog(
     onDismiss: () -> Unit,
     onPickCod: () -> Unit,
     onPickMp: () -> Unit,
 ) {
-    // Per v0.8.31: plain dialog — the v0.8.29 expand/shrink animation was removed per user request.
+    // Per v0.7.0: plain dialog — the v0.7.0 expand/shrink animation was removed per user request.
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.import_online)) },
@@ -577,7 +574,6 @@ internal fun OnlineSourcePickerDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
 }
-
 
 @Composable
 private fun OnlineSourceCard(

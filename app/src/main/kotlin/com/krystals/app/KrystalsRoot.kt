@@ -81,6 +81,7 @@ import com.krystals.crystal.analysis.bonding.BondValence
 import com.krystals.crystal.analysis.bonding.VoronoiSearchLimitExceededException
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import com.krystals.crystal.data.PeriodicTableData
 import com.krystals.crystal.io.CifCodec
 import com.krystals.crystal.io.ParsedStructure
@@ -97,18 +98,18 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
-// Per v0.8.43 (issue #11): the open pipeline (CIF parse / symmetry expansion / scene build)
+// Per v0.7.0 (issue #11): the open pipeline (CIF parse / symmetry expansion / scene build)
 // runs on its own small pool — a limited view of Dispatchers.Default — so a large cell's
 // heavy bond computation (smartIonic 15s + Voronoi fallback) can no longer starve
 // subsequent opens. 2 concurrent slots are enough for user-paced opens.
 internal val openDispatcher = Dispatchers.Default.limitedParallelism(2)
 
-// Per v0.8.43 (issue #11): heavy bond computations are globally limited to one in flight —
+// Per v0.7.0 (issue #11): heavy bond computations are globally limited to one in flight —
 // the second queues (Semaphore.acquire suspends, never blocking the main thread or the open
 // pipeline). App-wide single instance: KrystalsRoot is the only consumer.
 private val bondComputeGate = Semaphore(1)
 
-/** Per v0.8.43 (issue #11): an in-flight bond computation tracked for cancel-all (overlay
+/** Per v0.7.0 (issue #11): an in-flight bond computation tracked for cancel-all (overlay
  *  dialog) and stale-abandon (a new file opened). [tabId] is null for the edit path, whose
  *  jobs are never stale-abandoned (a cancelled edit would leave the tab half-applied). */
 private data class ActiveComputation(
@@ -117,18 +118,18 @@ private data class ActiveComputation(
     val startedAt: Long,
 )
 
-/** Per v0.8.43 (issue #11): cancellation cause for computations abandoned because a new file
+/** Per v0.7.0 (issue #11): cancellation cause for computations abandoned because a new file
  *  was opened — the catch distinguishes it from a user cancel so the v0.6.1 fallback
  *  (bonding-radius rules on user cancel) is NOT triggered for abandoned work. */
 private class StaleComputationCancelled : kotlin.coroutines.cancellation.CancellationException()
 
-/** Per v0.8.43 (issue #11): a computation younger than this is never stale-abandoned — batch
+/** Per v0.7.0 (issue #11): a computation younger than this is never stale-abandoned — batch
  *  open (issue #5) calls doOpenParsed within milliseconds, so its young computations survive. */
 private const val STALE_COMPUTE_CANCEL_GRACE_MS = 2_000L
 
 private data class PendingOpen(val uri: Uri, val name: String, val text: String, val candidates: List<Int>, val document: com.krystals.crystal.io.CifDocument)
 
-/** Per v0.8.27: user-toggleable search filter types shown in the filter bar. */
+/** Per v0.7.0: user-toggleable search filter types shown in the filter bar. */
 
 private data class PendingLargeOpen(val parsed: ParsedStructure, val name: String, val uri: Uri?, val expandedEstimate: Int)
 
@@ -143,9 +144,10 @@ internal const val BUILD_SCENE_TIMEOUT_MS = 15_000L
 
 /** Per v0.5.3b: warn before opening a cell whose asymmetric expansion exceeds this many atoms. */
 
-private const val LARGE_CELL_WARN_THRESHOLD = 1000
+// Per 2026-08-09: open-cell atom limit raised 1000 -> 5000 (user request).
+private const val LARGE_CELL_WARN_THRESHOLD = 5000
 
-/** Per v0.8.25: startup update check runs at most once per 24h (saves data/battery). */
+/** Per v0.7.0: startup update check runs at most once per 24h (saves data/battery). */
 
 private const val UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
 
@@ -178,10 +180,10 @@ fun KrystalsRoot(
     val onSettingsChange: (SettingsValues) -> Unit = { sv ->
         settingsValues = sv
         PreferencesStore.save(preferences, sv)
-        // Per v0.8.33: theme and language take effect immediately (previously only after restart).
+        // Per v0.7.0: theme and language take effect immediately (previously only after restart).
         if (sv.theme != themeMode) {
             themeMode = sv.theme
-            // Per v0.8.34: keep the follow-theme viewer background in sync when the theme is
+            // Per v0.7.0: keep the follow-theme viewer background in sync when the theme is
             // switched from Preferences (applyTheme does this for the menu path).
             if (backgroundFollowTheme) {
                 val dark = sv.theme == ThemeMode.DARK || sv.theme == ThemeMode.SYSTEM && systemDark
@@ -198,7 +200,7 @@ fun KrystalsRoot(
         }
     }
     val localizedContext = remember(language) { activity.createConfigurationContext(localizedConfiguration) }
-    // Per v0.8.26: show a loading overlay on language-switch restart.
+    // Per v0.7.0: show a loading overlay on language-switch restart.
     var languageSwitching by remember {
         mutableStateOf(preferences.getBoolean(PreferencesStore.KEY_PENDING_LANGUAGE_RESTART, false))
     }
@@ -246,11 +248,11 @@ fun KrystalsRoot(
     val scope = rememberCoroutineScope()
     // Per v0.5.0: global "计算中..." overlay shown while bond rules are recomputed (open file, add/
     // delete atom, transform, hex/rhom conversion) off the UI thread.
-    // Per v0.8.1: dialog gate states are MutableState references so KrystalsRootDialogs (extracted
+    // Per v0.7.0: dialog gate states are MutableState references so KrystalsRootDialogs (extracted
     // below) owns their reads — toggling one of these dialogs no longer recomposes the KrystalsRoot
     // scaffold. States only ever set by KrystalsRoot internals (pendingSaveTabId, pendingExportBitmap,
     // helpOpen, sponsorLaunchCount, aboutOpen, updateChecking) stay as plain delegated booleans.
-    // Per v0.8.43 (issue #5): batch open computes every tab's bond rules concurrently.
+    // Per v0.7.0 (issue #5): batch open computes every tab's bond rules concurrently.
     // computingCount drives the "Computing..." overlay (a single Boolean gate previously
     // skipped every computation after the first during batch open — only tab 1 got rules);
     // computingTabIds dedups per tab; computationJobs holds in-flight jobs for cancel-all.
@@ -277,15 +279,15 @@ fun KrystalsRoot(
     // Per v0.6.5: unified confirmation dialog for help/feedback/sponsor links.
     val linkConfirmUrlState = remember { mutableStateOf<String?>(null) }
     var linkConfirmUrl by linkConfirmUrlState
-    // Per v0.8.36: Save / Save-to-preset confirm the file name in a dialog first.
+    // Per v0.7.0: Save / Save-to-preset confirm the file name in a dialog first.
     var saveNameOpen by remember { mutableStateOf(false) }
     var saveNameIsPreset by remember { mutableStateOf(false) }
     var saveNameTab by remember { mutableStateOf<DocumentTab?>(null) }
     var saveNameDraft by remember { mutableStateOf("") }
     var saveNameEdited by remember { mutableStateOf(false) }
-    // Per v0.8.36: target user group for save-to-preset (default 我的预设).
+    // Per v0.7.0: target user group for save-to-preset (default 我的预设).
     var saveNameGroup by remember { mutableStateOf(PresetRepository.MY_PRESETS_GROUP) }
-    // Per v0.8.44: share confirms the file name in the same rename window as save first.
+    // Per v0.7.0: share confirms the file name in the same rename window as save first.
     var shareNameOpen by remember { mutableStateOf(false) }
     var shareNameTab by remember { mutableStateOf<DocumentTab?>(null) }
     var shareNameDraft by remember { mutableStateOf("") }
@@ -310,9 +312,9 @@ fun KrystalsRoot(
         if (prompt && !ActivationManager.isActivated(activity)) { sponsorLaunchCount = count; sponsorOpen = true }
     }
     // Per v0.6.5: check for updates on startup.
-    // Per v0.8.25: at most once per 24h — the timestamp is written before the request so a
+    // Per v0.7.0: at most once per 24h — the timestamp is written before the request so a
     // failed check (offline etc.) still counts and isn't retried on every cold start.
-    // Per v0.8.26: skip update check when autoCheckUpdate is disabled.
+    // Per v0.7.0: skip update check when autoCheckUpdate is disabled.
     LaunchedEffect(Unit) {
         if (!settingsValues.autoCheckUpdate) return@LaunchedEffect
         val now = System.currentTimeMillis()
@@ -361,7 +363,7 @@ fun KrystalsRoot(
         "周期 Voronoi 搜索范围过大，继续计算可能耗尽内存。请调整晶胞参数或改用键合半径。",
         "The periodic Voronoi search is too large and may exhaust memory. Adjust the cell or use bonding radii.",
     )
-    // Per v0.8.44: pre-resolved chooser title for the share flow (localized() is @Composable).
+    // Per v0.7.0: pre-resolved chooser title for the share flow (localized() is @Composable).
     val shareLabel = localized("分享到…", "Share to…")
 
     // Per v0.5.3b: when an opened cell expands to more than [LARGE_CELL_WARN_THRESHOLD] atoms the
@@ -378,25 +380,27 @@ fun KrystalsRoot(
      * silently, e.g. on validation failure where the caller already reported the error).
      */
     fun runWithBondComputation(block: suspend () -> EditResult?, skipLargeCheck: Boolean = false) {
-        // Per v0.8.43 (issue #5): the edit path keeps its global single-flight gate (an edit
+        // Per v0.7.0 (issue #5): the edit path keeps its global single-flight gate (an edit
         // during any computation is skipped) — now expressed via the computation count.
         if (computingCount > 0) return
-        if (!skipLargeCheck) {
-            val tab = viewModel.current
-            if (tab != null) {
-                val estimate = SymmetryExpander.expand(tab.structure).size
-                if (estimate > LARGE_CELL_WARN_THRESHOLD) {
-                    pendingLargeEdit = PendingLargeEdit(block, estimate)
-                    return
-                }
-            }
-        }
+        val targetStructure = viewModel.current?.structure
         computingCount++
         val editStart = System.currentTimeMillis()
         var job: kotlinx.coroutines.Job? = null
         job = scope.launch {
+            var deferredLargeEdit: PendingLargeEdit? = null
             val result = try {
-                Result.success(withContext(Dispatchers.Default) { block() })
+                val estimate = if (!skipLargeCheck && targetStructure != null) {
+                    withContext(Dispatchers.Default) { SymmetryExpander.expand(targetStructure).size }
+                } else {
+                    0
+                }
+                if (!skipLargeCheck && estimate > LARGE_CELL_WARN_THRESHOLD) {
+                    deferredLargeEdit = PendingLargeEdit(block, estimate)
+                    Result.success(null)
+                } else {
+                    Result.success(withContext(Dispatchers.Default) { block() })
+                }
             } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
                 Result.failure(ce)
             } catch (e: Throwable) {
@@ -404,6 +408,10 @@ fun KrystalsRoot(
             } finally {
                 computingCount--
                 job?.let { j -> computationJobs -= ActiveComputation(j, tabId = null, startedAt = editStart) }
+            }
+            deferredLargeEdit?.let {
+                pendingLargeEdit = it
+                return@launch
             }
             result.getOrNull()?.let { editResult ->
                 viewModel.current?.let { viewModel.updateAnalysis(it, editResult) }
@@ -417,7 +425,7 @@ fun KrystalsRoot(
     }
 
     /**
-     * Per v0.5.2b: open-file bond computation with a smart-ionic timeout (15 s per v0.8.43, was 5 s).
+     * Per v0.5.2b: open-file bond computation with a smart-ionic timeout (15 s per v0.7.0, was 5 s).
      * Falls back to bonding
      * radii on timeout and surfaces the [smartIonicTimeoutMessage] snackbar.
      * Per v0.6.1: cooperative cancellation, fast size-guarded fallback, and bonding-radius rules
@@ -429,7 +437,7 @@ fun KrystalsRoot(
         epsilon: Double,
         expandedSize: Int,
     ) {
-        // Per v0.8.43 (issue #5): per-tab dedup + concurrent computation. The old global
+        // Per v0.7.0 (issue #5): per-tab dedup + concurrent computation. The old global
         // `if (computing) return` made batch open silently skip every bond computation after
         // the first — only the first tab ever received rules (PresetLibrary.openSelected loops
         // doOpenParsed sequentially, and each call hit the global busy gate). Same tab already
@@ -447,12 +455,12 @@ fun KrystalsRoot(
         job = scope.launch {
             val result = try {
                 Result.success(
-                    // Per v0.8.43 (issue #11): heavy bond computations are globally limited to
+                    // Per v0.7.0 (issue #11): heavy bond computations are globally limited to
                     // one in flight — the next one queues here (suspension on the caller's
                     // dispatcher, never blocking the main thread or the open pipeline).
                     bondComputeGate.withPermit {
                         withContext(Dispatchers.Default) {
-                            // Per v0.8.36: expandedSize comes from the open path (openParsed already
+                            // Per v0.7.0: expandedSize comes from the open path (openParsed already
                             // expanded for the large-cell check) — re-expanding here doubled the
                             // expansion cost on big cells.
                             // Per v0.8.26: dispatch by user-selected bond-rule mode.
@@ -508,7 +516,7 @@ fun KrystalsRoot(
                     }
                 )
             } catch (ce: kotlin.coroutines.cancellation.CancellationException) {
-                // Per v0.8.43 (issue #11): an abandoned computation (a new file was opened)
+                // Per v0.7.0 (issue #11): an abandoned computation (a new file was opened)
                 // must NOT run the v0.6.1 fallback — its result is no longer needed and the
                 // fallback would re-occupy the pool. The user-facing cancel (overlay dialog)
                 // keeps the v0.6.1 fallback (bonding-radius rules so the panel is never empty).
@@ -562,7 +570,7 @@ fun KrystalsRoot(
                         ),
                     ),
                 )
-                // Per v0.8.27: 默认显示氢键——关闭时把全部氢键规则 key 加入 hiddenBondPairs
+                // Per v0.7.0: 默认显示氢键——关闭时把全部氢键规则 key 加入 hiddenBondPairs
                 // (保留规则,DisplayPanel"氢键"子菜单仍在,可手动重新显示)。
                 if (!settingsValues.defaultShowHbonds && targetTab in viewModel.tabs) {
                     val hbondKeys = extended.bondConfiguration.rules.filter { it.isHBond }.map { it.key }.toSet()
@@ -572,7 +580,7 @@ fun KrystalsRoot(
                         )
                     }
                 }
-                // Per v0.8.43: the METALS_ONLY polyhedra default now has the regenerated rules —
+                // Per v0.7.0: the METALS_ONLY polyhedra default now has the regenerated rules —
                 // refine the per-site default set from doOpenParsed to exactly the metals in
                 // metal-nonmetal bonds (metal-metal bonds excluded).
                 if (settingsValues.defaultPolyhedra == PolyhedraDefault.METALS_ONLY && targetTab in viewModel.tabs) {
@@ -601,6 +609,15 @@ fun KrystalsRoot(
         runCatching { activity.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, url.toUri())) }.onFailure { showMessage("Unable to open browser") }
     }
 
+    /** Per v0.7.0: true when the structure's space group is resolvable by the
+     *  Krystals catalog (valid number in 1..230 whose symbol matches). */
+    fun isSpaceGroupRecognized(structure: CrystalStructure): Boolean {
+        val number = structure.spaceGroup.number ?: return false
+        if (number !in 1..230) return false
+        val catalog = SpaceGroupCatalog.all.getOrNull(number - 1) ?: return false
+        return catalog.symbol == structure.spaceGroup.symbol || SpaceGroupCatalog.find(structure.spaceGroup.symbol) != null
+    }
+
     /** Per v0.5.3b: the actual tab insertion + bond computation, split out of [openParsed] so the
      *  large-cell warning can re-enter here after the user confirms. Declared before [openParsed]
      *  because Kotlin local functions have no forward references.
@@ -608,7 +625,7 @@ fun KrystalsRoot(
     fun doOpenParsed(parsed: ParsedStructure, name: String, uri: Uri?, expandedEstimate: Int) {
         viewModel.add(parsed, name, uri)
         val tab = viewModel.current ?: return
-        // Per v0.8.43 (issue #11): opening a new file abandons in-flight bond computations of
+        // Per v0.7.0 (issue #11): opening a new file abandons in-flight bond computations of
         // other tabs — the user moved on, the Default-pool work is no longer needed, and the
         // pool is freed immediately. Two guards: (1) only open-path computations (tabId !=
         // null); (2) a grace window keeps batch open (issue #5) intact — its doOpenParsed
@@ -620,7 +637,7 @@ fun KrystalsRoot(
             }
         }
         debugLog(CIF_OPEN_TAG) { "OpenCIF 5/6: tab ready ($name)" }
-        // Per v0.8.26: apply user preference defaults for the new tab.
+        // Per v0.7.0: apply user preference defaults for the new tab.
         tab.visibility = tab.visibility.copy(showBonds = settingsValues.defaultShowBonds)
         // Default extend-bonds setting.
         tab.structuralExpansion = when (settingsValues.defaultExtendBonds) {
@@ -629,7 +646,7 @@ fun KrystalsRoot(
             ExtendBondsDefault.NEVER -> false
         }
         // Default polyhedra visibility.
-        // Per v0.8.43: METALS_ONLY shows polyhedra only for metals that participate in a
+        // Per v0.7.0: METALS_ONLY shows polyhedra only for metals that participate in a
         // metal-NONmetal bond (metal-metal bonds excluded) — computed from the carried CIF
         // rules here; refined against the regenerated rules in openWithBondComputation's
         // onSuccess once they exist.
@@ -641,15 +658,17 @@ fun KrystalsRoot(
         })
         // Per v0.7.0: extract user comments from CIF source.
         tab.comments = CifComments.extract(parsed.document.source)
-        // Per v0.8.26: skip bond computation when the user disables auto-bond-rules.
-        // Per v0.8.36: pass the already-computed expansion size (openParsed expanded for the
+        // Per v0.7.0: skip bond computation when the user disables auto-bond-rules.
+        // Per v0.7.0: pass the already-computed expansion size (openParsed expanded for the
         // large-cell gate) so the computation path does not re-expand the cell.
         if (settingsValues.autoBondRules) {
             openWithBondComputation(tab.structure, tab.bondConfiguration, tab.bondEpsilon, expandedEstimate)
         } else {
-            // Per v0.8.36: with auto bond rules off, drop any rules carried in the CIF so no
+            // Per v0.7.0: with auto bond rules off, drop any rules carried in the CIF so no
             // bonds are shown at all (previously the file's saved rules still produced bonds).
-            tab.bondConfiguration = tab.bondConfiguration.copy(rules = emptyList())
+            // Per 2026-08-09: also disable the detector's element covalent-radius AUTO fallback,
+            // which otherwise re-created bonds for every pair within the covalent window.
+            tab.bondConfiguration = tab.bondConfiguration.copy(rules = emptyList(), allowAutoFallback = false)
         }
     }
 
@@ -658,20 +677,38 @@ fun KrystalsRoot(
      *  Per v0.5.3b: cells expanding past [LARGE_CELL_WARN_THRESHOLD] atoms are gated behind a
      *  confirm dialog; the user can still open them in degraded mode. */
     fun openParsed(parsed: ParsedStructure, name: String, uri: Uri?) {
+        // Per v0.7.0: when the declared space group cannot be resolved, let spglib
+        // derive the symmetry from the atomic coordinates, standardize to
+        // conventional, remove symmetry-equivalent duplicates and refine, then
+        // import the result into the Krystals structure. Falls back to the parsed
+        // structure when spglib fails or finds no symmetry.
+        val effective = if (isSpaceGroupRecognized(parsed.structure)) {
+            parsed
+        } else {
+            debugLog(CIF_OPEN_TAG) { "OpenCIF: space group '${parsed.structure.spaceGroup.symbol}' unrecognised; trying spglib" }
+            val refined = runCatching { SpglibStructure.refineUnknownSpaceGroup(parsed.structure) }.getOrNull()
+            if (refined != null) {
+                debugLog(CIF_OPEN_TAG) { "OpenCIF: spglib resolved sg #${refined.spaceGroup.number} ${refined.spaceGroup.symbol} (${refined.sites.size} ASU sites)" }
+                parsed.copy(structure = refined)
+            } else {
+                debugLog(CIF_OPEN_TAG) { "OpenCIF: spglib refinement unavailable, keeping parsed structure" }
+                parsed
+            }
+        }
         // Per v0.6.3: move SymmetryExpander.expand() off the main thread — it was the bottleneck
         // that made opening a CIF freeze the UI before the viewer appeared.
-        // Per v0.8.43 (issue #11): the open pipeline runs on openDispatcher (its own small pool),
+        // Per v0.7.0 (issue #11): the open pipeline runs on openDispatcher (its own small pool),
         // isolated from heavy bond computations on Dispatchers.Default.
         scope.launch {
             val expandStart = System.currentTimeMillis()
-            val expandedEstimate = withContext(openDispatcher) { SymmetryExpander.expand(parsed.structure).size }
+            val expandedEstimate = withContext(openDispatcher) { SymmetryExpander.expand(effective.structure).size }
             debugLog(CIF_OPEN_TAG) { "OpenPhase: expand +${System.currentTimeMillis() - expandStart}ms ($expandedEstimate atoms)" }
             debugLog(CIF_OPEN_TAG) { "OpenCIF 4/6: symmetry expansion done ($expandedEstimate atoms)" }
             if (expandedEstimate > LARGE_CELL_WARN_THRESHOLD) {
-                pendingLargeOpen = PendingLargeOpen(parsed, name, uri, expandedEstimate)
+                pendingLargeOpen = PendingLargeOpen(effective, name, uri, expandedEstimate)
                 return@launch
             }
-            doOpenParsed(parsed, name, uri, expandedEstimate)
+            doOpenParsed(effective, name, uri, expandedEstimate)
         }
     }
 
@@ -696,7 +733,7 @@ fun KrystalsRoot(
                 if (pending.candidates.size == 1) {
                     // Per v0.6.4: parseStructure can be heavy (resolves space groups, creates
                     // symmetry operations) — run off the UI thread to avoid blocking.
-                    // Per v0.8.43 (issue #11): open pipeline runs on openDispatcher.
+                    // Per v0.7.0 (issue #11): open pipeline runs on openDispatcher.
                     val parseStart = System.currentTimeMillis()
                     val parsed = withContext(openDispatcher) { CifCodec.parseStructure(pending.text, pending.candidates.first(), autoConvertConventional = settingsValues.autoConvertCell) }
                     debugLog(CIF_OPEN_TAG) { "OpenPhase: parse +${System.currentTimeMillis() - parseStart}ms (${parsed.structure.sites.size} sites)" }
@@ -762,7 +799,7 @@ fun KrystalsRoot(
         }
     }
 
-    /** Per v0.8.36: confirm button of the save / save-to-preset name dialog. */
+    /** Per v0.7.0: confirm button of the save / save-to-preset name dialog. */
     fun confirmSaveName() {
         val tab = saveNameTab ?: return
         val finalName = saveNameDraft.trim().ifEmpty { tab.name.removeSuffix(".cif") }.ensureCifExtension()
@@ -790,7 +827,7 @@ fun KrystalsRoot(
     }
 
     /**
-     * Per v0.8.44: confirm button of the share name dialog — writes the CIF to a cache temp
+     * Per v0.7.0: confirm button of the share name dialog — writes the CIF to a cache temp
      * file under the confirmed name and fires the system share chooser (moved from ViewerScreen).
      */
     fun confirmShareName() {
@@ -828,7 +865,7 @@ fun KrystalsRoot(
         pendingExportBitmap = null
         if (granted && bitmap != null) scope.launch {
             runCatching { withContext(Dispatchers.IO) { FileRepository.exportPng(activity.contentResolver, bitmap) } }
-                .onSuccess { showMessage("Exported to Pictures/Krystals") }
+                .onSuccess { uri -> debugLog(EXPORT_IMAGE_TAG) { "ExportImage 4/4: saved ($uri)" }; showMessage("Exported to Pictures/Krystals") }
                 .onFailure { if (it !is CancellationException) showMessage(it.message ?: "Export failed") }
             bitmap.recycle()
         } else {
@@ -842,7 +879,7 @@ fun KrystalsRoot(
             permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         } else scope.launch {
             runCatching { withContext(Dispatchers.IO) { FileRepository.exportPng(activity.contentResolver, bitmap) } }
-                .onSuccess { showMessage("Exported to Pictures/Krystals") }
+                .onSuccess { uri -> debugLog(EXPORT_IMAGE_TAG) { "ExportImage 4/4: saved ($uri)" }; showMessage("Exported to Pictures/Krystals") }
                 .onFailure { if (it !is CancellationException) showMessage(it.message ?: "Export failed") }
             bitmap.recycle()
         }
@@ -855,7 +892,7 @@ fun KrystalsRoot(
     fun requestExit() {
         if (viewModel.tabs.any { it.dirty }) exitRequest = true else activity.finishAndRemoveTask()
     }
-    // Per v0.8.1: every window dialog (AlertDialog/Dialog) handles its own back press inside its own
+    // Per v0.7.0: every window dialog (AlertDialog/Dialog) handles its own back press inside its own
     // Window, so its KrystalsRoot entry was dead code. Only the inline overlay screens (COD/MP search,
     // help/sponsor) and the tab stack remain in this handler.
     BackHandler(enabled = true) {
@@ -884,7 +921,7 @@ fun KrystalsRoot(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
         ) { innerPadding ->
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
-                // Per v0.8.26: language switching overlay.
+                // Per v0.7.0: language switching overlay.
                 if (languageSwitching) {
                     Box(
                         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
@@ -905,6 +942,16 @@ fun KrystalsRoot(
                         onOnlineSource = { onlineSourceOpen = true },
                         themeMode = themeMode, onTheme = ::applyTheme, language = language,
                         onLanguage = ::applyLanguage,
+                        settingsValues = settingsValues,
+                        onSettingsChange = onSettingsChange,
+                        onRestoreDefaults = {
+                            PreferencesStore.clearAll(preferences)
+                            val defaults = SettingsValues.defaults()
+                            settingsValues = defaults
+                            PreferencesStore.save(preferences, defaults)
+                            if (language != defaults.language && defaults.language != "auto") applyLanguage(defaults.language)
+                            if (themeMode != defaults.theme) { themeMode = defaults.theme; preferences.edit { putString(PreferencesStore.KEY_THEME, defaults.theme.name) } }
+                        },
                         onHelp = { linkConfirmUrl = "https://www.kelesss.art/refs/software/krystals.html" }, onAbout = { aboutOpen = true }, onSponsor = { sponsorOpen = true }, onFeedback = { linkConfirmUrl = "https://github.com/SUPERkelesss/Krystals/issues" }, onExit = ::requestExit,
                     )
                 } else {
@@ -922,7 +969,7 @@ fun KrystalsRoot(
                             if (themeMode != defaults.theme) { themeMode = defaults.theme; preferences.edit { putString(PreferencesStore.KEY_THEME, defaults.theme.name) } }
                         },
                         onSave = { tab ->
-                            // Per v0.8.36: confirm the file name in a dialog first.
+                            // Per v0.7.0: confirm the file name in a dialog first.
                             saveNameTab = tab
                             saveNameIsPreset = false
                             saveNameDraft = tab.name.removeSuffix(".cif")
@@ -933,7 +980,7 @@ fun KrystalsRoot(
                         onOpenPreset = { presetOpen = true },
                         onSaveToPreset = {
                             val tab = viewModel.current ?: return@ViewerScreen
-                            // Per v0.8.36: confirm the file name in a dialog first; group selectable.
+                            // Per v0.7.0: confirm the file name in a dialog first; group selectable.
                             saveNameTab = tab
                             saveNameIsPreset = true
                             saveNameDraft = tab.name.removeSuffix(".cif")
@@ -942,7 +989,7 @@ fun KrystalsRoot(
                             saveNameOpen = true
                         },
                         onShare = { tab ->
-                            // Per v0.8.44: share confirms the file name in the same rename window as save.
+                            // Per v0.7.0: share confirms the file name in the same rename window as save.
                             shareNameTab = tab
                             shareNameDraft = tab.name.removeSuffix(".cif")
                             shareNameEdited = false
@@ -1074,7 +1121,7 @@ fun KrystalsRoot(
         onMessage = ::showMessage,
         onOpenParsed = { parsed, name -> mpSearchOpen = false; openParsed(parsed, name, null) },
     )
-    // Per v0.8.36: the preset library renders at the same top level as the COD/MP search
+    // Per v0.7.0: the preset library renders at the same top level as the COD/MP search
     // screens — hosting it inside KrystalsRootDialogs (with the windowed dialogs) gave its
     // DropdownMenu popups a different window context that misbehaved on some devices.
     if (presetOpen) PresetLibraryScreen(
@@ -1095,7 +1142,7 @@ fun KrystalsRoot(
         onMessage = ::showMessage,
         onOpenParsed = { parsed, name -> codSearchOpen = false; openParsed(parsed, name, null) },
     )
-    // Per v0.8.26: apply the user's COD mirror preference whenever the COD panel opens.
+    // Per v0.7.0: apply the user's COD mirror preference whenever the COD panel opens.
     LaunchedEffect(codSearchOpen) {
         if (codSearchOpen) {
             CrystallographyOpenDatabase.setMirrorMode(
@@ -1105,16 +1152,16 @@ fun KrystalsRoot(
             )
         }
     }
-    // Per v0.8.35: the preset library is a full-screen page; system back closes it.
+    // Per v0.7.0: the preset library is a full-screen page; system back closes it.
     // Registered after ViewerScreen's handler so it wins while the page is open.
     BackHandler(enabled = presetOpen) { presetOpen = false }
-    // Per v0.8.36: save / save-to-preset file-name confirmation dialog.
+    // Per v0.7.0: save / save-to-preset file-name confirmation dialog.
     if (saveNameOpen) {
         val saveNameTitle = localized("确认文件名", "Confirm file name")
         val saveLabel = localized("保存", "Save")
         val cancelLabel = localized("取消", "Cancel")
-        // Per v0.8.36: save-to-preset also picks the target user group (bundled groups excluded).
-        // Per v0.8.39: group list loads off the UI thread.
+        // Per v0.7.0: save-to-preset also picks the target user group (bundled groups excluded).
+        // Per v0.7.0: group list loads off the UI thread.
         var presetGroups by remember(saveNameOpen) { mutableStateOf(emptyList<String>()) }
         LaunchedEffect(saveNameOpen, saveNameIsPreset) {
             if (saveNameIsPreset) presetGroups = PresetRepository.listGroups(activity).filter { it.isUserGroup }.map { it.name }
@@ -1167,7 +1214,7 @@ fun KrystalsRoot(
             dismissButton = { TextButton(onClick = { saveNameOpen = false }) { Text(cancelLabel) } },
         )
     }
-    // Per v0.8.44: share file-name dialog — same rename window as save (name + .cif suffix),
+    // Per v0.7.0: share file-name dialog — same rename window as save (name + .cif suffix),
     // confirm starts the share chooser with the chosen name.
     if (shareNameOpen) {
         val shareNameTitle = localized("确认文件名", "Confirm file name")
@@ -1207,7 +1254,7 @@ fun KrystalsRoot(
 }
 
 /**
- * Per v0.8.1: all dialogs that live in their own Window (AlertDialog / Dialog). Extracted from
+ * Per v0.7.0: all dialogs that live in their own Window (AlertDialog / Dialog). Extracted from
  * KrystalsRoot so toggling one only recomposes this composable. Each Window dialog consumes back
  * presses inside its own Window (the old KrystalsRoot BackHandler entries were dead code). Inline
  * overlay screens (About, COD/MP search) stay in KrystalsRoot because their back handling is
@@ -1277,7 +1324,7 @@ private fun KrystalsRootDialogs(
     var codSearchOpen by codSearchOpenState
     var sponsorOpen by sponsorOpenState
 
-    // Per v0.8.43 (issue #5): the overlay shows while ANY computation runs and stays until all
+    // Per v0.7.0 (issue #5): the overlay shows while ANY computation runs and stays until all
     // finish (batch open may run several concurrently). Cancelling cancels every in-flight job;
     // their finallys unwind computingCount/computingTabIds.
     if (computingCount > 0) {
@@ -1327,8 +1374,8 @@ private fun KrystalsRootDialogs(
             onDismissRequest = { pendingOpen = null },
             title = { Text(localized("选择结构", "Select structure")) },
             text = { Column { pending.candidates.forEach { index -> TextButton(onClick = {
-                // Per v0.8.39: parseStructure is heavy — run off the UI thread (matches loadUri).
-                // Per v0.8.43 (issue #11): open pipeline runs on openDispatcher.
+                // Per v0.7.0: parseStructure is heavy — run off the UI thread (matches loadUri).
+                // Per v0.7.0 (issue #11): open pipeline runs on openDispatcher.
                 scope.launch {
                     val parseStart = System.currentTimeMillis()
                     val parsed = withContext(openDispatcher) {
@@ -1430,7 +1477,7 @@ private fun KrystalsRootDialogs(
             },
         )
     }
-    // Per v0.8.44: sponsor button + launch-count prompt open the sponsor dialog (the "投喂"
+    // Per v0.7.0: sponsor button + launch-count prompt open the sponsor dialog (the "投喂"
     // cat-feeding message with three actions); "我要赞助！" opens the ifdian page, "我已赞助"
     // goes to the activation-code dialog. Replaces the unified link-confirm for the sponsor flow.
     if (sponsorOpen) SponsorDialog(
@@ -1438,6 +1485,8 @@ private fun KrystalsRootDialogs(
         launchCount = sponsorLaunchCount,
         onSponsor = { sponsorOpen = false; openUrl("https://ifdian.net/a/krystals/plan") },
         onAlreadySponsored = { sponsorOpen = false; activationOpen = true },
+        // Per 2026-08-09: 已激活用户隐藏"我已赞助"按键(无需再输入激活码)。
+        isActivated = ActivationManager.isActivated(activity),
     )
     // Per v0.6.5: version update dialog.
     val msgStartDownload = localized("开始下载新版本...", "Starting download...")
@@ -1529,7 +1578,7 @@ private fun KrystalsRootDialogs(
 }
 
 /**
- * Per v0.8.36: shared app menu — import/preset/online/new, optional per-screen file actions
+ * Per v0.7.0: shared app menu — import/preset/online/new, optional per-screen file actions
  * (save/share/export on the viewer), the 2x2 help/feedback/about/sponsor grid, and exit.
  * Used by HomeScreen and ViewerScreen so the common items stay in sync.
  */

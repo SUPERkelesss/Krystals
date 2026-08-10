@@ -47,7 +47,7 @@ import com.krystals.app.ui.ThemeMode
 import kotlinx.coroutines.launch
 
 /**
- * Per v0.8.28: user preferences dialog. Window style matches the Appearance dialog
+ * Per v0.7.0: user preferences dialog. Window style matches the Appearance dialog
  * (large window, bold group headings with dividers); enum options use text dropdowns
  * ([DropdownField]) instead of chips.
  */
@@ -59,17 +59,17 @@ fun SettingsPanel(
     onDismiss: () -> Unit,
     onRestoreDefaults: (() -> Unit)? = null,
 ) {
-    // Per v0.8.30: settings are frozen on open; only Save applies them.
+    // Per v0.7.0: settings are frozen on open; only Save applies them.
     var draft by remember { mutableStateOf(settings) }
     val apply = { onChange(draft) }
-    // Per v0.8.32: restore-defaults needs confirmation before it touches the frozen draft.
+    // Per v0.7.0: restore-defaults needs confirmation before it touches the frozen draft.
     var resetConfirmOpen by remember { mutableStateOf(false) }
-    // Per v0.8.36: custom-mirror test state lives at panel level so Save can validate it;
+    // Per v0.7.0: custom-mirror test state lives at panel level so Save can validate it;
     // Save is blocked (with a hint line) until a CUSTOM mirror passes its test.
     var customTestOk by remember { mutableStateOf<Boolean?>(null) }
     var saveHint by remember { mutableStateOf<String?>(null) }
     // Label mapping helpers (localized() is @Composable, so these live in composition).
-    // Per v0.8.36: language option labels follow the UI language (Chinese UI shows 中文,
+    // Per v0.7.0: language option labels follow the UI language (Chinese UI shows 中文,
     // English UI shows Chinese) — was hardcoded to Chinese which leaked into English UI.
     val languageLabels = listOf(localized("中文", "Chinese"), "English")
     val themeLabels = ThemeMode.entries.map { mode -> when (mode) {
@@ -78,12 +78,12 @@ fun SettingsPanel(
         ThemeMode.LIGHT -> localized("浅色", "Light")
     } }
     val bondRuleLabels = listOf(
-        // Per v0.8.36: vdW-radius option removed.
+        // Per v0.7.0: vdW-radius option removed.
         localized("自动", "Auto"), localized("智能离子", "Ionic"),
         localized("键合半径", "Bonding"),
     )
     val extendLabels = listOf(localized("全部", "All"), localized("仅金属", "Metals"), localized("从不", "Never"))
-    // Per v0.8.36: shortened option labels.
+    // Per v0.7.0: shortened option labels.
     val codModeLabels = listOf(
         localized("自动", "Auto"), localized("固定节点", "Fixed"), localized("自定义", "Custom"),
     )
@@ -101,7 +101,7 @@ fun SettingsPanel(
                 Column(Modifier.fillMaxWidth().height(480.dp).verticalScroll(rememberScrollState())) {
                     // ══ 常规 / General ══
                     Text(localized("常规", "General"), fontWeight = FontWeight.Bold)
-                    // Per v0.8.36: only Language and Theme keep icons; the rest are plain.
+                    // Per v0.7.0: only Language and Theme keep icons; the rest are plain.
                     SegmentedSetting(Icons.Default.Translate, localized("语言", "Language"), languageLabels, if (languageLabel(draft.language) == languageLabels[0]) 0 else 1) { index ->
                         draft = draft.copy(language = if (index == 0) "zh" else "en")
                     }
@@ -121,13 +121,13 @@ fun SettingsPanel(
                         SegmentedSetting(null, localized("自动应用的键规则", "Auto Bond Rule Mode"), bondRuleLabels, draft.bondRuleMode.ordinal.coerceIn(0, bondRuleLabels.lastIndex)) { index ->
                             draft = draft.copy(bondRuleMode = BondRuleMode.entries[index])
                         }
-                        // Per v0.8.27: 自动计算氢键仅随"自动计算键规则"显示。
+                        // Per v0.7.0: 自动计算氢键仅随"自动计算键规则"显示。
                         Tog(draft.autoComputeHbonds, { draft = draft.copy(autoComputeHbonds = it) }, localized("自动计算氢键", "Auto Compute H-Bonds"))
                     }
                     Tog(draft.autoConvertCell, { draft = draft.copy(autoConvertCell = it) }, localized("素晶胞自动转正当晶胞", "Auto Convert Cell"))
                     Tog(draft.defaultShowBonds, { draft = draft.copy(defaultShowBonds = it) }, localized("默认显示所有化学键", "Default Show Bonds"))
                     if (draft.defaultShowBonds) {
-                        // Per v0.8.27: 以下三项仅随"默认显示所有化学键"关联显示。
+                        // Per v0.7.0: 以下三项仅随"默认显示所有化学键"关联显示。
                         Tog(draft.defaultShowHbonds, { draft = draft.copy(defaultShowHbonds = it) }, localized("默认显示所有氢键", "Default Show H-Bonds"))
                         SegmentedSetting(null, localized("默认延伸化学键", "Default Extend Bonds"), extendLabels, draft.defaultExtendBonds.ordinal) { index ->
                             draft = draft.copy(defaultExtendBonds = ExtendBondsDefault.entries[index])
@@ -159,7 +159,7 @@ fun SettingsPanel(
                         var url by remember(settings) { mutableStateOf(draft.codCustomUrl) }
                         var testing by remember { mutableStateOf(false) }
                         val scope = rememberCoroutineScope()
-                        // Per v0.8.36: test button sits on the right of the URL field, and is a
+                        // Per v0.7.0: test button sits on the right of the URL field, and is a
                         // highlighted Button; the result feeds the panel-level customTestOk gate.
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(url, { url = it; draft = draft.copy(codCustomUrl = it); customTestOk = null; saveHint = null }, label = { Text(localized("自定义节点 URL", "Custom Mirror URL")) }, singleLine = true, modifier = Modifier.weight(1f))
@@ -189,6 +189,11 @@ fun SettingsPanel(
 
                     // ══ 显示 / Display ══
                     Text(localized("显示", "Display"), fontWeight = FontWeight.Bold)
+                    Tog(
+                        draft.showSecondaryExtendBonds,
+                        { draft = draft.copy(showSecondaryExtendBonds = it) },
+                        localized("拓展键时显示二级成键", "Show Secondary Bonds When Extending"),
+                    )
                     SegmentedSetting(null, localized("导出图片质量", "Export Quality"), qualityLabels, draft.exportQuality.ordinal) { index ->
                         draft = draft.copy(exportQuality = ExportQuality.entries[index])
                     }
@@ -196,7 +201,7 @@ fun SettingsPanel(
                     Tog(draft.exportShowMeasurements, { draft = draft.copy(exportShowMeasurements = it) }, localized("导出时显示测量结果", "Export Show Measurements"))
                     Spacer(Modifier.height(4.dp))
                 }
-                // Per v0.8.32: footer pinned below the scroll area (Cancel/Save stay visible).
+                // Per v0.7.0: footer pinned below the scroll area (Cancel/Save stay visible).
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
                     TextButton(onClick = { resetConfirmOpen = true }) {
@@ -209,7 +214,7 @@ fun SettingsPanel(
                     TextButton(onClick = onDismiss) { Text(localized("取消", "Cancel")) }
                     Spacer(Modifier.width(12.dp))
                     Button(onClick = {
-                        // Per v0.8.36: a CUSTOM mirror must have passed its test before saving.
+                        // Per v0.7.0: a CUSTOM mirror must have passed its test before saving.
                         if (draft.codMirrorMode == CodMirrorMode.CUSTOM && customTestOk != true) {
                             saveHint = if (customTestOk == false) hintTestFailed else hintNotConfigured
                         } else {
@@ -229,7 +234,7 @@ fun SettingsPanel(
             }
         }
     }
-    // Per v0.8.32: confirm before restoring defaults (mirrors the Appearance dialog pattern).
+    // Per v0.7.0: confirm before restoring defaults (mirrors the Appearance dialog pattern).
     if (resetConfirmOpen) {
         AlertDialog(
             onDismissRequest = { resetConfirmOpen = false },
@@ -249,13 +254,13 @@ fun SettingsPanel(
 }
 
 @Composable private fun LabeledSliderSetting(label: String, value: Float, onChange: (Float) -> Unit) {
-    // Per v0.8.33: value merged into the label line: "label: 45%". Per v0.8.36: no stray '$'
+    // Per v0.7.0: value merged into the label line: "label: 45%". Per v0.7.0: no stray '$'
     // and the slider range is fixed to 0..1 (the only caller).
     Text("$label: ${"%.0f%%".format(value * 100f)}", style = MaterialTheme.typography.bodyMedium)
     Slider(value = value, onValueChange = onChange, valueRange = 0f..1f)
 }
 
-/** Per v0.8.36: single-choice setting as a segmented button row; icon optional (Language/Theme only). */
+/** Per v0.7.0: single-choice setting as a segmented button row; icon optional (Language/Theme only). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SegmentedSetting(

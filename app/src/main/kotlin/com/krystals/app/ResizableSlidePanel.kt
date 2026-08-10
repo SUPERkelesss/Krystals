@@ -93,19 +93,20 @@ fun ResizableSlidePanel(
             // content sits beside it in a Row (a Column with a fillMaxHeight first child would leave
             // no height for the tabs/content — the cause of the blank landscape panel).
             val handleModifier = if (landscape) {
-                Modifier.fillMaxHeight().width(24.dp)
+                Modifier.fillMaxHeight().width(12.dp)
             } else {
-                Modifier.fillMaxWidth().height(24.dp)
+                Modifier.fillMaxWidth().height(12.dp)
             }
             val dividerModifier = if (landscape) {
-                Modifier.fillMaxHeight().width(18.dp)
+                Modifier.fillMaxHeight().width(9.dp)
             } else {
-                Modifier.fillMaxWidth().height(18.dp)
+                Modifier.fillMaxWidth().height(9.dp)
             }
             val handle = @Composable {
-                // Per v0.8.1: 24.dp drag hit target (the visible divider stays pinned to the panel
-                // edge, pre-v0.8.1 style); persist the ratio once when the drag ends (or is
+                // Per v0.7.0: 24.dp drag hit target (the visible divider stays pinned to the panel
+                // edge, pre-v0.7.0 style); persist the ratio once when the drag ends (or is
                 // cancelled) instead of writing SharedPreferences on every drag frame.
+                // Per v0.7.0: handle/divider halved to 12.dp / 9.dp per user request.
                 Box(
                     Modifier
                         .then(handleModifier)
@@ -124,7 +125,7 @@ fun ResizableSlidePanel(
                             )
                         },
                 ) {
-                    // Per v0.8.1: pin the visible divider to the panel edge (as pre-v0.8.1) so no
+                    // Per v0.7.0: pin the visible divider to the panel edge (as pre-v0.7.0) so no
                     // background strip shows above it; only the drag hit target is 24.dp.
                     Box(
                         Modifier.then(dividerModifier)
