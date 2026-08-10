@@ -716,7 +716,12 @@ private fun BondEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onMe
                 rebuildJob = null
                 previousEpsilon = null
                 outcome.onSuccess { result ->
-                    tab.lastRadiusSource = source
+                    // Per v0.8.x: 智能离子不可用回退到键合半径规则时,提示必须同步为键合半径,
+                    // 否则"自动应用半径"顶部显示"智能离子"而实际规则是键合半径(与实际不符)。
+                    val effectiveSource = if (source == RadiusSource.SMART_IONIC &&
+                        CrystalEditor.SMART_IONIC_UNAVAILABLE in result.warnings
+                    ) RadiusSource.BONDING else source
+                    tab.lastRadiusSource = effectiveSource
                     if (CrystalEditor.SMART_IONIC_UNAVAILABLE in result.warnings) onMessage(unavailableMessage)
                     onStructure(result)
                 }.onFailure { error ->
