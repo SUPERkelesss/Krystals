@@ -8,7 +8,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Regression (v0.8.5): the corpus h3po4_H3PO4.cif must yield exactly 10 VISIBLE hbond bonds
+ * Regression (v0.7.0): the corpus h3po4_H3PO4.cif must yield exactly 10 VISIBLE hbond bonds
  * (14 total network hbonds, minus 4 whose acceptor is an external-shell atom the scene
  * builder hides). Guards the bond-level per-proton shortest + angle filters on real data —
  * the renderer-core HbondH3po4SceneTest covers the same acceptance on a hand-coded P21/c

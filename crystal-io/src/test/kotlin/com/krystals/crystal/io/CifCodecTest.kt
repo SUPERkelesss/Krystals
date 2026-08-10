@@ -118,7 +118,7 @@ class CifCodecTest {
         assertEquals("Unknown group", CifCodec.parseStructure(source).structure.spaceGroup.symbol)
     }
 
-    // ── Per v0.8.0: Materials Project returns conventional standard cells. ───────
+    // ── Per v0.7.0: Materials Project returns conventional standard cells. ───────
 
     @Test fun mpConventionalFeCellWithIdentityOpsIsNotConverted() {
         // Simulates the CIF MaterialsProject.buildCif writes for a conventional bcc Fe cell.

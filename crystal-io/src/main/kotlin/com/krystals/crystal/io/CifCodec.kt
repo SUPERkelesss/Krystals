@@ -143,7 +143,7 @@ private val replacementPrefixes = listOf(
         } else {
             CrystalEditor.isConventionalCell(parsedBlock.structure)
         }
-        // Per v0.8.26: when autoConvertConventional is false, keep the original cell as-is
+        // Per v0.7.0: when autoConvertConventional is false, keep the original cell as-is
         // (user preference to view primitive cells without automatic conversion).
         val structure = when {
             !autoConvertConventional -> parsedBlock.structure
@@ -181,7 +181,7 @@ private val replacementPrefixes = listOf(
         } else {
             CrystalEditor.isConventionalCell(parsedBlock.structure)
         }
-        // Per v0.8.36: autoConvertConventional is always true here (public parseStructure
+        // Per v0.7.0: autoConvertConventional is always true here (public parseStructure
         // keeps the opt-out), so the non-converting branch was removed.
         val structure = when {
             isConventional -> parsedBlock.structure.copy(isConventional = true)
@@ -352,7 +352,7 @@ private val replacementPrefixes = listOf(
         }
         if (rules.isNotEmpty()) {
             append("loop_\n _krystals_bond_rule_site_a\n _krystals_bond_rule_site_b\n _krystals_bond_rule_min_distance\n _krystals_bond_rule_max_distance\n _krystals_bond_rule_extend_a_to_b\n _krystals_bond_rule_extend_b_to_a\n")
-            // Per v0.8.1: Hbond rules are regenerated on every smart-ionic run — don't persist them.
+            // Per v0.7.0: Hbond rules are regenerated on every smart-ionic run — don't persist them.
             rules.filter { !it.isHBond }.sortedBy { it.key }.forEach { rule ->
                 val labelA = structure.sites.firstOrNull { it.id == rule.siteA }?.label ?: rule.siteA
                 val labelB = structure.sites.firstOrNull { it.id == rule.siteB }?.label ?: rule.siteB

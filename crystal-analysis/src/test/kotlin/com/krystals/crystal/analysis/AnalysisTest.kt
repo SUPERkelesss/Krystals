@@ -165,6 +165,39 @@ class AnalysisTest {
         assertTrue(CoordinationAnalyzer.coordinationNumber(network, network.atoms.first().id) > 0)
     }
 
+    @Test fun emptyRulesDisableCovalentFallbackWhenConfigured() {
+        // 2026-08-09 回归:关闭"自动计算键规则"后打开晶胞必须完全不显示键。
+        // 默认(allowAutoFallback=true):空规则仍按元素共价半径 AUTO fallback 成键
+        // (v0.7.0 行为,corundum Al-Al 等依赖它)。
+        val structure = csCl().first
+        assertTrue(BondDetector.buildNetwork(structure, BondConfiguration()).bonds.isNotEmpty())
+        // allowAutoFallback=false:空规则 = 无任何键(无 AUTO 兜底)。
+        assertTrue(BondDetector.buildNetwork(structure, BondConfiguration(allowAutoFallback = false)).bonds.isEmpty())
+        // 显式规则不受影响:即使关闭 fallback,规则窗口内的键照常生成。
+        val rule = BondRule("Cs", "Cl", 0.1, 4.0)
+        assertTrue(BondDetector.buildNetwork(structure, BondConfiguration(listOf(rule), allowAutoFallback = false)).bonds.isNotEmpty())
+    }
+
+    @Test fun autoBondRulesSkipDistantPairsInLargeP1Cell() {
+        val structure = CrystalStructure(
+            blockName = "large-p1-framework",
+            lattice = Lattice(100.0, 100.0, 110.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P1", 1),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = (0 until 1020).map { index ->
+                val x = index % 10
+                val y = (index / 10) % 10
+                val z = index / 100
+                Site("C$index", "C$index", Species("C"), FractionalCoordinate(x / 10.0, y / 10.0, z / 11.0))
+            },
+        )
+
+        val result = CrystalEditor.ensureAutoBondRules(structure, BondConfiguration(), includeHbonds = false)
+
+        // The old all-pairs implementation produced 1020 * 1021 / 2 inert rules here.
+        assertTrue(result.bondConfiguration.rules.isEmpty())
+    }
+
     @Test fun boundaryImagesReuseTheirZeroCellPrimaryIdentity() {
         val siteId = "C"
         val structure = CrystalStructure(
@@ -434,7 +467,7 @@ class AnalysisTest {
         assertSameExpandedAtoms(conventional, restored)
     }
 
-    // ── Per v0.8.1: Hbond rule coexistence ────────────────────────────────────
+    // ── Per v0.7.0: Hbond rule coexistence ────────────────────────────────────
 
     @Test fun hbondRuleKeyDiffersFromNormalKey() {
         val normal = BondRule("H1", "O1", 0.1, 1.2)
@@ -496,7 +529,7 @@ class AnalysisTest {
     }
 
     @Test fun transformTranslationIsNotPremultiplied() {
-        // Per v0.8.43 (issue #6): the transform dialog formula is R' = XR + T — the translation
+        // Per v0.7.0 (issue #6): the transform dialog formula is R' = XR + T — the translation
         // is added DIRECTLY in the new coordinate system, matching the fallback path. The
         // decomposable path used to premultiply it by P⁻¹, so a 2×2×1 expansion + T=(0.5,0,0)
         // moved atoms by only (0.25,0,0).

@@ -18,12 +18,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * v0.8.6: the bonding-radius fallback path also runs hbond detection.
+ * v0.7.0: the bonding-radius fallback path also runs hbond detection.
  * Triggered via [CrystalEditor.fromSmartIonicAttempt] with smartIonic = null
  * (simulating smartIonic timeout or failure).
  *
  * Proton criterion for this path: H site bonded through exactly ONE bonding-rule
- * pair to O/N/F/S/P/Cl (v0.8.16: C added). H sites bonded to 2+ such partners
+ * pair to O/N/F/S/P/Cl (v0.7.0: C added). H sites bonded to 2+ such partners
  * are NOT protons. One H-bond per H donor; acceptors may receive multiple H-bonds.
  */
 class HbondBondingFallbackTest {
@@ -98,7 +98,7 @@ class HbondBondingFallbackTest {
     }
 
     /**
-     * Per v0.8.27: auto-compute-hbonds preference OFF (includeHbonds=false) must
+     * Per v0.7.0: auto-compute-hbonds preference OFF (includeHbonds=false) must
      * suppress H-bond generation on every public entry point while keeping the
      * normal (non-H) rules intact. The fixture is the same H1–O2 proton case from
      * bondingPathAppendsHbondRulesForSingleBondH, which produces an hbond rule
@@ -148,9 +148,9 @@ class HbondBondingFallbackTest {
 
     @Test
     fun bondingPathDoesNotTreatCarbonBondedHAsProton() {
-        // Per v0.8.39: C is removed from the proton-partner set — an H bonded ONLY to C
+        // Per v0.7.0: C is removed from the proton-partner set — an H bonded ONLY to C
         // (single covalent bond) no longer qualifies as a proton, so no C–H···O hbond rule
-        // is produced even when an O acceptor is present. (v0.8.16 had enabled it.)
+        // is produced even when an O acceptor is present. (v0.7.0 had enabled it.)
         val structure = simpleStructure(
             listOf(
                 Site("C", "C1", Species("C"), FractionalCoordinate(0.5, 0.5, 0.3)),
@@ -166,7 +166,7 @@ class HbondBondingFallbackTest {
 
     @Test
     fun acceptorCanAcceptMultipleProtons() {
-        // Per v0.8.16 spec: one H atom forms only one H-bond (per-H shortest), but an ACCEPTOR
+        // Per v0.7.0 spec: one H atom forms only one H-bond (per-H shortest), but an ACCEPTOR
         // may accept multiple H atoms. Two protons H1/H2 both point at the same O3 acceptor —
         // the network must contain TWO hbond bonds (H1···O3 and H2···O3).
         val structure = simpleStructure(
@@ -192,7 +192,7 @@ class HbondBondingFallbackTest {
 
     @Test
     fun boundaryProtonDetectsHbondAcrossCellBoundary() {
-        // Per v0.8.17: H near the cell boundary whose covalent partner sits across the boundary
+        // Per v0.7.0: H near the cell boundary whose covalent partner sits across the boundary
         // (periodic image) must still be detected. Before the fix the angle used the main-cell
         // coordinate (~9.2 Å away) instead of the periodic displacement (~0.8 Å), giving a wrong
         // ~57° angle and dropping the H-bond entirely.
@@ -217,7 +217,7 @@ class HbondBondingFallbackTest {
         assertTrue(hbondBonds.single().distance in 2.0..2.6, "H-bond distance must be the periodic ~2.39 Å")
     }
 
-    // ── v0.8.7: all-non-metal structures default to bonding rules ──────────────────
+    // ── v0.7.0: all-non-metal structures default to bonding rules ──────────────────
 
     @Test
     fun allNonMetalStructureUsesBondingPathDirectly() {

@@ -20,7 +20,7 @@ data class BondRule(
         require(minAngstrom >= 0.0 && maxAngstrom >= minAngstrom)
     }
 
-    // Per v0.8.1: Hbond rules append "\u0000hbond" to the sorted-pair key so a normal
+    // Per v0.7.0: Hbond rules append "\u0000hbond" to the sorted-pair key so a normal
     // rule and an hbond rule for the same site pair coexist in BondConfiguration
     // (add replaces by key). Plain-pair lookups in disabledPairs / BondDetector
     // intentionally don't match the discriminator — hbonds are toggled in their own
@@ -69,12 +69,18 @@ fun Bond.toHydrogenBond(atomById: Map<Long, AtomImage>): HydrogenBond {
         extendAtoB = rule.extendAtoB,
         extendBtoA = rule.extendBtoA,
         offsetB = offsetB,
+        isAutoDetected = rule.source == BondRuleSource.AUTO,
     )
 }
 
 data class BondConfiguration(
     val rules: List<BondRule> = emptyList(),
     val disabledPairs: Set<String> = emptySet(),
+    // Per 2026-08-09: when false (user disabled auto bond rules), the detector must NOT fall
+    // back to element covalent-radius AUTO windows for pairs without an explicit rule —
+    // an empty rules list then truly means "no bonds at all". Default true keeps the
+    // v0.7.0 covalent fallback behaviour for every existing caller.
+    val allowAutoFallback: Boolean = true,
 ) {
     fun add(rule: BondRule): BondConfiguration {
         val existingIndex = rules.indexOfFirst { it.key == rule.key }

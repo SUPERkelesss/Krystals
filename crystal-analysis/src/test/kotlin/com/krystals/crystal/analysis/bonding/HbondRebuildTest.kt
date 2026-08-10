@@ -14,7 +14,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Per v0.8.x: [CrystalEditor.rebuildHbondRules] recomputes ONLY the H-bond rules for the
+ * Per v0.7.0: [CrystalEditor.rebuildHbondRules] recomputes ONLY the H-bond rules for the
  * current radius source while leaving the existing normal (covalent) rules untouched.
  *
  * - BONDING / VDW sources run the bonding-path hbond core over the EXISTING normal rules;

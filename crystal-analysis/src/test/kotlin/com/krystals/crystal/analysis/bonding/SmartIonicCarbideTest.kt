@@ -12,7 +12,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * v0.8.36: carbide C4- anion. Smart-ionic must resolve CaC2 (I4/mmm, Ca at origin, C2 dumbbell
+ * v0.7.0: carbide C4- anion. Smart-ionic must resolve CaC2 (I4/mmm, Ca at origin, C2 dumbbell
  * along c) — before C joined the fixed-anion table, Ca had no anion partner and the whole BVS
  * analysis failed (success=false, bonding fallback). BaO2 with the identical geometry always
  * worked because O is a fixed anion.

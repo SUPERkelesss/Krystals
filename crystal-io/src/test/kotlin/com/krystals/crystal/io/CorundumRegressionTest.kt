@@ -9,10 +9,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Regression: v0.8.4 — corundum (Al2O3) must not render Al–Al BONDS, even though an Al–Al
+ * Regression: v0.7.0 — corundum (Al2O3) must not render Al–Al BONDS, even though an Al–Al
  * rule legitimately exists.
  *
- * Root cause (v0.8.2 regression): BondDetector's hbond rework gated `customRule` on the
+ * Root cause (v0.7.0 regression): BondDetector's hbond rework gated `customRule` on the
  * distance falling inside the rule window, so when the Al–Al rule window (ionic radii:
  * [0.1, 1.52]) did not cover a real Al–Al contact (2.68-2.82 Å), customRule became null
  * and the covalent auto fallback ([0.1, 2.97]) resurrected the pair as a bond.

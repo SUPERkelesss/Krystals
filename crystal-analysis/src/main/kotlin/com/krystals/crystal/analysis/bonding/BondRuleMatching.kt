@@ -64,7 +64,7 @@ object BondRuleMatching {
         // its own periodic image (the common case when the ASU has only one atom of that site, e.g.
         // Cs in CsCl). The grid cannot represent "an atom to its own non-zero lattice translation",
         // so this path is handled directly with the minimum-image convention.
-        // Per v0.8.43 (issue #7): unified minimum-image pairing over all ordered pairs (i ≤ j).
+        // Per v0.7.0 (issue #7): unified minimum-image pairing over all ordered pairs (i ≤ j).
         // Distinct atoms (i < j) minimise over the 27 lattice offsets; an atom against its own
         // periodic images (i == j) minimises over the 26 non-zero offsets. The former |off| length
         // test is gone — it only covered pure lattice translations and missed symmetry-image pairs.
@@ -126,14 +126,14 @@ object BondRuleMatching {
      * fall back to exhaustive pairing in [hasMatchingBond]. Public so callers can build a [BondGrid]
      * with the same cell size [hasMatchingBond] would use internally.
      */
-    fun estimateCellSize(structure: CrystalStructure): Double {
-        var maxSum = 0.0
-        for (a in structure.sites) for (b in structure.sites) {
-            val sum = PeriodicTable.radius(a.species.symbol, RadiusSource.BONDING) +
-                PeriodicTable.radius(b.species.symbol, RadiusSource.BONDING)
-            if (sum > maxSum) maxSum = sum
-        }
-        return (maxSum + 1.0).coerceAtLeast(2.0)
+    fun estimateCellSize(
+        structure: CrystalStructure,
+        radiusSource: RadiusSource = RadiusSource.BONDING,
+    ): Double {
+        val maxRadius = structure.sites.maxOfOrNull {
+            PeriodicTable.radius(it.species.symbol, radiusSource)
+        } ?: 0.0
+        return (2.0 * maxRadius + 1.0).coerceAtLeast(2.0)
     }
 }
 
@@ -168,6 +168,16 @@ class BondGrid(
         return result
     }
 
+    /** All atoms near any periodic image of [center], deduplicated by atom identity. */
+    fun nearby(center: Vec3): List<AtomImage> {
+        val result = ArrayList<AtomImage>()
+        val seen = HashSet<Long>()
+        for (off in latticeOffsets) {
+            collectAll(center + off, result, seen)
+        }
+        return result
+    }
+
     private fun collect(center: Vec3, siteId: String, out: ArrayList<AtomImage>, seen: HashSet<Long>) {
         val ix = Math.floor(center.x / cellSize).toInt()
         val iy = Math.floor(center.y / cellSize).toInt()
@@ -176,6 +186,18 @@ class BondGrid(
             val bucket = buckets[Int3(ix + dx, iy + dy, iz + dz)] ?: continue
             for (atom in bucket) {
                 if (atom.siteId != siteId) continue
+                if (seen.add(atom.id)) out.add(atom)
+            }
+        }
+    }
+
+    private fun collectAll(center: Vec3, out: ArrayList<AtomImage>, seen: HashSet<Long>) {
+        val ix = Math.floor(center.x / cellSize).toInt()
+        val iy = Math.floor(center.y / cellSize).toInt()
+        val iz = Math.floor(center.z / cellSize).toInt()
+        for (dx in -1..1) for (dy in -1..1) for (dz in -1..1) {
+            val bucket = buckets[Int3(ix + dx, iy + dy, iz + dz)] ?: continue
+            for (atom in bucket) {
                 if (seen.add(atom.id)) out.add(atom)
             }
         }

@@ -15,7 +15,7 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 
 /**
- * Issue #7 (v0.8.43): pyrite FeS2 renders its cross-boundary S-S (disulfide) bonds correctly,
+ * Issue #7 (v0.7.0): pyrite FeS2 renders its cross-boundary S-S (disulfide) bonds correctly,
  * but the bond-rule window shows no S-S rule in the single cell (it appears after cell
  * expansion). Root cause found by the Task-1 diagnostic: `hasMatchingBond` matches the S-S
  * rule fine — the rule is never GENERATED, because `smartIonicRules` blanket-skips anion-anion

@@ -27,6 +27,8 @@ data class HydrogenBond(
     val extendBtoA: Boolean = false,
     /** 受体相对供体的周期偏移(与 Bond.offsetB 同义)。 */
     val offsetB: Int3 = Int3(0, 0, 0),
+    /** True when this contact came from automatic H-bond detection. */
+    val isAutoDetected: Boolean = false,
 ) {
     /** 与 BondRule.shouldExtendAcrossCell 相同的语义,保持消费端行为不变。 */
     fun shouldExtendAcrossCell(insideSiteId: String, outsideAtomIsExternal: Boolean): Boolean {
