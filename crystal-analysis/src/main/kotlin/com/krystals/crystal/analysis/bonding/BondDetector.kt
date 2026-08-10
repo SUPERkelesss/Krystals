@@ -17,47 +17,6 @@ object BondDetector {
     /** Shared zero-cell-offset constant, avoids allocating an Int3 per candidate pair. */
     private val ZERO_OFFSET = Int3(0, 0, 0)
 
-    // Per v0.5.3b: shell materialisation is the OOM hot spot. A 2-cell-thick shell covers
-    // (ex+4)(ey+4)(ez+4) cells worth of atoms; a 1-cell-thick shell covers (ex+2)(ey+2)(ez+2). The
-    // peak atom count (primary + shell) is materialised *before* the MAX_RENDERED_ATOMS check ran,
-    // so OOM hit large cells first. These guards choose the shell thickness up front and reject
-    // structures that would still overflow.
-    const val SHELL_DEGRADE_THRESHOLD = 60_000L
-    const val SHELL_HARD_LIMIT = 150_000L
-
-    /** v0.5.3b: how thick the neighbour shell is. FULL = 2 cells (v0.3.44 polyhedron complete);
-     *  ONE_CELL = 1 cell (boundary-image centres may miss their outward polyhedron face). */
-    enum class ShellMode { FULL, ONE_CELL }
-
-    /** Peak number of atoms materialised by [buildNetwork] = baseSize × shell-cell count (FULL mode). */
-    fun estimatePeakAtomCount(baseSize: Int, expansion: Expansion): Long {
-        if (baseSize == 0) return 0L
-        val ex = expansion.x
-        val ey = expansion.y
-        val ez = expansion.z
-        return baseSize.toLong() * (ex + 4).toLong() * (ey + 4).toLong() * (ez + 4).toLong()
-    }
-
-    /** Convenience overload: expands once; prefer the (baseSize, expansion) form when the caller
-     *  already has the expanded asymmetric unit. Uses sites × operations as a safe upper bound for
-     *  the expanded count (special positions produce fewer images), avoiding a full expansion just
-     *  to count atoms — overestimating only makes the shell-size guard more conservative. */
-    fun estimatePeakAtomCount(structure: CrystalStructure, expansion: Expansion): Long =
-        estimatePeakAtomCount(structure.sites.size * structure.effectiveSymmetryOperations.size, expansion)
-
-    /** Choose the shell thickness for a structure. FULL unless its peak overflows
-     *  [SHELL_DEGRADE_THRESHOLD]; then ONE_CELL unless that too overflows [SHELL_HARD_LIMIT]
-     *  (throws so the caller can report the structure is too large). */
-    fun pickShellMode(baseSize: Int, expansion: Expansion): ShellMode {
-        if (estimatePeakAtomCount(baseSize, expansion) <= SHELL_DEGRADE_THRESHOLD) return ShellMode.FULL
-        val peakOneCell = baseSize.toLong() *
-            (expansion.x + 2).toLong() * (expansion.y + 2).toLong() * (expansion.z + 2).toLong()
-        require(peakOneCell <= SHELL_HARD_LIMIT) {
-            "Structure too large: ~$peakOneCell atoms even with a 1-cell shell (limit $SHELL_HARD_LIMIT). Try a smaller expansion."
-        }
-        return ShellMode.ONE_CELL
-    }
-
     fun buildNetwork(
         structure: CrystalStructure,
         bondConfiguration: BondConfiguration,

@@ -1253,8 +1253,6 @@ private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRun
     var y by remember(tab.expansion) { mutableIntStateOf(tab.expansion.y) }
     var z by remember(tab.expansion) { mutableIntStateOf(tab.expansion.z) }
     var applying by remember { mutableStateOf(false) }
-    // Per v0.5.3b: pre-resolved so the degrade snackbar can fire from a non-@Composable onClick.
-    val degradeMessage = localized("原子数过多，已降级显示（边界多面体可能不完整）", "Many atoms; rendering in degraded mode (boundary polyhedra may be incomplete)")
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
         Text(localized("显示扩胞", "Display supercell"), fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
@@ -1277,15 +1275,13 @@ private fun ExpansionEditor(tab: DocumentTab, onMessage: (String) -> Unit, onRun
                         withContext(Dispatchers.Default) {
                             val base = SymmetryExpander.expand(structure).size
                             require(base.toLong() * expansion.multiplier <= BondDetector.MAX_RENDERED_ATOMS) { "100,000 atom limit exceeded" }
-                            BondDetector.estimatePeakAtomCount(base, expansion) > BondDetector.SHELL_DEGRADE_THRESHOLD
                         }
                     }
                     applying = false
-                    result.onSuccess { degrade ->
+                    result.onSuccess {
                         if (tab.structure != structure) return@onSuccess
                         tab.expansion = expansion
                         tab.structuralExpansion = false
-                        if (degrade) onMessage(degradeMessage)
                     }.onFailure { onMessage(it.message ?: "Invalid expansion") }
                 }
             },
