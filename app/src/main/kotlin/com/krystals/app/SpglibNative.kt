@@ -26,7 +26,7 @@ object SpglibNative {
     /** Conventionalization + refinement can increase the site count; capacity
      *  must be >= 8× the input count for the native in-place arrays.
      *
-     *  Per v0.8.39 bug fix: spglib's spg_refine_cell requires the arrays to hold
+     *  Per v0.7.0 bug fix: spglib's spg_refine_cell requires the arrays to hold
      *  4× its INPUT atom count (docs: "arrays are require to have 4 times larger
      *  memory space those of input cell"). The input to refine is the standardize
      *  output, which itself grows up to 4× (primitive → conventional centering,

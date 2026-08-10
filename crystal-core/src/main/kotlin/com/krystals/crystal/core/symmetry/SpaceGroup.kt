@@ -25,7 +25,7 @@ object SpaceGroupCatalog {
 
     fun resolve(symbol: String, number: Int? = null): SpaceGroup {
         // Per v0.6.5: strip COD hex/rhombohedral setting suffixes (:H, :R).
-        // Per v0.8.27: also strip IT-origin-choice suffixes (:1, :2, ...) and any
+        // Per v0.7.0: also strip IT-origin-choice suffixes (:1, :2, ...) and any
         // other trailing ':setting' (e.g. 'I41/amd:1' -> 'I41/amd'), so they match
         // the catalog instead of falling into the unknown-group branch.
         val noSuffix = stripSettingSuffix(symbol)

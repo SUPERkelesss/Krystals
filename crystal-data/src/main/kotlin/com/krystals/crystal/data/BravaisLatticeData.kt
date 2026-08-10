@@ -14,7 +14,12 @@ package com.krystals.crystal.data
  *
  * For conventional→primitive, P reduces the cell volume by the centering factor.
  * For primitive→conventional, P_inv expands it back.
+ *
+ * Per v0.7.0: DEPRECATED — cell conversions now get the space group and transformation from
+ * spglib (app-level SpglibStructure / SpglibNative); this table is kept only for the legacy
+ * fallback paths in CrystalEditor.
  */
+@Deprecated("Superseded by spglib-based conversions (SpglibStructure); kept for legacy fallback paths.")
 object BravaisLatticeData {
 
     enum class CenteringType(val symbol: Char) {

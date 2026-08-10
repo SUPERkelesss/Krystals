@@ -36,7 +36,7 @@ class CoreTest {
     }
 
     /**
-     * Per v0.8.27: CIF files spell space groups in many ways — standard H-M
+     * Per v0.7.0: CIF files spell space groups in many ways — standard H-M
      * ("I41/amd"), pymatgen underscore style ("I4_1/amd"), IT origin-choice
      * suffixes ("I41/amd:1") and spaced forms ("F m -3 m"). resolve() must
      * always emit the single canonical catalog symbol so editors/UI are

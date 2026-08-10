@@ -13,7 +13,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Per v0.8.40: regression — cell conversion must preserve atomic species AND
+ * Per v0.7.0: regression — cell conversion must preserve atomic species AND
  * produce unique site ids.
  *
  * Bug 1 (species collapse): "素晶胞-正当晶胞转化后,晶胞参数和原子位置正确,
@@ -25,7 +25,7 @@ import kotlin.test.assertTrue
  * got id "spg:P1", and LazyColumn threw `IllegalArgumentException: Key
  * "spg:P1" was already used` (2026-08-08, main-thread FATAL).
  *
- * v0.8.40 resolution: spglib contributes only the space-group number; the
+ * v0.7.0 resolution: spglib contributes only the space-group number; the
  * actual conversion runs through the legacy matrix path
  * (convertToConventional / convertToPrimitive), which keeps species and builds
  * ids from the source site id ("${siteId}:C$n" / "${siteId}:P$n" — unique
@@ -68,7 +68,7 @@ class SpglibConvertSpeciesTest {
 
     @Test
     fun spaceGroupCorrectionUsesSpglibNumber() {
-        // The EditorPanels v0.8.40 flow: correct the declared space group with the
+        // The EditorPanels v0.7.0 flow: correct the declared space group with the
         // spglib-detected number, then run the legacy matrix conversion. Here the
         // cell is declared P1 (mislabelled) and spglib says 225 Fm-3m; the corrected
         // structure must convert via the F-centering matrix and keep both species.
@@ -92,5 +92,113 @@ class SpglibConvertSpeciesTest {
         assertEquals(225, result.structure.spaceGroup.number)
         val ids = result.structure.sites.map { it.id }
         assertEquals(ids.size, ids.toSet().size, "site ids must be unique, got $ids")
+    }
+
+    /**
+     * Per v0.7.0: rebuildFromSpglib is the open-file import path for
+     * unrecognised space groups. It must (a) keep both species when spglib's
+     * Z values pass through, (b) produce globally unique site ids (the v0.7.0
+     * "spg:P1" collision crash), (c) drop symmetry-equivalent duplicates so the
+     * result is an asymmetric unit, and (d) apply the refined lattice.
+     */
+    @Test
+    fun rebuildFromSpglibKeepsSpeciesAndUniqueIds() {
+        val structure = naclPrimitive()
+        val cell = SpglibCellData(
+            latticeParams = doubleArrayOf(5.588126, 5.588126, 5.588126, 90.0, 90.0, 90.0),
+            positions = doubleArrayOf(
+                0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 0.0, 0.5, 0.5, 0.5, 0.0, 0.0,
+                0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 0.5,
+            ),
+            numbers = intArrayOf(11, 17, 11, 17, 11, 17, 11, 17),
+            spaceGroupNumber = 225,
+            rotations = IntArray(0),
+            translations = DoubleArray(0),
+            opCount = 0,
+        )
+        val rebuilt = CrystalEditor.rebuildFromSpglib(structure, cell)
+        val symbols = rebuilt.sites.map { it.species.symbol }.toSet()
+        assertTrue("Na" in symbols, "rebuilt must contain Na, got $symbols")
+        assertTrue("Cl" in symbols, "rebuilt must contain Cl, got $symbols")
+        assertEquals(2, symbols.size, "must contain exactly 2 species, got $symbols")
+        val ids = rebuilt.sites.map { it.id }
+        assertEquals(ids.size, ids.toSet().size, "site ids must be globally unique, got $ids")
+        assertTrue(ids.none { it.startsWith("spg:") }, "no legacy spg: ids, got $ids")
+        // Fm-3m ASU is 2 sites (Na 4a + Cl 4b).
+        assertEquals(2, rebuilt.sites.size, "ASU must be 2 sites, got ${rebuilt.sites.size}")
+        assertEquals(225, rebuilt.spaceGroup.number)
+        assertEquals(5.588126, rebuilt.lattice.a, 1e-4, "refined lattice a must be applied")
+        assertEquals(true, rebuilt.isConventional)
+    }
+
+    /**
+     * Per v0.7.0: CIFs with unrecognised space groups often carry placeholder
+     * species (COD guest-site "X" atoms, e.g. cod-1544612.cif). These have no
+     * periodic-table Z; refineUnknownSpaceGroup maps them to placeholder Z
+     * (>= 119) + symbolMap, and rebuildFromSpglib must bring them back.
+     */
+    @Test
+    fun rebuildFromSpglibKeepsPlaceholderSpecies() {
+        val structure = naclPrimitive()
+        val cell = SpglibCellData(
+            latticeParams = doubleArrayOf(5.588126, 5.588126, 5.588126, 90.0, 90.0, 90.0),
+            positions = doubleArrayOf(
+                0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 0.0, 0.5, 0.5, 0.5, 0.0, 0.0,
+                0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 0.5,
+            ),
+            numbers = intArrayOf(11, 17, 11, 17, 11, 17, 11, 17),
+            spaceGroupNumber = 225,
+            rotations = IntArray(0),
+            translations = DoubleArray(0),
+            opCount = 0,
+            symbolMap = mapOf(119 to "X"),
+        )
+        // Inject a placeholder site into the full cell (positions 9..11, Z=119).
+        val withX = cell.copy(
+            positions = cell.positions + doubleArrayOf(0.25, 0.25, 0.25),
+            numbers = cell.numbers + intArrayOf(119),
+        )
+        val rebuilt = CrystalEditor.rebuildFromSpglib(structure, withX)
+        assertTrue("X" in rebuilt.sites.map { it.species.symbol }, "placeholder X must survive, got ${rebuilt.sites.map { it.species.symbol }}")
+    }
+
+    @Test
+    fun rebuildFromSpglibPreservesPartialOccupancy() {
+        val cell = SpglibCellData(
+            latticeParams = doubleArrayOf(5.0, 5.0, 5.0, 90.0, 90.0, 90.0),
+            positions = doubleArrayOf(0.0, 0.0, 0.0),
+            numbers = intArrayOf(1),
+            spaceGroupNumber = 1,
+            rotations = IntArray(0),
+            translations = DoubleArray(0),
+            opCount = 0,
+            symbolMap = mapOf(1 to "Na"),
+            occupancyMap = mapOf(1 to 0.375),
+        )
+
+        val rebuilt = CrystalEditor.rebuildFromSpglib(naclPrimitive(), cell)
+
+        assertEquals(1, rebuilt.sites.size)
+        assertEquals("Na", rebuilt.sites.single().species.symbol)
+        assertEquals(0.375, rebuilt.sites.single().occupancy)
+    }
+
+    @Test
+    fun rebuildFromSpglibDoesNotMergeDifferentOccupancies() {
+        val cell = SpglibCellData(
+            latticeParams = doubleArrayOf(5.0, 5.0, 5.0, 90.0, 90.0, 90.0),
+            positions = doubleArrayOf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            numbers = intArrayOf(1, 2),
+            spaceGroupNumber = 1,
+            rotations = IntArray(0),
+            translations = DoubleArray(0),
+            opCount = 0,
+            symbolMap = mapOf(1 to "Na", 2 to "Na"),
+            occupancyMap = mapOf(1 to 0.25, 2 to 0.75),
+        )
+
+        val rebuilt = CrystalEditor.rebuildFromSpglib(naclPrimitive(), cell)
+
+        assertEquals(listOf(0.25, 0.75), rebuilt.sites.map { it.occupancy }.sorted())
     }
 }

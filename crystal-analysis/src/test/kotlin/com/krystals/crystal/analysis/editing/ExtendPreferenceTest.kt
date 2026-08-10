@@ -14,9 +14,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * v0.8.35: opening a file applies the user's default cross-cell bond-extension preference to
+ * v0.7.0: opening a file applies the user's default cross-cell bond-extension preference to
  * every generated rule. ALL → both directions extend; METALS_ONLY → only the metal side of a
- * metal-nonmetal bond extends (v0.8.43: metal-metal bonds never extend); NEVER → nothing.
+ * metal-nonmetal bond extends (v0.7.0: metal-metal bonds never extend); NEVER → nothing.
  */
 class ExtendPreferenceTest {
 
@@ -78,7 +78,7 @@ class ExtendPreferenceTest {
 
     @Test
     fun metalsOnlyMetalMetalBondExtendsNothing() {
-        // Cs-Cs rule (both metals, v0.8.43): metal-metal bonds are out of the METALS_ONLY
+        // Cs-Cs rule (both metals, v0.7.0): metal-metal bonds are out of the METALS_ONLY
         // scope — neither direction extends (previously both extended).
         val mmRules = listOf(BondRule("Cs", "Cs", 0.1, 4.0))
         val out = CrystalEditor.applyExtendPreference(structure, mmRules, CrystalEditor.ExtendBondDefaultMode.METALS_ONLY)

@@ -1,7 +1,9 @@
 package com.krystals.crystal.analysis.editing
 
 import com.krystals.crystal.analysis.bonding.BondConfiguration
+import com.krystals.crystal.analysis.bonding.BondGrid
 import com.krystals.crystal.analysis.bonding.BondRule
+import com.krystals.crystal.analysis.bonding.BondRuleMatching
 import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.bonding.BondValence
 import com.krystals.crystal.analysis.bonding.HbondChecking
@@ -13,6 +15,7 @@ import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
 import com.krystals.crystal.core.math.Mat3
 import com.krystals.crystal.core.math.Vec3
+import com.krystals.crystal.core.math.distance
 import com.krystals.crystal.core.model.CrystalStructure
 import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
@@ -243,7 +246,7 @@ object CrystalEditor {
             smartIonic.rules
         } else {
             if (!useBonding && smartIonic == null) timedOut = true
-            bondingRulesWithHbonds(structure, atoms, bondingRules(structure, epsilon), includeHbonds)
+            bondingRulesWithHbonds(structure, atoms, bondingRules(structure, epsilon, atoms), includeHbonds)
         }
         // Per v0.7.0: unified hbond gate — any H-bond rules from any source are dropped
         // when auto-compute-hbonds is off (belt-and-braces on top of the per-path gate).
@@ -268,7 +271,7 @@ object CrystalEditor {
             if (result.success) return result.rules
         }
         // Per v0.7.0: the bonding-radius fallback path also gets hbond detection.
-        val rules = bondingRules(structure, epsilon)
+        val rules = bondingRules(structure, epsilon, atoms)
         return bondingRulesWithHbonds(structure, atoms, rules, includeHbonds)
     }
 
@@ -365,21 +368,58 @@ object CrystalEditor {
         )
     }
 
-    private fun bondingRules(structure: CrystalStructure, epsilon: Double = 0.45): List<BondRule> {
+    /**
+     * Generates radius-based rules only for site pairs that have at least one periodic image
+     * within the rule window. Generating every unordered site pair is quadratic and creates
+     * hundreds of thousands of inert rules for large P1 framework cells.
+     */
+    private fun bondingRules(
+        structure: CrystalStructure,
+        epsilon: Double = 0.45,
+        atoms: List<com.krystals.crystal.core.model.AtomImage> = SymmetryExpander.expand(structure),
+    ): List<BondRule> = nearbyRules(structure, RadiusSource.BONDING, epsilon, atoms)
+
+    private fun nearbyRules(
+        structure: CrystalStructure,
+        source: RadiusSource,
+        epsilon: Double,
+        atoms: List<com.krystals.crystal.core.model.AtomImage>,
+    ): List<BondRule> {
         val siteSpecies = structure.sites.associate { it.id to it.species.symbol }
-        return structure.sites.flatMapIndexed { i, siteA ->
-            structure.sites.drop(i).mapNotNull { siteB ->
-                val (orderedA, orderedB) = orderedSites(siteA, siteB)
-                BondRule(
-                    orderedA.id,
-                    orderedB.id,
-                    0.1,
-                    PeriodicTable.radius(siteA.species.symbol, RadiusSource.BONDING) +
-                        PeriodicTable.radius(siteB.species.symbol, RadiusSource.BONDING) + epsilon,
-                    BondRuleSource.CUSTOM,
-                )
+        val sitesById = structure.sites.associateBy { it.id }
+        val grid = BondGrid(atoms, structure, BondRuleMatching.estimateCellSize(structure, source))
+        val rules = LinkedHashMap<String, BondRule>()
+
+        for (atom in atoms) {
+            val siteA = sitesById[atom.siteId] ?: continue
+            val positionA = atom.cartesianCoordinate.toVec3()
+            for (candidate in grid.nearby(positionA)) {
+                if (candidate.id < atom.id) continue
+                val siteB = sitesById[candidate.siteId] ?: continue
+                val maxDistance = PeriodicTable.radius(siteA.species.symbol, source) +
+                    PeriodicTable.radius(siteB.species.symbol, source) + epsilon
+                val positionB = candidate.cartesianCoordinate.toVec3()
+                val matches = structure.latticeOffsets.any { offset ->
+                    if (atom.id == candidate.id && offset.lengthSquared() < 1e-18) false
+                    else {
+                        val distance = distance(positionA, positionB + offset)
+                        distance >= 0.1 && distance <= maxDistance
+                    }
+                }
+                if (matches) {
+                    val (orderedA, orderedB) = orderedSites(siteA, siteB)
+                    val rule = BondRule(
+                        orderedA.id,
+                        orderedB.id,
+                        0.1,
+                        maxDistance,
+                        BondRuleSource.CUSTOM,
+                    )
+                    rules.putIfAbsent(rule.key, rule)
+                }
             }
-        }.sortedWith(bondRuleComparator(siteSpecies))
+        }
+        return rules.values.sortedWith(bondRuleComparator(siteSpecies))
     }
 
     fun rebuildBondRules(
@@ -397,9 +437,9 @@ object CrystalEditor {
                 val filtered = result.rules.filter { it.key !in bondConfiguration.disabledPairs }
                 return EditResult(structure, bondConfiguration.copy(rules = filtered))
             }
-            val fallback = bondingRules(structure, epsilon)
             // Per v0.7.0: append hbond rules on the bonding fallback path.
             val atoms = SymmetryExpander.expand(structure)
+            val fallback = bondingRules(structure, epsilon, atoms)
             val withHbonds = bondingRulesWithHbonds(structure, atoms, fallback, includeHbonds)
             val filteredFallback = withHbonds.filter { it.key !in bondConfiguration.disabledPairs }
             return EditResult(structure, bondConfiguration.copy(rules = filteredFallback), listOf(SMART_IONIC_UNAVAILABLE))
@@ -407,25 +447,12 @@ object CrystalEditor {
         // Non-SMART_IONIC sources OR all-non-metal structures: bonding rules directly.
         if (source == RadiusSource.SMART_IONIC) {
             val atoms = SymmetryExpander.expand(structure)
-            val rules = bondingRules(structure, epsilon)
+            val rules = bondingRules(structure, epsilon, atoms)
             val withHbonds = bondingRulesWithHbonds(structure, atoms, rules, includeHbonds)
             val filtered = withHbonds.filter { it.key !in bondConfiguration.disabledPairs }
             return EditResult(structure, bondConfiguration.copy(rules = filtered))
         }
-        val siteSpecies = structure.sites.associate { it.id to it.species.symbol }
-        val rules = structure.sites.flatMapIndexed { i, siteA ->
-            structure.sites.drop(i).mapNotNull { siteB ->
-                val (orderedA, orderedB) = orderedSites(siteA, siteB)
-                BondRule(
-                    orderedA.id,
-                    orderedB.id,
-                    0.1,
-                    PeriodicTable.radius(siteA.species.symbol, source) +
-                        PeriodicTable.radius(siteB.species.symbol, source) + epsilon,
-                    BondRuleSource.CUSTOM,
-                )
-            }
-        }.sortedWith(bondRuleComparator(siteSpecies))
+        val rules = nearbyRules(structure, source, epsilon, SymmetryExpander.expand(structure))
         val filteredRules = rules.filter { it.key !in bondConfiguration.disabledPairs }
         return EditResult(structure, bondConfiguration.copy(rules = filteredRules))
     }
