@@ -200,7 +200,10 @@ object MaterialsProject {
             debugLog(CIF_OPEN_TAG) { "OpenCIF 2/6: document parsed (${CifCodec.structuralBlockIndices(parsed.document).size} blocks)" }
             debugLog(CIF_OPEN_TAG) { "OpenCIF 3/6: structure parsed (${parsed.structure.sites.size} sites, sg ${parsed.structure.spaceGroup.symbol})" }
             val finalStructure = if (refined != null) {
-                parsed.structure
+                // The refined MP structure lists a complete conventional cell with identity
+                // symops in the intermediate CIF. Rebuild the ASU before restoring catalog
+                // operations so rendering and subsequent atom edits retain the real symmetry.
+                CrystalEditor.restoreSpaceGroupSymmetry(parsed.structure)
             } else if (CrystalEditor.isConventionalCell(parsed.structure)) {
                 parsed.structure.copy(
                     symmetryOperations = SpaceGroupCatalog.operations(parsed.structure.spaceGroup.symbol),

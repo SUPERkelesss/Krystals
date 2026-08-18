@@ -41,8 +41,8 @@ android {
         applicationId = "com.krystals.app"
         minSdk = 26
         targetSdk = 36
-versionCode = 8
-versionName = "0.7.0"
+versionCode = 9
+versionName = "0.7.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
         // Paid-module activation: salt + SHA-256 hashes of the 1000 valid 16-char codes.

@@ -12,26 +12,6 @@ import com.krystals.crystal.data.PeriodicTableData
 import kotlin.math.abs
 import kotlin.math.exp
 
-/** Atomic-number index lookup for [PeriodicTableData.symbols], built once instead of an O(118)
- *  `indexOf` scan per comparison. */
-private val symbolIndex: Map<String, Int> =
-    PeriodicTableData.symbols.withIndex().associate { it.value to it.index }
-
-/** Per v0.6.5: order a site pair so that metal comes first; if both same type, larger atomic number first. */
-private fun orderedSites(siteA: Site, siteB: Site): Pair<Site, Site> {
-    val aMetal = PeriodicTableData.isMetal(siteA.species.symbol)
-    val bMetal = PeriodicTableData.isMetal(siteB.species.symbol)
-    return when {
-        aMetal && !bMetal -> siteA to siteB
-        !aMetal && bMetal -> siteB to siteA
-        else -> {
-            val aNum = symbolIndex[siteA.species.symbol] ?: -1
-            val bNum = symbolIndex[siteB.species.symbol] ?: -1
-            if (aNum >= bNum) siteA to siteB else siteB to siteA
-        }
-    }
-}
-
 /**
  * Per v0.5.0: "smart ionic" (智能离子) bond-rule generation.
  *
@@ -118,13 +98,13 @@ object BondValence {
                     val covMax = PeriodicTable.covalentRadius(siteA.species.symbol) +
                         PeriodicTable.covalentRadius(siteB.species.symbol) + epsilon
                     if (!hasAnionAnionContact(siteA.id, siteB.id, atoms, structure, covMax)) return@mapNotNull null
-                    val (orderedA, orderedB) = orderedSites(siteA, siteB)
+                    val (orderedA, orderedB) = orderBondSites(siteA, siteB)
                     return@mapNotNull BondRule(orderedA.id, orderedB.id, 0.1, covMax, BondRuleSource.CUSTOM)
                 }
                 val rA = analysis.siteValence[siteA.id]?.radius ?: PeriodicTable.radius(siteA.species.symbol, RadiusSource.BONDING)
                 val rB = analysis.siteValence[siteB.id]?.radius ?: PeriodicTable.radius(siteB.species.symbol, RadiusSource.BONDING)
                 // Per v0.6.5: order siteA/siteB — metal first, or larger atomic number first if same type.
-                val (orderedA, orderedB) = orderedSites(siteA, siteB)
+                val (orderedA, orderedB) = orderBondSites(siteA, siteB)
                 BondRule(orderedA.id, orderedB.id, 0.1, rA + rB + epsilon, BondRuleSource.CUSTOM)
             }
         }

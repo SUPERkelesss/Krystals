@@ -1,16 +1,25 @@
 package com.krystals.app
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DarkMode
@@ -39,6 +48,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -197,6 +209,12 @@ fun SettingsPanel(
                     SegmentedSetting(null, localized("导出图片质量", "Export Quality"), qualityLabels, draft.exportQuality.ordinal) { index ->
                         draft = draft.copy(exportQuality = ExportQuality.entries[index])
                     }
+                    ExportBackgroundSetting(
+                        background = draft.exportBackground,
+                        customArgb = draft.exportCustomBackgroundArgb,
+                        onBackgroundChange = { draft = draft.copy(exportBackground = it) },
+                        onCustomColorChange = { draft = draft.copy(exportBackground = ExportBackground.CUSTOM, exportCustomBackgroundArgb = it) },
+                    )
                     Tog(draft.exportShowAxes, { draft = draft.copy(exportShowAxes = it) }, localized("导出时显示坐标轴", "Export Show Axes"))
                     Tog(draft.exportShowMeasurements, { draft = draft.copy(exportShowMeasurements = it) }, localized("导出时显示测量结果", "Export Show Measurements"))
                     Spacer(Modifier.height(4.dp))
@@ -243,6 +261,76 @@ fun SettingsPanel(
             confirmButton = { TextButton(onClick = { resetConfirmOpen = false; onRestoreDefaults?.invoke(); draft = SettingsValues.defaults() }) { Text(stringResource(R.string.confirm)) } },
             dismissButton = { TextButton(onClick = { resetConfirmOpen = false }) { Text(localized("取消", "Cancel")) } },
         )
+    }
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun ExportBackgroundSetting(
+    background: ExportBackground,
+    customArgb: Long,
+    onBackgroundChange: (ExportBackground) -> Unit,
+    onCustomColorChange: (Long) -> Unit,
+) {
+    var colorPickerOpen by remember { mutableStateOf(false) }
+    Text(localized("图片导出背景色", "Export Background"), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))
+    FlowRow(verticalArrangement = Arrangement.Center) {
+        ExportBackgroundOption(
+            label = localized("透明", "Transparent"),
+            selected = background == ExportBackground.TRANSPARENT,
+            onClick = { onBackgroundChange(ExportBackground.TRANSPARENT) },
+        ) {
+            Canvas(Modifier.fillMaxSize().clip(CircleShape)) {
+                val cell = size.minDimension / 4f
+                for (x in 0..3) for (y in 0..3) {
+                    drawRect(if ((x + y) % 2 == 0) Color.White else Color.LightGray, topLeft = androidx.compose.ui.geometry.Offset(x * cell, y * cell), size = androidx.compose.ui.geometry.Size(cell, cell))
+                }
+            }
+        }
+        ExportBackgroundOption(
+            label = localized("跟随显示", "Follow Display"),
+            selected = background == ExportBackground.FOLLOW_DISPLAY,
+            onClick = { onBackgroundChange(ExportBackground.FOLLOW_DISPLAY) },
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                drawArc(Color.Black, 90f, 180f, true, size = size)
+                drawArc(Color.White, 270f, 180f, true, size = size)
+            }
+        }
+        listOf(
+            ExportBackground.BLACK to (Color.Black to localized("黑色", "Black")),
+            ExportBackground.WHITE to (Color.White to localized("白色", "White")),
+        ).forEach { (option, colorAndLabel) ->
+            ExportBackgroundOption(colorAndLabel.second, background == option, { onBackgroundChange(option) }) {
+                Box(Modifier.fillMaxSize().background(colorAndLabel.first, CircleShape))
+            }
+        }
+        ExportBackgroundOption(
+            label = localized("自定义", "Custom"),
+            selected = background == ExportBackground.CUSTOM,
+            onClick = { colorPickerOpen = true },
+        ) {
+            Box(Modifier.fillMaxSize().background(Brush.sweepGradient(RAINBOW_SWEEP_COLORS), CircleShape))
+        }
+    }
+    if (colorPickerOpen) {
+        ColorPickerDialog(
+            initialArgb = customArgb,
+            onDismiss = { colorPickerOpen = false },
+            onColorSelected = { color -> onCustomColorChange(color); colorPickerOpen = false },
+        )
+    }
+}
+
+@Composable
+private fun ExportBackgroundOption(label: String, selected: Boolean, onClick: () -> Unit, content: @Composable () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+        Box(
+            Modifier.size(40.dp)
+                .then(if (selected) Modifier.border(2.dp, Color(com.krystals.app.ui.AppPalette.BRAND_DEEP), CircleShape) else Modifier)
+                .clickable(onClick = onClick),
+        ) { content() }
+        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
     }
 }
 

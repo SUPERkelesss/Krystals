@@ -1,46 +1,50 @@
-## Unreleased
+## 2026/8/17 v0.7.1 Minor fixes
 
-### molecule-extend
-
-- Complete molecule images in all directions: any molecule image intersecting the display region — including negative lattice translations — is rendered whole. Fixes missing molecules that dive into the cell from negative sides in low-symmetry (monoclinic/orthorhombic) cells; C60 corner/face images are unchanged.
-- Hydrogen-bond endpoint visibility in molecule-extend mode: an hbond renders only when both endpoint spheres are visible (no dangling segments, no missed in-cell hbonds). Hbonds never trigger molecule expansion.
-
-## 2026/8/7 v0.7.0 大型界面更新+逻辑优化
-
-本版本大幅新增了一系列功能。主要改动：
-
-### UI
-
-- 取消了 Canvas 显示功能，因为其过于落后开发且在手机上体验不佳。
-- 新增“偏好设置”：允许用户根据习惯调整软件的行为；
-- "从在线源导入"页面重构：现在，软件允许更大范围的筛查搜索结果，并且 mp 搜索得到了完善。（尽管还有一小部分因为数据库问题无法正常显示的晶体）
-- “预设晶体库”页面重构：现在，软件允许用户新增组，并更好的管理和检索保存在软件下的晶体学文件。
-- 一系列逻辑优化和修复。
-
-### 逻辑优化和新功能
-
-- **氢键**：在自动应用键规则下，软件将自动检测符合要求的氢键并默认显示。您可以在”显示“菜单调控具体的显示。
-- **同位原子**：现在，当原子处于同位原子或部分占据时，软件将改变该原子的显示外观。
-- **分子探测**：现在，软件会自动检测分子晶体，并按分子进行拓展显示，以获取更好的视觉体验。
-- 当前版本引入了 spglib 工具，提高了晶胞识别和转换的准确性。
-
-### 显示
-
-- 优化了 filament 的原子材质和渲染。
-- 将原子默认颜色从 VESTA 颜色调整为 CPK 颜色。
-- 延伸化学键时补齐已显示外部原子之间的二级成键，并可在“偏好设置 → 显示”中关闭。
-- 修复氢键角度筛选错误折回周期映像的问题；现在仅显示实际 D-H···A 映像满足角度阈值且具有共价供体的氢键。
-- 修复“导出图片”在部分 Android GPU 上因多采样离屏回读而崩溃的问题，高质量导出改用等比超采样。
+- Users can now adjust the background color when exporting images. The default is transparent.
+- Fixed an issue where crystals downloaded from Materials Project could not correctly apply space-group symmetry.
+- Fixed an issue where crystals were sometimes not displayed after returning to the app from the background.
+- Fixed an issue where editing a crystal while displaying it expanded by molecule left the viewer screen unrefreshed.
+- Fixed an issue where abnormal chemical bonds were displayed when adding or editing atoms.
+- Updated some code-level dependencies unrelated to user-facing functionality.
 
 ---
 
-## 2026/07/29 v0.6.5 小型修复/优化体验
+## 2026/8/7 v0.7.0 Major UI update and logic improvements
 
-- 修复选择“跟随主题”颜色的显示问题。
-- 修复关于 3*3 矩阵转化的一系列逻辑问题。添加素晶胞&正当晶胞转化。
-- 优化 COD 数据库搜索体验。现在，精确匹配的结果讲会优先显示
-- 优化 smart_ionic 规则。现在，阴离子之间合理的成键将被允许。
-- 添加“移除对称性”选择框。
-- 添加更多晶体实例，并添加搜索框。
-- 添加“备注“功能。现在，您可以为晶体文件添加 Krystals 备注。可用于添加笔记或评论。
-- 以及一系列外观方面修改。
+This release introduces a broad set of new features. Main changes:
+
+### UI
+
+- Removed Canvas rendering because it was outdated and provided a poor experience on phones.
+- Added Preferences, allowing users to adjust the app's behavior to suit their habits.
+- Reworked the Import from online sources page: the app can now filter search results more broadly, and MP searches have been improved. (A small number of crystals may still fail to display due to database issues.)
+- Reworked the Preset crystal library page: users can now add groups and better manage and search crystallographic files stored in the app.
+- A series of logic improvements and fixes.
+
+### Logic improvements and new features
+
+- **Hydrogen bonds**: With automatic bond rules enabled, the app automatically detects hydrogen bonds that meet the requirements and displays them by default. Their display can be adjusted in the Display menu.
+- **Isotopic atoms**: The app now changes an atom's appearance when it is an isotope or is partially occupied.
+- **Molecule detection**: The app now automatically detects molecular crystals and expands them by molecule for a better visual experience.
+- This release introduces the spglib tool, improving the accuracy of unit-cell identification and conversion.
+
+### Display
+
+- Improved Filament atom materials and rendering.
+- Changed the default atom colors from VESTA colors to CPK colors.
+- When extending chemical bonds, secondary bonds between already displayed external atoms are now added. This can be disabled under Preferences -> Display.
+- Fixed an issue where hydrogen-bond angle filtering incorrectly folded images back into periodic images. Only hydrogen bonds whose actual D-H...A image meets the angle threshold and has a covalent donor are now displayed.
+- Fixed crashes on some Android GPUs when exporting images due to multisample offscreen readback. High-quality exports now use proportional supersampling.
+
+---
+
+## 2026/07/29 v0.6.5 Minor fixes and experience improvements
+
+- Fixed the display issue when using the Follow system theme color option.
+- Fixed several logic issues related to 3x3 matrix transformations. Added primitive-cell and conventional-cell conversions.
+- Improved the COD database search experience. Exact matches are now shown first.
+- Improved the smart_ionic rules. Reasonable bonds between anions are now allowed.
+- Added a Remove symmetry option.
+- Added more crystal examples and a search box.
+- Added a Notes feature. Users can now add Krystals notes to crystal files for notes or comments.
+- Various visual improvements.

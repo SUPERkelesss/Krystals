@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -70,7 +71,10 @@ internal fun Modifier.filamentViewerGestures(
         val down = first.position
         var moved = false
         while (true) {
-            val event = awaitPointerEvent()
+            // SurfaceView is an Android child view and may consume move events during the
+            // Main pass. Read the gesture in Initial so orbit/pan/zoom still receive deltas
+            // regardless of which native child handled the touch sequence.
+            val event = awaitPointerEvent(PointerEventPass.Initial)
             val pressed = event.changes.filter { it.pressed }
             val movement = event.changes.sumOf {
                 (it.position - it.previousPosition).getDistance().toDouble()
@@ -128,7 +132,6 @@ fun FilamentViewport(
 
     LaunchedEffect(renderer, scene) { renderer.submit(scene) }
     LaunchedEffect(renderer, interactionState) { renderer.updateInteraction(interactionState) }
-    LaunchedEffect(renderer, bondValenceBySite) { renderer.updateOverlayData(bondValenceBySite) }
     // Per v0.7.0: pause frame scheduling while the app is in the background (the Surface may
     // survive lock screen / split view) and resume with one refresh frame on return.
     val lifecycleOwner = LocalLifecycleOwner.current

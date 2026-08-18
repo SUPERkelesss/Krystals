@@ -48,7 +48,7 @@ data class SceneBuildOptions(
     val defaultBondMaterial: Material = Material(0xFF9A90A0L),
     val defaultPolyhedronMaterial: Material = Material(0x809A90A0L, opacity = 0.5, doubleSided = true),
     val defaultAtomRadius: Double = 0.35,
-    val bondRadius: Double = 0.15,
+    val bondRadius: Double = 0.1,
     // Per v0.7.0: hydrogen-bond appearance (radius Å / opacity 0..1).
     val hbondRadius: Double = 0.05,
     val hbondOpacity: Double = 0.2,

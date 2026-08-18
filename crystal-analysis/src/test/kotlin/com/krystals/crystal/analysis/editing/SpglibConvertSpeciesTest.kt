@@ -1,6 +1,7 @@
 package com.krystals.crystal.analysis.editing
 
 import com.krystals.crystal.analysis.bonding.BondConfiguration
+import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.lattice.Lattice
 import com.krystals.crystal.core.model.CrystalStructure
@@ -32,6 +33,26 @@ import kotlin.test.assertTrue
  * because source ids are unique). These tests lock that behavior in.
  */
 class SpglibConvertSpeciesTest {
+
+    @Test
+    fun restoreSpaceGroupSymmetryReducesFullCellToAsymmetricUnit() {
+        val fullCell = CrystalStructure(
+            blockName = "p-minus-one-full",
+            lattice = Lattice(5.0, 5.0, 5.0, 90.0, 90.0, 90.0),
+            spaceGroup = SpaceGroupCatalog.resolve("P-1", 2),
+            symmetryOperations = listOf(SymmetryOperation.IDENTITY),
+            sites = listOf(
+                Site("C1", "C1", Species("C"), FractionalCoordinate(0.1, 0.2, 0.3)),
+                Site("C2", "C2", Species("C"), FractionalCoordinate(0.9, 0.8, 0.7)),
+            ),
+        )
+
+        val restored = CrystalEditor.restoreSpaceGroupSymmetry(fullCell)
+
+        assertEquals(1, restored.sites.size)
+        assertEquals(2, restored.symmetryOperations.size)
+        assertEquals(2, SymmetryExpander.expand(restored).size)
+    }
 
     /** MP-download fallback state: Fm-3m DECLARED but only the 2-site primitive
      *  cell present with identity ops (what buildCif emits when spglib fails).

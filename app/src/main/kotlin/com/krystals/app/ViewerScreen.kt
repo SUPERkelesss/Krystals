@@ -86,6 +86,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -132,6 +133,7 @@ import com.krystals.renderer.core.style.RenderPalette
 import com.krystals.renderer.core.style.ViewerAppearance
 import com.krystals.renderer.core.scene.RenderScene
 import com.krystals.renderer.filament.FilamentRenderer
+import com.krystals.renderer.filament.ExportBitmapBackground
 import com.krystals.renderer.filament.exportRenderSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -310,6 +312,13 @@ internal fun ViewerScreen(
     var sceneResult by remember(tab.id) {
         mutableStateOf<Result<RenderScene>?>(null)
     }
+    // Per v0.5.3b (restored 2026-08-11): the last successfully built scene stays mounted while
+    // a new one builds, so the Filament Surface and Engine are not torn down for every scene
+    // rebuild (appearance change / tab switch). The previous when(sceneResult) structure disposed
+    // the whole RendererHost whenever the result went null, closing the engine; after a
+    // background/return the recreated SurfaceView could miss its surfaceCreated callback,
+    // leaving the viewer blank until the first interaction forced a re-render.
+    var lastScene by remember { mutableStateOf<RenderScene?>(null) }
     // Per v0.6.3: scene build timeout/failure dialog with undo.
     var sceneBuildError by remember(tab.id) { mutableStateOf<String?>(null) }
     val sceneTimeoutMessage = localized(
@@ -355,7 +364,9 @@ internal fun ViewerScreen(
                     // Calculate molecule-derived data locally. Compose-observed tab state is
                     // committed only after this background build returns to the main thread.
                     val isMolecularCrystal = if (analyzeMolecules) analysis.isMolecularCrystal() else previousIsMolecularCrystal
-                    val molecules = if (analyzeMolecules && isMolecularCrystal) analysis.toMolecules() else previousMolecules
+                    val molecules = if (analyzeMolecules) {
+                        if (isMolecularCrystal) analysis.toMolecules() else emptyList()
+                    } else previousMolecules
                     val moleculeSiteIds = if (analyzeMolecules && isMolecularCrystal) {
                         val cellAtomSiteByAtomId = analysis.atoms
                             .filter { !it.isShell && it.cellOffset == Int3(0, 0, 0) }
@@ -364,9 +375,11 @@ internal fun ViewerScreen(
                             molecule.atoms.mapNotNull { cellAtomSiteByAtomId[it.id] }.toSet()
                         }
                     } else if (analyzeMolecules) emptyList() else previousMoleculeSiteIds
-                    val moleculeExtend = if (applyMoleculeDefault) {
-                        isMolecularCrystal && defaultMoleculeExtend
-                    } else previousMoleculeExtend
+                    val moleculeExtend = when {
+                        analyzeMolecules && !isMolecularCrystal -> false
+                        applyMoleculeDefault -> isMolecularCrystal && defaultMoleculeExtend
+                        else -> previousMoleculeExtend
+                    }
                     val scene = CrystalRenderSceneFactory.build(
                         analysis = analysis,
                         appearance = renderedAppearance,
@@ -394,11 +407,12 @@ internal fun ViewerScreen(
                     tab.moleculeSiteIds = moleculeState.moleculeSiteIds
                     tab.moleculeAnalysisPending = false
                 }
-                if (applyMoleculeDefault) {
+                if (analyzeMolecules || applyMoleculeDefault) {
                     tab.moleculeExtend = moleculeState.moleculeExtend
                     tab.moleculeExtendDefaultPending = false
                 }
                 debugLog(CIF_OPEN_TAG) { "Scene build done (${scene.atoms.size} atoms, ${scene.bonds.size} bonds, ${scene.meshes.size} meshes) [scene +${System.currentTimeMillis() - sceneStart}ms]" }
+                lastScene = scene
                 Result.success(scene)
             }
             else {
@@ -448,6 +462,18 @@ internal fun ViewerScreen(
     }
     val bondValenceBySite = bondValenceBySiteState.value
 
+    // Per v0.5.3b (restored 2026-08-11): the Filament engine is created once per ViewerScreen and
+    // stays alive across scene rebuilds and tab switches. It was previously recreated inside the
+    // scene-success branch, tearing the engine + SurfaceView down on every rebuild — the source
+    // of the blank-viewer-until-drag bug after background/return + tab close.
+    val context = LocalContext.current
+    val onFilamentFailure: (Throwable) -> Unit = { onMessage(filamentErrorMessage) }
+    val filamentResult = remember(tab.id) { runCatching { FilamentRenderer(context) } }
+    LaunchedEffect(filamentResult) {
+        filamentResult.exceptionOrNull()?.let(onFilamentFailure)
+    }
+    val renderer = remember(tab.id, filamentResult) { filamentResult.getOrNull() }
+
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text("Krystals", fontWeight = FontWeight.Bold, maxLines = 1) },
@@ -483,6 +509,13 @@ internal fun ViewerScreen(
                                     // it single-sampled: multisampled readPixels crashes on some
                                     // Android GPU drivers, while supersampling already smooths edges.
                                     val useHigh = settingsValues.exportQuality == ExportQuality.HIGH
+                                    val exportBackground = when (settingsValues.exportBackground) {
+                                        ExportBackground.TRANSPARENT -> ExportBitmapBackground.Transparent
+                                        ExportBackground.FOLLOW_DISPLAY -> ExportBitmapBackground.FollowScene
+                                        ExportBackground.BLACK -> ExportBitmapBackground.Solid(0xFF000000L)
+                                        ExportBackground.WHITE -> ExportBitmapBackground.Solid(0xFFFFFFFFL)
+                                        ExportBackground.CUSTOM -> ExportBitmapBackground.Solid(settingsValues.exportCustomBackgroundArgb)
+                                    }
                                     val bitmap = if (renderer != null) {
                                         runCatching {
                                             renderer.submit(scene)
@@ -492,9 +525,9 @@ internal fun ViewerScreen(
                                                     tab.interactionState.session.viewportHeight,
                                                     high = true,
                                                 )
-                                                renderer.renderToBitmap(w, h, msaaSamples = 1)
+                                                renderer.renderToBitmap(w, h, msaaSamples = 1, background = exportBackground)
                                             } else {
-                                                renderer.renderToBitmap()
+                                                renderer.renderToBitmap(background = exportBackground)
                                             }
                                         }.getOrNull()
                                     } else null
@@ -546,140 +579,141 @@ internal fun ViewerScreen(
         DocumentTabs(viewModel, onClose, ::selectTab)
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
             val current = sceneResult
-            when {
-                current == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+            val scene = current?.getOrNull() ?: lastScene
+            if (renderer == null) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(filamentErrorMessage, color = MaterialTheme.colorScheme.error)
                 }
-                current.isSuccess -> {
-                    val scene = current.getOrThrow()
-                    val noBondMessage = localized("所选原子间没有成键", "No bond between the selected atoms")
-                    val handleAtomTap: (com.krystals.crystal.core.model.AtomImage) -> Boolean = { atom ->
-                        when {
-                            // Per v0.7.1: bond draw mode — first tap selects atom A (with highlight),
-                            // second tap calculates distance and opens BondRuleDialog with preset values.
-                            tab.bondDrawMode == BondDrawMode.DRAWING -> {
-                                if (tab.bondDrawFirstSiteId == null) {
-                                    tab.bondDrawFirstSiteId = atom.siteId
-                                    tab.bondDrawFirstCartesian = atom.cartesianCoordinate.toVec3()
-                                    // Per v0.7.1: highlight the first selected atom.
-                                    tab.selectedAtomIds = listOf(atom.id)
-                                } else {
-                                    val firstCartesian = tab.bondDrawFirstCartesian!!
-                                    val dist = (atom.cartesianCoordinate.toVec3() - firstCartesian).length()
-                                    // Per v0.7.0: capture the target type before the flag resets,
-                                    // then auto-navigate to the matching tab.
-                                    val drawTargetIsHbond = tab.bondDrawTargetIsHbond
-                                    tab.pendingBondDrawRule = BondRule(
-                                        tab.bondDrawFirstSiteId!!, atom.siteId,
-                                        0.1, dist + 0.1,
-                                        BondRuleSource.CUSTOM,
-                                        isHBond = drawTargetIsHbond,
-                                    )
-                                    tab.bondDrawMode = BondDrawMode.NONE
-                                    tab.bondDrawTargetIsHbond = false
-                                    tab.bondDrawFirstSiteId = null
-                                    tab.bondDrawFirstCartesian = null
-                                    tab.selectedAtomIds = emptyList()
-                                    persistentMessage = null
-                                    // Per v0.7.1: auto-navigate to the bond tab matching the draw target.
-                                    tab.pendingEditorTab = if (drawTargetIsHbond) "hbonds" else "bonds"
-                                    tab.editorOpen = true
-                                }
-                                true
-                            }
-                            // Per v0.7.1: bond delete mode — first tap selects atom A (with highlight),
-                            // second tap checks if a bond rule exists between the two atoms.
-                            tab.bondDrawMode == BondDrawMode.DELETING -> {
-                                if (tab.bondDrawFirstSiteId == null) {
-                                    tab.bondDrawFirstSiteId = atom.siteId
-                                    // Per v0.7.1: highlight the first selected atom.
-                                    tab.selectedAtomIds = listOf(atom.id)
-                                } else {
-                                    val siteA = tab.bondDrawFirstSiteId!!
-                                    val siteB = atom.siteId
-                                    // Per v0.7.0: capture the target type before the flag resets.
-                                    val deleteTargetIsHbond = tab.bondDrawTargetIsHbond
-                                    // Per v0.7.0: hbond rules carry the "\u0000hbond" key suffix -
-                                    // match by the draw target type so deleting an H-bond never
-                                    // hits a normal rule for the same site pair (or vice versa).
-                                    val key = listOf(siteA, siteB).sorted().joinToString("\u0000") +
-                                        if (deleteTargetIsHbond) "\u0000hbond" else ""
-                                    val matchingRule = tab.bondConfiguration.rules.firstOrNull { it.key == key }
-                                    if (matchingRule != null) {
-                                        tab.recordHistory()
-                                        val result = CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.RemoveBondRule(key))
-                                        tab.structure = result.structure
-                                        tab.bondConfiguration = result.bondConfiguration
-                                        tab.dirty = true
-                                        tab.moleculeAnalysisPending = true
-                                    } else {
-                                        onMessage(noBondMessage)
-                                    }
-                                    tab.bondDrawMode = BondDrawMode.NONE
-                                    tab.bondDrawTargetIsHbond = false
-                                    tab.bondDrawFirstSiteId = null
-                                    tab.bondDrawFirstCartesian = null
-                                    tab.selectedAtomIds = emptyList()
-                                    persistentMessage = null
-                                    // Per v0.7.1: auto-navigate to the bond tab matching the draw target.
-                                    tab.pendingEditorTab = if (deleteTargetIsHbond) "hbonds" else "bonds"
-                                    tab.editorOpen = true
-                                }
-                                true
-                            }
-                            tab.atomEditMode == AtomEditMode.DELETE_NEXT -> {
-                                tab.atomEditMode = AtomEditMode.NONE
+            } else if (scene == null) {
+                if (current != null && current.isFailure) {
+                    val error = current.exceptionOrNull()
+                    val displayMessage = if (error is CancellationException) "Unable to build scene"
+                        else error?.message ?: "Unable to build scene"
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(displayMessage, color = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+            } else {
+                val noBondMessage = localized("所选原子间没有成键", "No bond between the selected atoms")
+                val handleAtomTap: (com.krystals.crystal.core.model.AtomImage) -> Boolean = { atom ->
+                    when {
+                        // Per v0.7.1: bond draw mode — first tap selects atom A (with highlight),
+                        // second tap calculates distance and opens BondRuleDialog with preset values.
+                        tab.bondDrawMode == BondDrawMode.DRAWING -> {
+                            if (tab.bondDrawFirstSiteId == null) {
+                                tab.bondDrawFirstSiteId = atom.siteId
+                                tab.bondDrawFirstCartesian = atom.cartesianCoordinate.toVec3()
+                                // Per v0.7.1: highlight the first selected atom.
+                                tab.selectedAtomIds = listOf(atom.id)
+                            } else {
+                                val firstCartesian = tab.bondDrawFirstCartesian!!
+                                val dist = (atom.cartesianCoordinate.toVec3() - firstCartesian).length()
+                                // Per v0.7.0: capture the target type before the flag resets,
+                                // then auto-navigate to the matching tab.
+                                val drawTargetIsHbond = tab.bondDrawTargetIsHbond
+                                tab.pendingBondDrawRule = BondRule(
+                                    tab.bondDrawFirstSiteId!!, atom.siteId,
+                                    0.1, dist + 0.1,
+                                    BondRuleSource.CUSTOM,
+                                    isHBond = drawTargetIsHbond,
+                                )
+                                tab.bondDrawMode = BondDrawMode.NONE
+                                tab.bondDrawTargetIsHbond = false
+                                tab.bondDrawFirstSiteId = null
+                                tab.bondDrawFirstCartesian = null
+                                tab.selectedAtomIds = emptyList()
                                 persistentMessage = null
-                                val deleted = runCatching {
-                                    CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.DeleteAtom(atom.siteId))
-                                }.getOrNull()
-                                // Per v0.7.1: deleting an atom no longer regenerates all bond rules.
-                                if (deleted != null) {
+                                // Per v0.7.1: auto-navigate to the bond tab matching the draw target.
+                                tab.pendingEditorTab = if (drawTargetIsHbond) "hbonds" else "bonds"
+                                tab.editorOpen = true
+                            }
+                            true
+                        }
+                        // Per v0.7.1: bond delete mode — first tap selects atom A (with highlight),
+                        // second tap checks if a bond rule exists between the two atoms.
+                        tab.bondDrawMode == BondDrawMode.DELETING -> {
+                            if (tab.bondDrawFirstSiteId == null) {
+                                tab.bondDrawFirstSiteId = atom.siteId
+                                // Per v0.7.1: highlight the first selected atom.
+                                tab.selectedAtomIds = listOf(atom.id)
+                            } else {
+                                val siteA = tab.bondDrawFirstSiteId!!
+                                val siteB = atom.siteId
+                                // Per v0.7.0: capture the target type before the flag resets.
+                                val deleteTargetIsHbond = tab.bondDrawTargetIsHbond
+                                // Per v0.7.0: hbond rules carry the "\u0000hbond" key suffix -
+                                // match by the draw target type so deleting an H-bond never
+                                // hits a normal rule for the same site pair (or vice versa).
+                                val key = listOf(siteA, siteB).sorted().joinToString("\u0000") +
+                                    if (deleteTargetIsHbond) "\u0000hbond" else ""
+                                val matchingRule = tab.bondConfiguration.rules.firstOrNull { it.key == key }
+                                if (matchingRule != null) {
                                     tab.recordHistory()
-                                    tab.structure = deleted.structure
-                                    tab.bondConfiguration = deleted.bondConfiguration
+                                    val result = CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.RemoveBondRule(key))
+                                    tab.structure = result.structure
+                                    tab.bondConfiguration = result.bondConfiguration
                                     tab.dirty = true
-                                    tab.selectedAtomIds = emptyList()
-                                    // Per v0.7.1: return to the atom editor page after deletion.
-                                    tab.pendingEditorTab = "atoms"
-                                    tab.editorOpen = true
+                                    tab.moleculeAnalysisPending = true
+                                } else {
+                                    onMessage(noBondMessage)
                                 }
-                                true
+                                tab.bondDrawMode = BondDrawMode.NONE
+                                tab.bondDrawTargetIsHbond = false
+                                tab.bondDrawFirstSiteId = null
+                                tab.bondDrawFirstCartesian = null
+                                tab.selectedAtomIds = emptyList()
+                                persistentMessage = null
+                                // Per v0.7.1: auto-navigate to the bond tab matching the draw target.
+                                tab.pendingEditorTab = if (deleteTargetIsHbond) "hbonds" else "bonds"
+                                tab.editorOpen = true
                             }
-                            tab.atomEditMode == AtomEditMode.MODIFY_NEXT -> {
-                                tab.editingSiteId = atom.siteId; tab.atomEditMode = AtomEditMode.NONE; persistentMessage = null; tab.editorOpen = true
-                                true
+                            true
+                        }
+                        tab.atomEditMode == AtomEditMode.DELETE_NEXT -> {
+                            tab.atomEditMode = AtomEditMode.NONE
+                            persistentMessage = null
+                            val deleted = runCatching {
+                                CrystalEditor.apply(tab.structure, tab.bondConfiguration, EditCommand.DeleteAtom(atom.siteId))
+                            }.getOrNull()
+                            // Per v0.7.1: deleting an atom no longer regenerates all bond rules.
+                            if (deleted != null) {
+                                tab.recordHistory()
+                                tab.structure = deleted.structure
+                                tab.bondConfiguration = deleted.bondConfiguration
+                                tab.dirty = true
+                                tab.selectedAtomIds = emptyList()
+                                // Per v0.7.1: return to the atom editor page after deletion.
+                                tab.pendingEditorTab = "atoms"
+                                tab.editorOpen = true
                             }
+                            true
+                        }
+                        tab.atomEditMode == AtomEditMode.MODIFY_NEXT -> {
+                            tab.editingSiteId = atom.siteId; tab.atomEditMode = AtomEditMode.NONE; persistentMessage = null; tab.editorOpen = true
+                            true
+                        }
                             else -> false
-                        }
-                    }
-                    val context = LocalContext.current
-                    val onFilamentFailure: (Throwable) -> Unit = { onMessage(filamentErrorMessage) }
-                    val filamentResult = remember { runCatching { FilamentRenderer(context) } }
-                    LaunchedEffect(filamentResult) {
-                        filamentResult.exceptionOrNull()?.let(onFilamentFailure)
-                    }
-                    val renderer = remember(filamentResult) { filamentResult.getOrNull() }
-                    if (renderer == null) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(filamentErrorMessage, color = MaterialTheme.colorScheme.error)
-                        }
-                    } else {
-                        RendererHost(
-                            renderer = renderer,
-                            scene = scene,
-                            state = tab.interactionState,
-                            onCommand = ::dispatchViewerCommand,
-                            onAtomTap = handleAtomTap,
-                            bondValenceBySite = bondValenceBySite,
-                            onFilamentRendererChanged = { activeFilamentRenderer = it },
-                            onFilamentFailure = onFilamentFailure,
-                        )
                     }
                 }
-                else -> {
-                    // Per v0.6.2: defensively suppress CancellationException messages (should
-                    // never reach here after the fix above, but guard against future regressions).
+                key(tab.id) {
+                    RendererHost(
+                        renderer = renderer,
+                        scene = scene,
+                        state = tab.interactionState,
+                        onCommand = ::dispatchViewerCommand,
+                        onAtomTap = handleAtomTap,
+                        bondValenceBySite = bondValenceBySite,
+                        onFilamentRendererChanged = { activeFilamentRenderer = it },
+                        onFilamentFailure = onFilamentFailure,
+                    )
+                }
+                if (current != null && current.isFailure) {
+                    // Per v0.6.3: scene build failed — show the error over the last good scene
+                    // (revert to previous scene) instead of unmounting the viewer.
                     val error = current.exceptionOrNull()
                     val displayMessage = if (error is CancellationException) "Unable to build scene"
                         else error?.message ?: "Unable to build scene"

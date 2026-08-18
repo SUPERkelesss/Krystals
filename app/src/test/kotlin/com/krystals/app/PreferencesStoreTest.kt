@@ -86,6 +86,8 @@ class PreferencesStoreTest {
         assertEquals(0, d.codFixedIndex)
         assertEquals("", d.codCustomUrl)
         assertEquals(ExportQuality.HIGH, d.exportQuality)
+        assertEquals(ExportBackground.TRANSPARENT, d.exportBackground)
+        assertEquals(0xFF101014L, d.exportCustomBackgroundArgb)
         assertTrue(d.exportShowAxes)
         assertTrue(d.exportShowMeasurements)
         assertTrue(d.showSecondaryExtendBonds)
@@ -114,6 +116,8 @@ class PreferencesStoreTest {
             codFixedIndex = 2,
             codCustomUrl = "https://example.com",
             exportQuality = ExportQuality.LOW,
+            exportBackground = ExportBackground.CUSTOM,
+            exportCustomBackgroundArgb = 0xFF123456L,
             exportShowAxes = true,
             exportShowMeasurements = true,
             showSecondaryExtendBonds = false,

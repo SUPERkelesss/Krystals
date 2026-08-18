@@ -116,7 +116,7 @@ data class ViewerAppearance(
     val atomOpacity: Float = 1.0f,
     val frameMode: FrameMode = FrameMode.SINGLE_CELL,
     val lineStyle: LineStyle = LineStyle.SOLID,
-    val bondRadius: Float = 0.075f,
+    val bondRadius: Float = 0.1f,
     val bondOpacity: Float = 1.0f,
     val bondColorMode: BondColorMode = BondColorMode.BICOLOR,
     val uniformBondArgb: Long = 0xFF9A90A0,

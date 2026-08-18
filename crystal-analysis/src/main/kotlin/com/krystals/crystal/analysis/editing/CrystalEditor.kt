@@ -7,6 +7,8 @@ import com.krystals.crystal.analysis.bonding.BondRuleMatching
 import com.krystals.crystal.analysis.bonding.BondRuleSource
 import com.krystals.crystal.analysis.bonding.BondValence
 import com.krystals.crystal.analysis.bonding.HbondChecking
+import com.krystals.crystal.analysis.bonding.bondSymbolIndex
+import com.krystals.crystal.analysis.bonding.orderBondSites
 import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.analysis.model.Expansion
 import com.krystals.crystal.analysis.model.PeriodicTable
@@ -25,33 +27,13 @@ import com.krystals.crystal.data.BravaisLatticeData
 import com.krystals.crystal.data.PeriodicTableData
 import kotlin.math.abs
 
-/** Atomic-number index lookup for [PeriodicTableData.symbols], built once instead of an O(118)
- *  `indexOf` scan per comparison. */
-private val symbolIndex: Map<String, Int> =
-    PeriodicTableData.symbols.withIndex().associate { it.value to it.index }
-
 /** Shared rule-sort comparator: metal sites first, then larger atomic number first within a type. */
 private fun bondRuleComparator(siteSpecies: Map<String, String>): Comparator<BondRule> = compareBy(
     { !PeriodicTableData.isMetal(siteSpecies[it.siteA] ?: "") },
     { !PeriodicTableData.isMetal(siteSpecies[it.siteB] ?: "") },
-    { -(symbolIndex[siteSpecies[it.siteA] ?: ""] ?: -1) },
-    { -(symbolIndex[siteSpecies[it.siteB] ?: ""] ?: -1) },
+    { -(bondSymbolIndex[siteSpecies[it.siteA] ?: ""] ?: -1) },
+    { -(bondSymbolIndex[siteSpecies[it.siteB] ?: ""] ?: -1) },
 )
-
-/** Per v0.6.5: order a site pair so that metal comes first; if both same type, larger atomic number first. */
-private fun orderedSites(siteA: Site, siteB: Site): Pair<Site, Site> {
-    val aMetal = PeriodicTableData.isMetal(siteA.species.symbol)
-    val bMetal = PeriodicTableData.isMetal(siteB.species.symbol)
-    return when {
-        aMetal && !bMetal -> siteA to siteB
-        !aMetal && bMetal -> siteB to siteA
-        else -> {
-            val aNum = symbolIndex[siteA.species.symbol] ?: -1
-            val bNum = symbolIndex[siteB.species.symbol] ?: -1
-            if (aNum >= bNum) siteA to siteB else siteB to siteA
-        }
-    }
-}
 
 sealed interface EditCommand {
     data class SetLattice(val lattice: Lattice) : EditCommand
@@ -119,8 +101,13 @@ object CrystalEditor {
                 fractionalCoordinate = command.fractionalCoordinate.wrapped(),
                 occupancy = command.occupancy.coerceIn(0.0, 1.0),
             )
-            // Per v0.7.1: adding atoms does NOT regenerate bond rules — existing rules are preserved.
-            EditResult(structure.copy(sites = structure.sites + site), bondConfiguration, occupancyWarnings(command.occupancy))
+            // Adding an atom does not regenerate rules. Disable the detector's covalent fallback
+            // so a new atom cannot create an unconfigured bond in the rendered network.
+            EditResult(
+                structure.copy(sites = structure.sites + site),
+                bondConfiguration.copy(allowAutoFallback = false),
+                occupancyWarnings(command.occupancy),
+            )
         }
         is EditCommand.UpdateAtom -> {
             require(structure.sites.any { it.id == command.siteId }) { "Atom site not found" }
@@ -132,7 +119,11 @@ object CrystalEditor {
                     occupancy = command.occupancy.coerceIn(0.0, 1.0),
                 )
             }
-            EditResult(structure.copy(sites = sites), bondConfiguration, occupancyWarnings(command.occupancy))
+            EditResult(
+                structure.copy(sites = sites),
+                bondConfiguration.copy(allowAutoFallback = false),
+                occupancyWarnings(command.occupancy),
+            )
         }
         is EditCommand.DeleteAtom -> {
             // Per v0.7.1: deleting an atom removes rules that reference it, but does NOT
@@ -140,7 +131,7 @@ object CrystalEditor {
             val remainingRules = bondConfiguration.rules.filterNot { it.siteA == command.siteId || it.siteB == command.siteId }
             EditResult(
                 structure.copy(sites = structure.sites.filterNot { it.id == command.siteId }),
-                bondConfiguration.copy(rules = remainingRules),
+                bondConfiguration.copy(rules = remainingRules, allowAutoFallback = false),
             )
         }
         is EditCommand.SetBondRule -> EditResult(
@@ -407,7 +398,7 @@ object CrystalEditor {
                     }
                 }
                 if (matches) {
-                    val (orderedA, orderedB) = orderedSites(siteA, siteB)
+                    val (orderedA, orderedB) = orderBondSites(siteA, siteB)
                     val rule = BondRule(
                         orderedA.id,
                         orderedB.id,
@@ -778,6 +769,29 @@ return EditResult(newStructure, BondConfiguration(), expansion = null)
             ),
             spaceGroup = sg,
             symmetryOperations = ops,
+            sites = asu,
+            isConventional = true,
+        )
+    }
+
+    /**
+     * Per v0.7.1: restore the catalog symmetry after an importer supplies every atom in a
+     * conventional cell (notably Materials Project's spglib-refined output). Attaching the
+     * operations directly would expand the full cell a second time, so first retain one
+     * representative per symmetry orbit as the asymmetric unit.
+     */
+    fun restoreSpaceGroupSymmetry(structure: CrystalStructure): CrystalStructure {
+        val sg = structure.spaceGroup.number
+            ?.let { SpaceGroupCatalog.all.getOrNull(it - 1) }
+            ?: SpaceGroupCatalog.find(structure.spaceGroup.symbol)
+            ?: structure.spaceGroup
+        val operations = SpaceGroupCatalog.operations(sg.symbol)
+        val asu = findAsymmetricUnit(structure.sites, operations).map { site ->
+            site.copy(fractionalCoordinate = symmetrizePosition(site.fractionalCoordinate, operations))
+        }
+        return structure.copy(
+            spaceGroup = sg,
+            symmetryOperations = operations,
             sites = asu,
             isConventional = true,
         )

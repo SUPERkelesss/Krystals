@@ -350,7 +350,11 @@ internal fun AboutScreen(onBack: () -> Unit, onCheckUpdates: () -> Unit = {}, is
             }
             Spacer(Modifier.height(24.dp))
             Text(localized("鸣谢名单", "Acknowledgements"), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.padding(bottom = 4.dp))
-            Text(localized("我自己。", "Myself."), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+            Text("阿焱焱焱.cif" ,style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+            Text("罗马" ,style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+            Text("拉格朗月" ,style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+            Text("1,3丁二烯" ,style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+            Text(localized("参与软件测试人员", "participants of the beta version"), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(32.dp))
             Text(localized("© 2026 made with ♥ by kelesss", "© 2026 made with ♥ by kelesss"), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))

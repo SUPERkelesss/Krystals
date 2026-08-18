@@ -141,7 +141,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     private var lastCameraUp = Vec3(0.0, 1.0, 0.0)  // Per v0.7.0: camera local +Y in world
     private var sceneBounds: SceneBounds? = null
     private var allSceneBounds: SceneBounds? = null
-    private var bondValenceBySite: Map<String, Double> = emptyMap()
     private var sceneSubmissions = 0L
     private var interactionUpdates = 0L
     private var framesRendered = 0L
@@ -251,11 +250,6 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         if (documentChanged || cameraChanged || viewportChanged) requestFrames(if (documentChanged) 2 else 1)
     }
 
-    fun updateOverlayData(bondValenceBySite: Map<String, Double>) {
-        if (this.bondValenceBySite == bondValenceBySite) return
-        this.bondValenceBySite = bondValenceBySite
-    }
-
     internal fun performanceSnapshot() = RendererPerformanceSnapshot(
         sceneSubmissions = sceneSubmissions,
         interactionUpdates = interactionUpdates,
@@ -269,7 +263,12 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
         return pickingRenderer.pick(x, y)
     }
 
-    override suspend fun renderToBitmap(width: Int, height: Int, msaaSamples: Int): Bitmap? {
+    override suspend fun renderToBitmap(
+        width: Int,
+        height: Int,
+        msaaSamples: Int,
+        background: ExportBitmapBackground,
+    ): Bitmap? {
         // Per v0.6.3: when width/height are 0, use the live viewport dimensions so the
         // exported image matches the on-screen size at the same resolution.
         val actualWidth = if (width <= 0) interaction.session.viewportWidth.coerceIn(512, 4096) else width
@@ -301,6 +300,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                 fun restoreView() {
                     view.renderTarget = previousTarget
                     view.viewport = previousViewport
+                    submittedScene?.let(::updateClearColor)
                     updateCamera(previousViewport.width, previousViewport.height)
                 }
                 fun destroyExportSwapChain() {
@@ -326,6 +326,7 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
                     )
                     view.renderTarget = null
                     view.viewport = Viewport(0, 0, actualWidth, actualHeight)
+                    updateExportClearColor(background)
                     updateCamera(actualWidth, actualHeight)
                     val pixels = ByteBuffer.allocateDirect(actualWidth * actualHeight * 4).order(ByteOrder.nativeOrder())
                     // Per v0.6.3: move pixel processing + overlay compositing to a background thread
@@ -536,9 +537,21 @@ class FilamentRenderer(context: Context) : FilamentSceneRenderer, Choreographer.
     }
 
     private fun updateClearColor(scene: RenderScene) {
+        updateClearColor(scene.environment.backgroundArgb)
+    }
+
+    private fun updateExportClearColor(background: ExportBitmapBackground) {
+        when (background) {
+            ExportBitmapBackground.FollowScene -> submittedScene?.let(::updateClearColor)
+            ExportBitmapBackground.Transparent -> updateClearColor(0L)
+            is ExportBitmapBackground.Solid -> updateClearColor(background.argb or 0xFF000000L)
+        }
+    }
+
+    private fun updateClearColor(argb: Long) {
         renderer.clearOptions = Renderer.ClearOptions().apply {
             clear = true
-            clearColor = backgroundColor(scene.environment.backgroundArgb).toFilamentClearColor()
+            clearColor = backgroundColor(argb).toFilamentClearColor()
         }
     }
 

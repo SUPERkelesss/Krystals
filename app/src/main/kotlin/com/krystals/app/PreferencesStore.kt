@@ -19,6 +19,9 @@ enum class CodMirrorMode { AUTO, FIXED, CUSTOM }
 /** Export image quality. */
 enum class ExportQuality { HIGH, LOW }
 
+/** Background used for exported images. */
+enum class ExportBackground { TRANSPARENT, FOLLOW_DISPLAY, BLACK, WHITE, CUSTOM }
+
 /**
  * Pure data class holding all user-preference values.
  *
@@ -48,6 +51,8 @@ data class SettingsValues(
     val codFixedIndex: Int = 0,
     val codCustomUrl: String = "",
     val exportQuality: ExportQuality = ExportQuality.HIGH,
+    val exportBackground: ExportBackground = ExportBackground.TRANSPARENT,
+    val exportCustomBackgroundArgb: Long = 0xFF101014L,
     // Per v0.7.0: axes/measurements export overlays default to ON.
     val exportShowAxes: Boolean = true,
     val exportShowMeasurements: Boolean = true,
@@ -83,6 +88,8 @@ object PreferencesStore {
     const val KEY_COD_FIXED_INDEX = "cod_fixed_index"
     const val KEY_COD_CUSTOM_URL = "cod_custom_url"
     const val KEY_EXPORT_QUALITY = "export_quality"
+    const val KEY_EXPORT_BACKGROUND = "export_background"
+    const val KEY_EXPORT_CUSTOM_BACKGROUND_ARGB = "export_custom_background_argb"
     const val KEY_EXPORT_SHOW_AXES = "export_show_axes"
     const val KEY_EXPORT_SHOW_MEASUREMENTS = "export_show_measurements"
     const val KEY_SHOW_SECONDARY_EXTEND_BONDS = "show_secondary_extend_bonds"
@@ -132,6 +139,10 @@ object PreferencesStore {
             exportQuality = try {
                 ExportQuality.valueOf(prefs.getString(KEY_EXPORT_QUALITY, defaults.exportQuality.name) ?: defaults.exportQuality.name)
             } catch (_: IllegalArgumentException) { defaults.exportQuality },
+            exportBackground = try {
+                ExportBackground.valueOf(prefs.getString(KEY_EXPORT_BACKGROUND, defaults.exportBackground.name) ?: defaults.exportBackground.name)
+            } catch (_: IllegalArgumentException) { defaults.exportBackground },
+            exportCustomBackgroundArgb = prefs.getLong(KEY_EXPORT_CUSTOM_BACKGROUND_ARGB, defaults.exportCustomBackgroundArgb),
             exportShowAxes = prefs.getBoolean(KEY_EXPORT_SHOW_AXES, defaults.exportShowAxes),
             exportShowMeasurements = prefs.getBoolean(KEY_EXPORT_SHOW_MEASUREMENTS, defaults.exportShowMeasurements),
             showSecondaryExtendBonds = prefs.getBoolean(KEY_SHOW_SECONDARY_EXTEND_BONDS, defaults.showSecondaryExtendBonds),
@@ -160,6 +171,8 @@ object PreferencesStore {
             putInt(KEY_COD_FIXED_INDEX, settings.codFixedIndex)
             putString(KEY_COD_CUSTOM_URL, settings.codCustomUrl)
             putString(KEY_EXPORT_QUALITY, settings.exportQuality.name)
+            putString(KEY_EXPORT_BACKGROUND, settings.exportBackground.name)
+            putLong(KEY_EXPORT_CUSTOM_BACKGROUND_ARGB, settings.exportCustomBackgroundArgb)
             putBoolean(KEY_EXPORT_SHOW_AXES, settings.exportShowAxes)
             putBoolean(KEY_EXPORT_SHOW_MEASUREMENTS, settings.exportShowMeasurements)
             putBoolean(KEY_SHOW_SECONDARY_EXTEND_BONDS, settings.showSecondaryExtendBonds)
@@ -174,6 +187,7 @@ object PreferencesStore {
             remove(KEY_AUTO_CONVERT_CELL); remove(KEY_DEFAULT_SHOW_BONDS); remove(KEY_DEFAULT_EXTEND_BONDS); remove(KEY_DEFAULT_POLYHEDRA)
             remove(KEY_AUTO_COMPUTE_HBONDS); remove(KEY_DEFAULT_SHOW_HBONDS); remove(KEY_DEFAULT_MOLECULE_EXTEND)
             remove(KEY_COD_MIRROR_MODE); remove(KEY_COD_FIXED_INDEX); remove(KEY_COD_CUSTOM_URL); remove(KEY_EXPORT_QUALITY)
+            remove(KEY_EXPORT_BACKGROUND); remove(KEY_EXPORT_CUSTOM_BACKGROUND_ARGB)
             remove(KEY_EXPORT_SHOW_AXES); remove(KEY_EXPORT_SHOW_MEASUREMENTS); remove(KEY_SHOW_SECONDARY_EXTEND_BONDS)
         }
     }

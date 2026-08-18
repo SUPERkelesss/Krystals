@@ -252,6 +252,18 @@ class AnalysisTest {
         val result = CrystalEditor.apply(structure, BondConfiguration(rules), EditCommand.DeleteAtom("Cl"))
         assertEquals(listOf("Cs"), result.structure.sites.map { it.id })
         assertEquals(listOf(BondRule("Cs", "Cs", 0.1, 5.0)), result.bondConfiguration.rules)
+        assertFalse(result.bondConfiguration.allowAutoFallback)
+    }
+
+    @Test fun addingSiteDoesNotCreateUnconfiguredBonds() {
+        val structure = csCl().first
+        val result = CrystalEditor.apply(
+            structure,
+            BondConfiguration(),
+            EditCommand.AddAtom(Species("O"), "O", FractionalCoordinate(0.02, 0.02, 0.02), 1.0),
+        )
+        assertFalse(result.bondConfiguration.allowAutoFallback)
+        assertTrue(BondDetector.buildNetwork(result.structure, result.bondConfiguration).bonds.isEmpty())
     }
 
     @Test fun coordinationPolyhedronAndStructureInfoRemainAvailable() {
