@@ -1,3 +1,9 @@
+## 2026/8/19 v0.7.2 Hotfix
+
+- Fixed incorrect chemical formulas in the Crystal Information panel when rounded CIF coordinates caused symmetry expansion multiplicities to be miscounted.
+
+---
+
 ## 2026/8/17 v0.7.1 Minor fixes
 
 - Users can now adjust the background color when exporting images. The default is transparent.

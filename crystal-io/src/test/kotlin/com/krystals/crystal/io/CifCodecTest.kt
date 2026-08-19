@@ -6,12 +6,28 @@ import com.krystals.crystal.analysis.expansion.SymmetryExpander
 import com.krystals.crystal.core.coordinate.FractionalCoordinate
 import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
+import com.krystals.crystal.core.lattice.Lattice
+import com.krystals.crystal.core.model.CrystalStructure
+import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class CifCodecTest {
+    @Test fun symmetryExpansionMergesRoundedSpecialPosition() {
+        val group = SpaceGroupCatalog.resolve("P63mc", 186)
+        val structure = CrystalStructure(
+            blockName = "rounded-special",
+            lattice = Lattice(5.6867, 5.6867, 18.337, 90.0, 90.0, 120.0),
+            spaceGroup = group,
+            symmetryOperations = SpaceGroupCatalog.operations(group.symbol),
+            sites = listOf(Site("O8", "O8", Species("O"), FractionalCoordinate(0.1854, 0.3707, 0.1659))),
+            isConventional = true,
+        )
+        assertEquals(6, SymmetryExpander.expand(structure).size)
+    }
+
     private val simple = """
         # preserved comment
         data_demo

@@ -479,6 +479,42 @@ class AnalysisTest {
         assertSameExpandedAtoms(conventional, restored)
     }
 
+    @Test fun roundedP63mcSpecialPositionKeepsSixfoldMultiplicity() {
+        val group = SpaceGroupCatalog.resolve("P63mc", 186)
+        val structure = CrystalStructure(
+            "p63mc-rounded-special",
+            Lattice(5.6867, 5.6867, 18.337, 90.0, 90.0, 120.0),
+            group,
+            SpaceGroupCatalog.operations(group.symbol),
+            listOf(Site("O8", "O8", Species("O"), FractionalCoordinate(0.1854, 0.3707, 0.1659))),
+        )
+        assertEquals(6, SymmetryExpander.expand(structure).size)
+    }
+
+    @Test fun p63mcGeneralPositionRetainsTwelvefoldMultiplicity() {
+        val group = SpaceGroupCatalog.resolve("P63mc", 186)
+        val structure = CrystalStructure(
+            "p63mc-general",
+            Lattice(5.6867, 5.6867, 18.337, 90.0, 90.0, 120.0),
+            group,
+            SpaceGroupCatalog.operations(group.symbol),
+            listOf(Site("X", "X1", Species("O"), FractionalCoordinate(0.1234, 0.2345, 0.3456))),
+        )
+        assertEquals(12, SymmetryExpander.expand(structure).size)
+    }
+
+    @Test fun symmetryEquivalentCoordinatesAcrossUnitCellBoundaryAreDeduplicated() {
+        val group = SpaceGroupCatalog.resolve("P-1", 2)
+        val structure = CrystalStructure(
+            "p-minus-one-boundary",
+            Lattice.DEFAULT,
+            group,
+            SpaceGroupCatalog.operations(group.symbol),
+            listOf(Site("X", "X1", Species("O"), FractionalCoordinate(0.00001, 0.00001, 0.00001))),
+        )
+        assertEquals(1, SymmetryExpander.expand(structure).size)
+    }
+
     // ── Per v0.7.0: Hbond rule coexistence ────────────────────────────────────
 
     @Test fun hbondRuleKeyDiffersFromNormalKey() {
