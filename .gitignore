@@ -36,3 +36,6 @@ activation-secrets.gradle.kts
 .cifs-downloader/
 # JVM crash dumps.
 hs_err_pid*.log
+
+# C package are not included in this repo
+*.so
