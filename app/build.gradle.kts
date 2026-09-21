@@ -72,7 +72,6 @@ versionName = "0.7.2"
     }
     // spglib native bridge: prebuilt libspglib.so per ABI in src/main/jniLibs,
     // plus the JNI wrapper compiled here via CMake (links the prebuilt library).
-    ndkPath = "E:\\Android\\android-ndk-r27c"
     ndkVersion = "27.2.12479018"
     externalNativeBuild {
         cmake {

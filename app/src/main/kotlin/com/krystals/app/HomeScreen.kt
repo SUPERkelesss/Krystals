@@ -28,8 +28,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.NoteAdd
-import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.Help
+import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Feedback
 import androidx.compose.material.icons.filled.Close
@@ -38,7 +39,6 @@ import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Help
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -83,7 +83,7 @@ internal fun AppMenu(
         DropdownMenuItem(text = { Text(stringResource(R.string.import_local)) }, leadingIcon = { Icon(Icons.Default.FileOpen, null) }, onClick = { onDismissMenu(); onOpen() })
         DropdownMenuItem(text = { Text(stringResource(R.string.open_preset_library)) }, leadingIcon = { Icon(Icons.Default.Inventory2, null) }, onClick = { onDismissMenu(); onOpenPreset() })
         DropdownMenuItem(text = { Text(stringResource(R.string.import_online)) }, leadingIcon = { Icon(Icons.Default.CloudDownload, null) }, onClick = { onDismissMenu(); onOnlineSource() })
-        DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.Default.NoteAdd, null) }, onClick = { onDismissMenu(); onNew() })
+        DropdownMenuItem(text = { Text(stringResource(R.string.new_file)) }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.NoteAdd, null) }, onClick = { onDismissMenu(); onNew() })
         HorizontalDivider()
         if (fileActions != null) {
             fileActions()
@@ -91,7 +91,7 @@ internal fun AppMenu(
         }
         // Per v0.7.0: tighter 2x2 grid (12dp gap) and icons tinted like the other menu items.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)) {
-            TextButton(onClick = { onDismissMenu(); onHelp() }) { Icon(Icons.Default.Help, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            TextButton(onClick = { onDismissMenu(); onHelp() }) { Icon(Icons.AutoMirrored.Filled.Help, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.help), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             TextButton(onClick = { onDismissMenu(); onFeedback() }) { Icon(Icons.Default.Feedback, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.feedback), color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)) {
@@ -99,7 +99,7 @@ internal fun AppMenu(
             TextButton(onClick = { onDismissMenu(); onSponsor() }) { Icon(Icons.Default.Favorite, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.sponsor), color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         HorizontalDivider()
-        DropdownMenuItem(text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) }, leadingIcon = { Icon(Icons.Default.ExitToApp, null) }, onClick = { onDismissMenu(); onExit() })
+        DropdownMenuItem(text = { Text(localized("关闭所有文件并退出", "Close all files and exit")) }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, null) }, onClick = { onDismissMenu(); onExit() })
     }
 }
 
@@ -173,7 +173,7 @@ internal fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onOnlineSource, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.CloudDownload, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.import_online)) }
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onNew, modifier = buttonWidth.height(52.dp)) { Icon(Icons.Default.NoteAdd, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.new_file)) }
+                Button(onClick = onNew, modifier = buttonWidth.height(52.dp)) { Icon(Icons.AutoMirrored.Filled.NoteAdd, null); Spacer(Modifier.width(10.dp)); Text(stringResource(R.string.new_file)) }
             }
         }
     }

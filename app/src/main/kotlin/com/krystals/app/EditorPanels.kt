@@ -86,7 +86,6 @@ import com.krystals.crystal.core.math.Mat3
 import com.krystals.crystal.core.model.Site
 import com.krystals.crystal.core.model.Species
 import com.krystals.crystal.core.symmetry.SpaceGroupCatalog
-import com.krystals.crystal.data.BravaisLatticeData
 import com.krystals.renderer.core.style.RenderPalette
 import kotlin.math.max
 import kotlin.math.abs
@@ -257,10 +256,10 @@ private fun BasicEditor(tab: DocumentTab, onStructure: (EditResult) -> Unit, onM
                 .onSuccess(onStructure).onFailure { onMessage(it.message ?: "Invalid cell parameters") }
         }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(localized("应用晶胞", "Apply cell")) }
         // Per v0.7.0: swapped order — primitive/conventional conversion comes before 3×3 transform.
-        val centering = BravaisLatticeData.centeringFromSymbol(tab.structure.spaceGroup.symbol)
+        val isCenteredSpaceGroup = tab.structure.spaceGroup.symbol.trim().firstOrNull()?.uppercaseChar()?.let { it in "ABCIFR" } == true
         // Per v0.7.0 (issue #6): after any 3×3 transform the conversion button is hidden —
         // converting a custom-transformed cell would discard the transform's intent.
-        if (centering != BravaisLatticeData.CenteringType.PRIMITIVE && !tab.cellTransformed) {
+        if (isCenteredSpaceGroup && !tab.cellTransformed) {
             OutlinedButton(
                 onClick = {
                     tab.recordHistory()

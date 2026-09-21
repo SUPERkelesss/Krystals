@@ -28,10 +28,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Help
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -219,7 +219,7 @@ internal fun MpSearchScreen(
                     state = helpTooltip,
                 ) {
                     IconButton(onClick = { scope.launch { if (helpTooltip.isVisible) helpTooltip.dismiss() else helpTooltip.show() } }, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Help, localized("帮助", "Help"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.AutoMirrored.Filled.Help, localized("帮助", "Help"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -438,7 +438,7 @@ internal fun CodSearchScreen(
                     state = helpTooltip,
                 ) {
                     IconButton(onClick = { scope.launch { if (helpTooltip.isVisible) helpTooltip.dismiss() else helpTooltip.show() } }, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Help, localized("帮助", "Help"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.AutoMirrored.Filled.Help, localized("帮助", "Help"), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -599,4 +599,3 @@ private fun OnlineSourceCard(
 }
 
 // Per v0.6.5: HelpDialog replaced by unified link-confirmation dialog above.
-

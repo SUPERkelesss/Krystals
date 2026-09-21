@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $Tooling = Join-Path $Root '.tooling'
+$NdkVersion = '27.2.12479018'
 New-Item -ItemType Directory -Force -Path $Tooling | Out-Null
 
 # ── Filament material compilation ──────────────────────────────
@@ -124,9 +125,37 @@ if (-not $Sdk) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Tools) | Out-Null
         Move-Item (Join-Path $ToolsExtract 'cmdline-tools') $Tools -Force
     }
-    $SdkManager = Join-Path $Tools 'bin\sdkmanager.bat'
+}
+$SdkManager = Join-Path $Sdk 'cmdline-tools\latest\bin\sdkmanager.bat'
+$RequiredSdkPaths = @(
+    (Join-Path $Sdk 'platforms\android-36'),
+    (Join-Path $Sdk 'build-tools\36.0.0'),
+    (Join-Path $Sdk "ndk\$NdkVersion")
+)
+if ($RequiredSdkPaths.Where({ -not (Test-Path -LiteralPath $_) }).Count -gt 0) {
+    if (-not (Test-Path -LiteralPath $SdkManager)) {
+        $SdkManager = Get-ChildItem -LiteralPath (Join-Path $Sdk 'cmdline-tools') -Filter sdkmanager.bat -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+    }
+    if (-not $SdkManager -or -not (Test-Path -LiteralPath $SdkManager)) {
+        # An existing Android Studio SDK can lack command-line tools. Bootstrap a temporary
+        # sdkmanager instead of requiring a manually configured global tool installation.
+        $ToolsZip = Join-Path $Tooling 'android-command-line-tools.zip'
+        $ToolsExtract = Join-Path $Tooling 'android-command-line-tools'
+        $TemporarySdkManager = Join-Path $ToolsExtract 'cmdline-tools\bin\sdkmanager.bat'
+        if (-not (Test-Path -LiteralPath $TemporarySdkManager)) {
+            Write-Host 'Downloading Android command-line tools...'
+            Invoke-WebRequest 'https://dl.google.com/android/repository/commandlinetools-win-14742923_latest.zip' -OutFile $ToolsZip
+            Expand-Archive $ToolsZip $ToolsExtract -Force
+        }
+        $SdkManager = $TemporarySdkManager
+    }
+    if (-not (Test-Path -LiteralPath $SdkManager)) {
+        throw "Android SDK packages are missing and sdkmanager.bat could not be prepared for $Sdk"
+    }
     1..30 | ForEach-Object { 'y' } | & $SdkManager --sdk_root=$Sdk --licenses | Out-Host
-    & $SdkManager --sdk_root=$Sdk 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+    & $SdkManager --sdk_root=$Sdk 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0' "ndk;$NdkVersion"
+    if ($LASTEXITCODE -ne 0) { throw "sdkmanager failed with exit code $LASTEXITCODE" }
 }
 $env:ANDROID_HOME = $Sdk
 $escapedSdk = $Sdk.Replace('\', '\\')
@@ -142,7 +171,7 @@ if (-not (Test-Path $WrapperJar)) {
 # ── Gradle build ──────────────────────────────────────────────
 Push-Location $Root
 try {
-    & .\gradlew.bat --no-daemon :crystal-core:test :app:assembleDebug
+    & .\gradlew.bat --no-daemon :crystal-core:test :app:testDebugUnitTest :app:assembleDebug
     if ($LASTEXITCODE -ne 0) { throw "Gradle failed with exit code $LASTEXITCODE" }
     $Apk = Join-Path $Root 'app\build\outputs\apk\debug\app-debug.apk'
     if (-not (Test-Path $Apk)) { throw "Gradle reported success but APK is missing: $Apk" }
