@@ -6,8 +6,8 @@ import android.content.SharedPreferences
 import java.security.MessageDigest
 
 /**
- * Paid-module activation: verifies a 16-char activation code against the set of valid codes baked
- * into the build at compile time.
+ * Sponsor-reminder dismissal: verifies a 16-char activation code against the set of valid codes
+ * baked into the build at compile time.
  *
  * Codes are never stored in the app as plaintext. Instead, `:app:generateActivationCodes` emits a
  * gitignored `activation-secrets.gradle.kts` that sets the project extras `activationSalt` and
@@ -15,8 +15,8 @@ import java.security.MessageDigest
  * flow into [com.krystals.app.BuildConfig.ACTIVATION_SALT] and [com.krystals.app.BuildConfig.ACTIVATION_HASHES].
  *
  * When the secrets file is absent (e.g. a clean clone from github), both fields are empty strings
- * and [isActivated] always returns false — the build still succeeds, the paid features simply stay
- * locked. The user's entered code is validated by hashing it with the same salt and checking
+ * and [isActivated] always returns false — the build still succeeds and only the optional sponsor
+ * reminder remains enabled. The user's entered code is validated by hashing it with the same salt and checking
  * membership in the hash set; on success the code itself is persisted so it can be re-validated on
  * every launch (a single code may be reused indefinitely by the same sponsor).
  */
@@ -42,7 +42,7 @@ object ActivationManager {
     private fun isValidCode(code: String): Boolean =
         hashes.isNotEmpty() && hash(code) in hashes
 
-    /** True if this device holds a still-valid activation code (re-checked every launch). */
+    /** True if this device holds a still-valid code that dismisses sponsor reminders. */
     fun isActivated(context: Context): Boolean {
         val code = prefs(context).getString(PREFS_CODE, null) ?: return false
         return isValidCode(code)

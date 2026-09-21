@@ -156,16 +156,16 @@ internal fun ActivationDialog(
     var code by remember { mutableStateOf(ActivationManager.getActivationCode(context) ?: "") }
     // Pre-resolve the bilingual toast strings in the @Composable body; `localized` is itself a
     // @Composable function, so it cannot be called inside the non-composable onClick lambda.
-    val activationSuccessText = localized("激活成功！感谢♪(^∇^*)", "Activated! Thanks ♪(^∇^*)")
-    val activationInvalidText = localized("激活码无效", "Invalid activation code")
+    val activationSuccessText = localized("认证成功！感谢♪(^∇^*)", "Code accepted! Thanks ♪(^∇^*)")
+    val activationInvalidText = localized("认证码无效", "Invalid code")
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(localized("输入激活码", "Enter activation code")) },
+        title = { Text(localized("输入认证码", "Enter sponsor code")) },
         text = {
             Column {
-                Text(localized("赞助后请输入您收到的 16 位激活码。", "Enter the 16-char activation code you received after sponsoring."), style = MaterialTheme.typography.bodySmall)
+                Text(localized("输入赞助后收到的 16 位认证码，可永久关闭赞助提醒。", "Enter the 16-character code received after sponsoring to permanently dismiss sponsor reminders."), style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(code, { code = it.uppercase() }, label = { Text(localized("激活码", "Activation code")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(code, { code = it.uppercase() }, label = { Text(localized("认证码", "Sponsor code")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
             }
         },
         confirmButton = {
@@ -182,20 +182,6 @@ internal fun ActivationDialog(
             ) { Text(stringResource(R.string.confirm)) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
-    )
-}
-
-
-@Composable
-internal fun MpPremiumDialog(onDismiss: () -> Unit, onSponsor: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(localized("高级内容", "Premium content")) },
-        text = {
-            Text(localized("Materials Project中导入晶体需要获取apikey，属于高级内容，并且尚未完全开发，使用COD数据库完全可以解决大部分问题。\n · 如果需要使用，请赞助一点点以支持开发！", "Importing crystals from Materials Project requires an API key and is a premium feature, and has not been developed compeletely yet — the COD handles most needs.\n · To use it, please sponsor a little to support development!"))
-        },
-        confirmButton = { TextButton(onClick = onSponsor) { Text(localized("我要赞助！", "Sponsor!")) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(localized("再考虑一下…", "Maybe later…")) } },
     )
 }
 
@@ -231,8 +217,8 @@ internal fun SponsorDialog(
                 Spacer(Modifier.height(12.dp))
                 Text(
                     localized(
-                        "· 赞助后可永久关闭赞助提醒，并可以接入materials project检索。未赞助不影响绝大部分功能的使用。",
-                        "· Sponsoring permanently dismisses this prompt and unlocks Materials Project search. Not sponsoring does not affect most features.",
+                        "· 赞助后可永久关闭赞助提醒。Materials Project 检索只需您自己的 API key。",
+                        "· Sponsoring permanently dismisses this prompt. Materials Project search only needs your own API key.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )

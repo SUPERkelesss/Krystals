@@ -338,14 +338,12 @@ fun KrystalsRoot(
     var mpSearchOpen by mpSearchOpenState
     val mpKeyDialogOpenState = remember { mutableStateOf(false) }
     var mpKeyDialogOpen by mpKeyDialogOpenState
-    // Per v0.4.0: activation-code dialog (reached from the sponsor dialog) and the MP "premium
-    // content" gate shown when MP is picked without an active code.
+    // The sponsor-code dialog is reached from the sponsor dialog; a valid code only suppresses
+    // future sponsor reminders and never gates Materials Project access.
     val activationOpenState = remember { mutableStateOf(false) }
     var activationOpen by activationOpenState
-    val mpPremiumOpenState = remember { mutableStateOf(false) }
-    var mpPremiumOpen by mpPremiumOpenState
-    // Per v0.4.0: one-time caution shown to activated users before the MP flow, explaining the
-    // new/legacy API trade-off. Dismissable permanently via the "不再显示" checkbox.
+    // One-time caution before the MP flow, explaining the new/legacy API trade-off. Dismissable
+    // permanently via the "不再显示" checkbox.
     val mpCautionOpenState = remember { mutableStateOf(false) }
     var mpCautionOpen by mpCautionOpenState
     // Per v0.3.1: MP and COD imports share an "import from online sources" entry that opens a
@@ -1016,7 +1014,6 @@ fun KrystalsRoot(
                                 mpSearchOpen -> mpSearchOpen = false
                                 activationOpen -> activationOpen = false
                                 mpKeyDialogOpen -> mpKeyDialogOpen = false
-                                mpPremiumOpen -> mpPremiumOpen = false
                                 mpCautionOpen -> mpCautionOpen = false
                                 else -> { val index = viewModel.selectedIndex; if (viewModel.current?.dirty == true) closeRequest = index else viewModel.close(index) }
                             }
@@ -1057,7 +1054,6 @@ fun KrystalsRoot(
             presetOpenState = presetOpenState,
             mpKeyDialogOpenState = mpKeyDialogOpenState,
             activationOpenState = activationOpenState,
-            mpPremiumOpenState = mpPremiumOpenState,
             mpCautionOpenState = mpCautionOpenState,
             onlineSourceOpenState = onlineSourceOpenState,
             mpSearchOpenState = mpSearchOpenState,
@@ -1279,7 +1275,6 @@ private fun KrystalsRootDialogs(
     presetOpenState: MutableState<Boolean>,
     mpKeyDialogOpenState: MutableState<Boolean>,
     activationOpenState: MutableState<Boolean>,
-    mpPremiumOpenState: MutableState<Boolean>,
     mpCautionOpenState: MutableState<Boolean>,
     onlineSourceOpenState: MutableState<Boolean>,
     mpSearchOpenState: MutableState<Boolean>,
@@ -1317,7 +1312,6 @@ private fun KrystalsRootDialogs(
     var presetOpen by presetOpenState
     var mpKeyDialogOpen by mpKeyDialogOpenState
     var activationOpen by activationOpenState
-    var mpPremiumOpen by mpPremiumOpenState
     var mpCautionOpen by mpCautionOpenState
     var onlineSourceOpen by onlineSourceOpenState
     var mpSearchOpen by mpSearchOpenState
@@ -1551,10 +1545,6 @@ private fun KrystalsRootDialogs(
         onConfirmed = { activationOpen = false },
         onMessage = { showMessage(it) },
     )
-    if (mpPremiumOpen) MpPremiumDialog(
-        onDismiss = { mpPremiumOpen = false },
-        onSponsor = { mpPremiumOpen = false; sponsorOpen = true },
-    )
     if (mpCautionOpen) MpCautionDialog(
         preferences = preferences,
         onDismiss = { mpCautionOpen = false },
@@ -1565,10 +1555,7 @@ private fun KrystalsRootDialogs(
         onPickCod = { onlineSourceOpen = false; codSearchOpen = true },
         onPickMp = {
             onlineSourceOpen = false
-            // Per v0.4.0: Materials Project import is sponsor-gated. Without a valid activation
-            // code, show the premium-content dialog instead of the API-key flow.
             when {
-                !ActivationManager.isActivated(activity) -> mpPremiumOpen = true
                 !preferences.getBoolean(PreferencesStore.KEY_MP_CAUTION_DISMISSED, false) -> mpCautionOpen = true
                 MaterialsProject.hasKey(activity) -> mpSearchOpen = true
                 else -> mpKeyDialogOpen = true

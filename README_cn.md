@@ -27,7 +27,7 @@
 
 - **导入本地文件**：从文件管理器中选择 CIF 文件并打开。
 - **从预设导入**：App 提供了丰富的预设库，涵盖大部分基础 CIF 测试用例。你也可以将自己的 CIF 文件保存到预设库中。
-- **从在线源导入**：提供两种方式——从 [Crystallography Open Database](https://qiserver.ugr.es/cod/index.php) 导入和从 [Materials Project](https://next-gen.materialsproject.org/) 导入。后者需要 API 密钥，是赞助后通过激活码解锁的高级功能。前者无使用限制。
+- **从在线源导入**：提供两种方式——从 [Crystallography Open Database](https://qiserver.ugr.es/cod/index.php) 导入和从 [Materials Project](https://next-gen.materialsproject.org/) 导入。Materials Project 仅需您自己的 API 密钥，所有用户均可使用；COD 不需要 API 密钥。
 - **新建文件**：从空文件开始创建 CIF 文档。
 
 **主界面**：
@@ -59,7 +59,7 @@ flowchart TB
         VM["DocumentState<br/>ViewModel / 多标签页"]
         Edit["EditorPanels<br/>结构编辑器"]
         Repo["FileRepository<br/>CIF I/O / PNG 导出"]
-        Act["ActivationManager<br/>付费激活"]
+        Act["ActivationManager<br/>关闭赞助提醒"]
     end
     subgraph interaction["interaction · 后端无关的查看器交互"]
         Commands["ViewerCommand / InteractionReducer"]

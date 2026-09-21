@@ -27,7 +27,7 @@ The main screen offers four ways to import CIF files:
 
 - **Import local file**: select a CIF file from the file manager and open it.
 - **Import from presets**: the app provides a rich preset library covering most basic CIF test cases. You can also save your own CIF files into the presets.
-- **Import from online sources**: two options are available — importing from the [Crystallography Open Database](https://qiserver.ugr.es/cod/index.php) and from the [Materials Project](https://next-gen.materialsproject.org/). The latter requires an API key and is a premium feature unlocked with an activation code after sponsoring. The former has no usage restrictions.
+- **Import from online sources**: two options are available — importing from the [Crystallography Open Database](https://qiserver.ugr.es/cod/index.php) and from the [Materials Project](https://next-gen.materialsproject.org/). Materials Project requires your own API key; it is available to every user. COD has no API-key requirement.
 - **Create new file**: start creating a CIF document from an empty file.
 
 **Main screen**:
@@ -59,7 +59,7 @@ flowchart TB
         VM["DocumentState<br/>ViewModel / multi-tab"]
         Edit["EditorPanels<br/>structure editor"]
         Repo["FileRepository<br/>CIF I/O / PNG export"]
-        Act["ActivationManager<br/>paid activation"]
+        Act["ActivationManager<br/>dismiss sponsor reminders"]
     end
     subgraph interaction["interaction · backend-neutral viewer interaction"]
         Commands["ViewerCommand / InteractionReducer"]
